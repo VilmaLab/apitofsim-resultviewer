@@ -1,0 +1,20 @@
+<form method="get" action="{{ url_for(route) }}" class="text-nowrap mx-4 flex items-center">
+    {% for key, value in query_params.items() if key != 'cluster' %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    <label for="cluster-select">Cluster:</label>
+    <select
+        name="cluster"
+        id="cluster-select"
+        onchange="this.form.requestSubmit()"
+        class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+        <option value="" {% if not cluster %}selected{% endif %}>
+            --- Please choose an option ---
+        </option>
+        {% for label, value in clusters %}
+            <option value="{{ value }}" {% if cluster == value %}selected{% endif %}>
+                {{ label }}
+            </option>
+        {% endfor %}
+    </select>
+</form>

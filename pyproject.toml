@@ -1,0 +1,27 @@
+[project]
+name = "apitofsim-resultviewer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "apitofsim[plot]",
+    "bokeh",
+    "duckdb>=1.5.5",
+    "mplbed>=0.1.1",
+    "panel",
+    "starlette>=1.4.1",
+    "starlette-htmx>=0.1.1",
+    "uvicorn[standard]>=0.52.1",
+]
+
+[tool.uv]
+override-dependencies = [
+    "bokeh"
+]
+
+[tool.uv.sources]
+bokeh = { git = "https://github.com/bryevdv/bokeh.git", branch = "codex/asgi-server-followups" }
+panel = { git = "https://github.com/holoviz/panel.git", branch = "bk_3.10_compat" }
+apitofsim = { path = "../apitofsim" }
+mplbed = { path = "../mplbed", editable = true }

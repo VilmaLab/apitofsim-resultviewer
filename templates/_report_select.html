@@ -1,0 +1,20 @@
+<form method="get" action="{{ url_for('report') }}" class="text-nowrap mx-4 flex items-center">
+    {% if experiment %}
+        <input type="hidden" name="experiment" value="{{ experiment }}">
+    {% endif %}
+    <label for="report-select">Report:</label>
+    <select
+        name="report"
+        id="report-select"
+        onchange="this.form.requestSubmit()"
+        class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+        <option value="" {% if not report %}selected{% endif %}>
+            --- Please choose an option ---
+        </option>
+        {% for report_type in report_types %}
+            <option value="{{ report_type }}" {% if report == report_type %}selected{% endif %}>
+                {{ report_type }}
+            </option>
+        {% endfor %}
+    </select>
+</form>

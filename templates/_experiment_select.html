@@ -1,0 +1,20 @@
+<form method="get" action="{{ url_for(route) }}" class="text-nowrap mx-4 flex items-center">
+    {% for key, value in query_params.items() if key != 'experiment' %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    <label for="experiment-select">Experiment:</label>
+    <select
+        name="experiment"
+        id="experiment-select"
+        onchange="this.form.requestSubmit()"
+        class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+        <option value="" {% if not experiment %}selected{% endif %}>
+            --- Please choose an option ---
+        </option>
+        {% for label, value in experiments %}
+            <option value="{{ value }}" {% if experiment == value %}selected{% endif %}>
+                {{ label }}
+            </option>
+        {% endfor %}
+    </select>
+</form>

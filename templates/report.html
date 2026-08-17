@@ -1,0 +1,6 @@
+{% extends "base.html" %} {% block title %}Report{% endblock %} {% block content
+%} {% if report_data %}
+<div id="report-table" data-report="{{ report_data }}"></div>
+{% else %}
+<p class="p-4 text-slate-600">Choose a report above to view it.</p>
+{% endif %} {% endblock %}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        {{ mpl_head }}
+        <link
+            href="{{ url_for('static', path='index.css') }}"
+            rel="stylesheet"
+        />
+        <script src="{{ url_for('static', path='index.js') }}" defer></script>
+        <title>{% block title %}{% endblock %}</title>
+        {% block extra_head %}{% endblock %}
+    </head>
+    <body class="min-h-screen relative" {% block body_attrs %}{% endblock %}>
+        <nav
+            class="bg-black text-white top-0 left-0 w-full text-center z-10 small-caps tracking-wider flex"
+        >
+            {% for name, label in [ ('overview', 'Overview'), ('experiment',
+            'Single experiment'), ('comparison', 'Experiment comparison'), ] %}
+            <div
+                class="p-2 px-4 hover:bg-sky-800 {% if section == name %}bg-sky-800{% endif %}"
+            >
+                <a
+                    href="{{ url_with(request, name, experiment=experiment if name != 'overview' else None) }}"
+                >
+                    {{ label }}
+                </a>
+            </div>
+            {% endfor %}
+        </nav>
+
+        {% block nav %} {% if section == 'experiment' %}
+        <div class="p-2 bg-slate-100 flex flex-wrap items-center w-full">
+            {% include "_experiment_select.html" %}
+        </div>
+        {% if experiment %}
+        <nav class="bg-slate-400 flex flex-wrap w-full">
+            {% for name, route_name, label in experiment_views %}
+            <div
+                class="text-nowrap px-4 py-2 hover:bg-slate-300 {% if (view == name and not cluster) or (cluster and name == 'cluster') %}bg-slate-300{% endif %}"
+            >
+                <a
+                    href="{{ url_with(request, route_name, experiment=experiment) }}"
+                >
+                    {{ label }}
+                </a>
+            </div>
+            {% endfor %}
+        </nav>
+        {% endif %} {% endif %} {% if cluster or view == 'cluster' %}
+        <div class="p-2 bg-slate-100 flex flex-wrap items-center w-full">
+            {% include "_cluster_select.html" %}
+        </div>
+        {% if cluster %}
+        <nav class="bg-slate-400 flex flex-wrap w-full">
+            {% for name, route_name, label in cluster_views %}
+            <div
+                class="text-nowrap px-4 py-2 hover:bg-slate-300 {% if view == name %}bg-slate-300{% endif %}"
+            >
+                <a
+                    href="{{ url_with(request, route_name, experiment=experiment, cluster=cluster) }}"
+                >
+                    {{ label }}
+                </a>
+            </div>
+            {% endfor %}
+        </nav>
+        {% endif %} {% endif %} {% if view == 'report' or section == 'overview'
+        %}
+        <div class="p-2 bg-slate-100 flex flex-wrap items-center w-full">
+            {% include "_report_select.html" %}
+        </div>
+        {% endif %} {% endblock %}
+
+        <div id="content">{% block content %}{% endblock %}</div>
+    </body>
+</html>

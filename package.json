@@ -1,0 +1,30 @@
+{
+  "name": "apitofsim-resultviewer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build-css && npm run build-js",
+    "build-css": "npx @tailwindcss/cli -i src/css/index.css -o static/index.css",
+    "build-js": "esbuild src/js/index.ts --bundle --outfile=static/index.js",
+    "watch": "(trap 'kill 0' SIGINT; rm -f watchlogtmp; npm run watch-css >> watchlogtmp & npm run watch-js >> watchlogtmp & tail -f watchlogtmp & wait)",
+    "watch-css": "npx @tailwindcss/cli -i src/css/index.css -o static/index.css --watch",
+    "watch-js": "esbuild src/js/index.ts --bundle --outfile=static/index.js --watch"
+  },
+  "devDependencies": {
+    "@types/alpinejs": "^3.13.11",
+    "@types/alpinejs__persist": "^3.13.4",
+    "@types/tabulator-tables": "^6.3.6",
+    "typescript": "~5.9.3"
+  },
+  "dependencies": {
+    "@alpinejs/persist": "^3.15.0",
+    "@tailwindcss/cli": "^4.2.2",
+    "alpinejs": "^3.15.8",
+    "esbuild": "^0.27.4",
+    "htmx-ext-sse": "^2.2.4",
+    "htmx.org": "^2.0.8",
+    "tabulator-tables": "^6.3.1",
+    "tailwindcss": "^4.2.2"
+  }
+}

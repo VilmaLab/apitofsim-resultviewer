@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster{% endblock %}
+
+{% block content %}
+    {% if not cluster %}
+        <p class="p-4 text-slate-600">Choose a cluster above to get started.</p>
+    {% endif %}
+    <div class="flex" id="viewer">
+    </div>
+{% endblock %}

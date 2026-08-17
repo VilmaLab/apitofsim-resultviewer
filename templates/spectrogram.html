@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Spectrogram{% endblock %}
+
+{% block content %}
+    <div class="flex" id="viewer" x-data="{ current_tab: $persist('interactive') }">
+        <nav class="bg-slate-100 flex flex-wrap w-full">
+            {% for variant in ['interactive', 'print'] %}
+                <div class="text-nowrap px-4 py-2 hover:bg-slate-300">
+                    <a href="#{{ variant }}" @click="current_tab = '{{ variant }}'">
+                        {{ variant|capitalize }}
+                    </a>
+                </div>
+            {% endfor %}
+        </nav>
+
+        <div x-show="current_tab === 'interactive'">
+            {{ spectrogram_bokeh|safe }}
+        </div>
+
+        <div x-show="current_tab === 'print'">
+            {{ spectrogram_mpl|safe }}
+        </div>
+    </div>
+{% endblock %}

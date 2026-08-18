@@ -1,6 +1,18 @@
-{% extends "base.html" %} {% block title %}Report{% endblock %} {% block content
-%} {% if report_data %}
-<div id="report-table" data-report="{{ report_data }}"></div>
+{% extends "base.html" %}
+
+{% block title %}Report{% endblock %}
+
+{% block content %}
+{% if report %}
+<div class="p-4">
+    <a
+        href="{{ report_download_url }}"
+        download="{{ report }}.csv"
+        class="inline-block mb-4 rounded-md bg-sky-800 px-4 py-2 text-white hover:bg-sky-700"
+    >Download CSV</a>
+    <div id="report-table" data-url="{{ report_data_url }}"></div>
+</div>
 {% else %}
 <p class="p-4 text-slate-600">Choose a report above to view it.</p>
-{% endif %} {% endblock %}
+{% endif %}
+{% endblock %}

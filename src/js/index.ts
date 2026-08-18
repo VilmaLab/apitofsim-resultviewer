@@ -17,22 +17,19 @@ AlpineModule.plugin(persist);
 window.Alpine = AlpineModule;
 AlpineModule.start();
 
-// The report page embeds its data as an HTML-escaped JSON string on the
-// `#report-table` element (set by the template); build the table once the DOM
-// is ready.
+// Report rows are loaded a page at a time; the server applies sorting before
+// returning each page so column sorting always covers the complete report.
 window.addEventListener("DOMContentLoaded", () => {
     const el = document.querySelector<HTMLElement>("#report-table");
-    if (el && el.dataset.report) {
-        let data;
-        try {
-            data = JSON.parse(el.dataset.report);
-        } catch (err) {
-            console.error("Failed to parse report data:", err);
-            return;
-        }
+    if (el && el.dataset.url) {
         new Tabulator(el, {
-            data,
+            ajaxURL: el.dataset.url,
             autoColumns: true,
+            pagination: true,
+            paginationMode: "remote",
+            paginationSize: 100,
+            paginationCounter: "rows",
+            sortMode: "remote",
         });
     }
 });

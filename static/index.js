@@ -29702,17 +29702,15 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
   module_default.start();
   window.addEventListener("DOMContentLoaded", () => {
     const el = document.querySelector("#report-table");
-    if (el && el.dataset.report) {
-      let data2;
-      try {
-        data2 = JSON.parse(el.dataset.report);
-      } catch (err) {
-        console.error("Failed to parse report data:", err);
-        return;
-      }
+    if (el && el.dataset.url) {
       new TabulatorFull(el, {
-        data: data2,
-        autoColumns: true
+        ajaxURL: el.dataset.url,
+        autoColumns: true,
+        pagination: true,
+        paginationMode: "remote",
+        paginationSize: 100,
+        paginationCounter: "rows",
+        sortMode: "remote"
       });
     }
   });

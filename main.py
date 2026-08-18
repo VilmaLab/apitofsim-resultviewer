@@ -1,14 +1,15 @@
+import re
+from io import StringIO
+from math import ceil
 from os import environ
-from pathlib import Path
 from urllib.parse import urlencode
-from threading import local
 
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.templating import Jinja2Templates
 from starlette.requests import Request
+from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
-from starlette.middleware import Middleware
 
 from bokeh.server.asgi import BokehASGI
 from apitofsim.workflow.db import ExperimentDatabase
@@ -46,6 +47,10 @@ CLUSTER_VIEWS = [
     ("spectrogram", "spectrogram", "Spectrogram"),
     ("realizations", "realizations", "Realizations"),
 ]
+
+REPORT_PAGE_SIZE = 100
+REPORT_TYPES = set(OVERVIEW_REPORT_TYPES) | set(EXPERIMENT_REPORT_TYPES)
+SORT_PARAM_RE = re.compile(r"^sort\[(\d+)\]\[(field|dir)\]$")
 
 
 def pathway_type_lbl(is_single_pathway):
@@ -106,6 +111,84 @@ def report_types_for(experiment):
 def selected_report(request, experiment):
     report = request.query_params.get("report", "")
     return report if report in report_types_for(experiment) else ""
+
+
+def requested_report(request):
+    """Return a validated report type from an API request."""
+    report_type = request.query_params.get("report", "")
+    if report_type not in REPORT_TYPES:
+        raise ValueError("Unknown report type")
+    return report_type
+
+
+def positive_int_param(request, name, default):
+    value = request.query_params.get(name)
+    try:
+        result = default if value is None else int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if result < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return result
+
+
+def requested_sorters(request):
+    """Parse Tabulator's sort[n][field/dir] query parameters."""
+    sorters = {}
+    for key, value in request.query_params.multi_items():
+        if not key.startswith("sort["):
+            continue
+        match = SORT_PARAM_RE.fullmatch(key)
+        if match is None:
+            raise ValueError("Invalid sort parameter")
+        index, part = match.groups()
+        sorter = sorters.setdefault(int(index), {})
+        if part in sorter:
+            raise ValueError("Duplicate sort parameter")
+        sorter[part] = value
+
+    result = []
+    for index in sorted(sorters):
+        sorter = sorters[index]
+        if set(sorter) != {"field", "dir"} or sorter["dir"] not in {"asc", "desc"}:
+            raise ValueError("Invalid sorter")
+        result.append((sorter["field"], sorter["dir"]))
+    return result
+
+
+def quote_identifier(identifier):
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def paginated_report(report_type, page, sorters):
+    """Return the total row count and one sorted page of a report."""
+    offset = (page - 1) * REPORT_PAGE_SIZE
+    if report_type == "spectrogram":
+        df = get_report(db, report_type)
+        columns = set(df.columns)
+        for field, _ in sorters:
+            if field not in columns:
+                raise ValueError("Unknown sort field")
+        if sorters:
+            df = df.sort_values(
+                by=[field for field, _ in sorters],
+                ascending=[direction == "asc" for _, direction in sorters],
+            )
+        return len(df), df.iloc[offset : offset + REPORT_PAGE_SIZE]
+
+    relation = db.db.table(report_type.replace("-", "_"))
+    columns = set(relation.columns)
+    for field, _ in sorters:
+        if field not in columns:
+            raise ValueError("Unknown sort field")
+    if sorters:
+        order = ", ".join(
+            f"{quote_identifier(field)} {direction.upper()}"
+            for field, direction in sorters
+        )
+        relation = relation.order(order)
+    row_count = relation.count("*").fetchone()[0]
+    return row_count, relation.limit(REPORT_PAGE_SIZE, offset=offset).fetchdf()
 
 
 def selected_cluster(request, clusters):
@@ -171,18 +254,49 @@ async def comparison(request):
 
 async def report(request):
     experiment = maybe_int(request.query_params.get("experiment"))
-    report = selected_report(request, experiment)
-    if report:
-        df = get_report(db, report)
-        report_data = df.to_json(orient="records")
-    else:
-        report_data = None
+    report_type = selected_report(request, experiment)
     return templates.TemplateResponse(request, "report.html", {
-        "report_data": report_data,
+        "report_data_url": url_with(request, "report_data", report=report_type),
+        "report_download_url": url_with(request, "report_download", report=report_type),
         "section": "experiment" if experiment is not None else "overview",
         "view": "report",
         "route": "report",
     })
+
+
+async def report_data(request):
+    try:
+        report_type = requested_report(request)
+        page = positive_int_param(request, "page", 1)
+        size = positive_int_param(request, "size", REPORT_PAGE_SIZE)
+        if size != REPORT_PAGE_SIZE:
+            raise ValueError(f"size must be {REPORT_PAGE_SIZE}")
+        sorters = requested_sorters(request)
+        row_count, df = paginated_report(report_type, page, sorters)
+    except ValueError as exc:
+        return Response(str(exc), status_code=400, media_type="text/plain")
+
+    last_page = max(1, ceil(row_count / REPORT_PAGE_SIZE))
+    data = df.to_json(orient="records")
+    content = f'{{"last_page":{last_page},"last_row":{row_count},"data":{data}}}'
+    return Response(content, media_type="application/json")
+
+
+async def report_download(request):
+    try:
+        report_type = requested_report(request)
+    except ValueError as exc:
+        return Response(str(exc), status_code=400, media_type="text/plain")
+
+    csv = StringIO()
+    get_report(db, report_type).to_csv(csv, index=False)
+    return Response(
+        csv.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{report_type}.csv"',
+        },
+    )
 
 
 async def survivals(request):
@@ -292,6 +406,8 @@ app = Starlette(
         Route('/', overview, name="overview"),
         Route('/experiment', experiment, name="experiment"),
         Route('/report', report, name="report"),
+        Route('/report/data', report_data, name="report_data"),
+        Route('/report/download', report_download, name="report_download"),
         Route('/experiment/survivals', survivals, name="survivals"),
         Route('/experiment/cluster', cluster, name="cluster"),
         Route('/experiment/cluster/spectrogram', spectrogram_page, name="spectrogram"),

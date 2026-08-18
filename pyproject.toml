@@ -15,6 +15,14 @@ dependencies = [
     "uvicorn[standard]>=0.52.1",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.uv]
 override-dependencies = [
     "bokeh"

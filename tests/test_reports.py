@@ -4,10 +4,10 @@ import io
 import json
 import os
 import tempfile
-import unittest
 from pathlib import Path
 
 import duckdb
+import pytest
 from starlette.requests import Request
 
 
@@ -46,7 +46,14 @@ def call(handler, query_string):
     return asyncio.run(handler(request(query_string)))
 
 
-class ReportDataTests(unittest.TestCase):
+@pytest.fixture(scope="module", autouse=True)
+def close_database():
+    yield
+    main.db.close()
+    TEST_DIRECTORY.cleanup()
+
+
+class TestReportData:
     def test_pages_include_total_metadata(self):
         first = call(
             main.report_data,
@@ -64,22 +71,23 @@ class ReportDataTests(unittest.TestCase):
         first_payload = json.loads(first.body)
         last_payload = json.loads(last.body)
         out_of_range_payload = json.loads(out_of_range.body)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first_payload["last_page"], 3)
-        self.assertEqual(first_payload["last_row"], 205)
-        self.assertEqual(len(first_payload["data"]), 100)
-        self.assertEqual(len(last_payload["data"]), 5)
-        self.assertEqual(out_of_range_payload["data"], [])
+        assert first.status_code == 200
+        assert first_payload["last_page"] == 3
+        assert first_payload["last_row"] == 205
+        assert len(first_payload["data"]) == 100
+        assert len(last_payload["data"]) == 5
+        assert out_of_range_payload["data"] == []
 
     def test_empty_report_still_has_one_page(self):
         response = call(
             main.report_data,
             "report=pathway-report&page=1&size=100",
         )
-        self.assertEqual(
-            json.loads(response.body),
-            {"last_page": 1, "last_row": 0, "data": []},
-        )
+        assert json.loads(response.body) == {
+            "last_page": 1,
+            "last_row": 0,
+            "data": [],
+        }
 
     def test_remote_multi_column_sort_applies_before_pagination(self):
         response = call(
@@ -91,10 +99,11 @@ class ReportDataTests(unittest.TestCase):
             "&sort%5B1%5D%5Bdir%5D=desc",
         )
         rows = json.loads(response.body)["data"]
-        self.assertEqual([row["id"] for row in rows[:3]], [204, 201, 198])
+        assert [row["id"] for row in rows[:3]] == [204, 201, 198]
 
-    def test_invalid_parameters_are_rejected(self):
-        queries = [
+    @pytest.mark.parametrize(
+        "query",
+        [
             "report=unknown&page=1&size=100",
             "report=cluster-report&page=0&size=100",
             "report=cluster-report&page=1&size=50",
@@ -104,13 +113,13 @@ class ReportDataTests(unittest.TestCase):
             "report=cluster-report&page=1&size=100"
             "&sort%5B0%5D%5Bfield%5D=id"
             "&sort%5B0%5D%5Bdir%5D=sideways",
-        ]
-        for query in queries:
-            with self.subTest(query=query):
-                self.assertEqual(call(main.report_data, query).status_code, 400)
+        ],
+    )
+    def test_invalid_parameters_are_rejected(self, query):
+        assert call(main.report_data, query).status_code == 400
 
 
-class ReportDownloadTests(unittest.TestCase):
+class TestReportDownload:
     def test_csv_contains_the_unsorted_complete_report_without_an_index(self):
         response = call(
             main.report_download,
@@ -120,21 +129,12 @@ class ReportDownloadTests(unittest.TestCase):
         )
         rows = list(csv.DictReader(io.StringIO(response.body.decode())))
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.media_type, "text/csv")
-        self.assertEqual(
-            response.headers["content-disposition"],
-            'attachment; filename="cluster-report.csv"',
+        assert response.status_code == 200
+        assert response.media_type == "text/csv"
+        assert (
+            response.headers["content-disposition"]
+            == 'attachment; filename="cluster-report.csv"'
         )
-        self.assertEqual(list(rows[0]), ["group_id", "id", "name"])
-        self.assertEqual(len(rows), 205)
-        self.assertEqual([int(row["id"]) for row in rows[:3]], [0, 1, 2])
-
-
-def tearDownModule():
-    main.db.close()
-    TEST_DIRECTORY.cleanup()
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert list(rows[0]) == ["group_id", "id", "name"]
+        assert len(rows) == 205
+        assert [int(row["id"]) for row in rows[:3]] == [0, 1, 2]

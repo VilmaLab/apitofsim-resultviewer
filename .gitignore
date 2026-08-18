@@ -5,6 +5,11 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
+
+# PyInstaller build directory (separate from the generic build/ above)
+/apitofresview.build/
 
 # Virtual environments
 .venv

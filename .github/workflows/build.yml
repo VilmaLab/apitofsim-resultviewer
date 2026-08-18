@@ -1,0 +1,123 @@
+# yamllint disable rule:line-length rule:truthy
+---
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Created up front so each matrix job can attach its own asset as soon as it
+  # is built, instead of a single gather-everything job that loses all assets
+  # if one platform fails.
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Pinned to a full SHA for supply-chain safety (see comments on the
+      # build job's action pins for the matching version tags).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Create release if absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists"
+          else
+            gh release create "$tag" --generate-notes
+          fi
+
+  build:
+    name: ${{ matrix.target }}
+    needs: create-release
+    # create-release skips on non-tag pushes; don't let that skip the build.
+    if: ${{ !cancelled() && needs.create-release.result != 'failure' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            binary: dist/apitofresview/apitofresview
+          - os: windows-latest
+            target: windows-x86_64
+            binary: dist/apitofresview/apitofresview.exe
+          - os: macos-latest
+            target: macos-arm64
+            binary: dist/APiToF Result Viewer.app/Contents/MacOS/apitofresview
+    steps:
+      # Actions pinned to full commit SHAs (supply-chain hardening). Version
+      # tags for reference: checkout@v4, setup-uv@v6, upload-artifact@v4.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      # apitofsim and mplbed are path dependencies (../apitofsim, ../mplbed);
+      # CI must clone them into the sibling directories before uv sync.
+      - name: Check out path dependencies
+        run: |
+          git clone --depth 1 https://github.com/VilmaLab/apitofsim.git ../apitofsim
+          git clone --depth 1 https://github.com/frankier/mplbed.git ../mplbed
+
+      - name: Install dependencies
+        run: uv sync --locked --group build
+
+      - name: Build
+        run: uv run pyinstaller apitofresview.spec --noconfirm --clean
+
+      # A successful PyInstaller run proves very little: its failures are
+      # runtime missing-import failures. The self-check starts the frozen
+      # binary, serves, and forces the lazy bokeh/panel/holoviews paths.
+      - name: Smoke test
+        shell: bash
+        run: '"${{ matrix.binary }}" --smoke-test'
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifacts
+          tar -czf "artifacts/apitofresview-${{ matrix.target }}.tar.gz" \
+            -C dist apitofresview
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $dest = "artifacts/apitofresview-${{ matrix.target }}.zip"
+          Compress-Archive -Path dist/apitofresview -DestinationPath $dest
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts
+          # ditto, not zip: zip mangles the symlinks inside .app bundles.
+          ditto -c -k --keepParent "dist/APiToF Result Viewer.app" \
+            "artifacts/apitofresview-${{ matrix.target }}.zip"
+
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: apitofresview-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+          # These are ~200 MB each; do not keep every branch build forever.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF#refs/tags/}" artifacts/* --clobber

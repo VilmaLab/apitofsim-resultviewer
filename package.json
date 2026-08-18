@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "npm run build-css && npm run build-js",
-    "build-css": "npx @tailwindcss/cli -i src/css/index.css -o static/index.css",
-    "build-js": "esbuild src/js/index.ts --bundle --outfile=static/index.js",
+    "build-css": "npx @tailwindcss/cli -i src/css/index.css -o src/apitofresview/static/index.css",
+    "build-js": "esbuild src/js/index.ts --bundle --outfile=src/apitofresview/static/index.js",
     "watch": "(trap 'kill 0' SIGINT; rm -f watchlogtmp; npm run watch-css >> watchlogtmp & npm run watch-js >> watchlogtmp & tail -f watchlogtmp & wait)",
-    "watch-css": "npx @tailwindcss/cli -i src/css/index.css -o static/index.css --watch",
-    "watch-js": "esbuild src/js/index.ts --bundle --outfile=static/index.js --watch"
+    "watch-css": "npx @tailwindcss/cli -i src/css/index.css -o src/apitofresview/static/index.css --watch",
+    "watch-js": "esbuild src/js/index.ts --bundle --outfile=src/apitofresview/static/index.js --watch"
   },
   "devDependencies": {
     "@types/alpinejs": "^3.13.11",

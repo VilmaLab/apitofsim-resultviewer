@@ -1,7 +1,7 @@
 [project]
 name = "apitofsim-resultviewer"
 version = "0.1.0"
-description = "Add your description here"
+description = "Read-only web viewer for APi-ToF simulation results"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -13,23 +13,43 @@ dependencies = [
     "starlette>=1.4.1",
     "starlette-htmx>=0.1.1",
     "uvicorn[standard]>=0.52.1",
+    # No native window on Linux: pywebview needs PyGObject/WebKitGTK there,
+    # which cannot be frozen reliably, so we open the system browser instead.
+    "pywebview>=6.2.1; sys_platform != 'linux'",
 ]
 
+[project.scripts]
+apitofresview = "apitofresview.cli:main"
+
 [dependency-groups]
+build = [
+    "pyinstaller>=6.21.0",
+    "pyinstaller-hooks-contrib",
+]
+
 dev = [
     "pytest>=9.0.2",
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 [tool.uv]
 override-dependencies = [
     "bokeh"
 ]
 
+# The project name is "apitofsim-resultviewer" but the importable package is
+# named apitofresview; tell the build backend which module directory to ship.
+[tool.uv.build-backend]
+module-name = "apitofresview"
+
 [tool.uv.sources]
 bokeh = { git = "https://github.com/bryevdv/bokeh.git", branch = "codex/asgi-server-followups" }
 panel = { git = "https://github.com/holoviz/panel.git", branch = "bk_3.10_compat" }
 apitofsim = { path = "../apitofsim" }
 mplbed = { path = "../mplbed", editable = true }
+
+[build-system]
+requires = ["uv_build >= 0.11.7, <0.12.0"]
+build-backend = "uv_build"

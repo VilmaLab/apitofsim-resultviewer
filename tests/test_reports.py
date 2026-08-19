@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import duckdb
@@ -43,7 +44,10 @@ def request(query_string):
 
 
 def call(handler, query_string):
-    return asyncio.run(handler(request(query_string)))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(
+            asyncio.run, handler(request(query_string))
+        ).result()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -113,6 +117,9 @@ class TestReportData:
             "report=cluster-report&page=1&size=100"
             "&sort%5B0%5D%5Bfield%5D=id"
             "&sort%5B0%5D%5Bdir%5D=sideways",
+            "report=cluster-report&page=1&size=100&experiment=1",
+            "report=experiment-cluster-report&page=1&size=100"
+            "&experiment=1%20or%201%3D1",
         ],
     )
     def test_invalid_parameters_are_rejected(self, query):

@@ -109,8 +109,10 @@ checkout needs network access to those repositories.
 
 ## Tests
 
-Run the pytest suite with:
+Install Chromium once, then run the pytest suite. The suite starts the viewer
+against a temporary DuckDB database and drives it through a real browser.
 
 ```sh
+uv run playwright install chromium
 uv run pytest
 ```

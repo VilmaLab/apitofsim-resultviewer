@@ -8,7 +8,7 @@ dependencies = [
     "apitofsim[plot]",
     "bokeh",
     "duckdb>=1.5.5",
-    "mplbed>=0.1.1",
+    "mplbed>=0.2.0",
     "panel",
     "starlette>=1.4.1",
     "starlette-htmx>=0.1.1",
@@ -29,6 +29,7 @@ build = [
 
 dev = [
     "pytest>=9.0.2",
+    "pytest-playwright>=0.7.1",
 ]
 
 [tool.pytest.ini_options]
@@ -47,8 +48,7 @@ module-name = "apitofresview"
 [tool.uv.sources]
 bokeh = { git = "https://github.com/bryevdv/bokeh.git", branch = "codex/asgi-server-followups" }
 panel = { git = "https://github.com/holoviz/panel.git", branch = "bk_3.10_compat" }
-apitofsim = { path = "../apitofsim" }
-mplbed = { path = "../mplbed", editable = true }
+apitofsim = { git = "https://github.com/vilmalab/apitofsim.git", tag = "v0.0.15" }
 
 [build-system]
 requires = ["uv_build >= 0.11.7, <0.12.0"]

@@ -7,6 +7,7 @@ from math import ceil
 from os import environ
 from urllib.parse import urlencode
 
+import duckdb
 from apitofsim.plotting import get_report  # type: ignore[reportMissingImports]
 from apitofsim.workflow.db import (
     ExperimentDatabase,  # type: ignore[reportMissingImports]
@@ -139,6 +140,12 @@ def positive_int_param(request, name, default):
     return result
 
 
+def optional_positive_int_param(request, name):
+    if request.query_params.get(name) is None:
+        return None
+    return positive_int_param(request, name, 1)
+
+
 def requested_sorters(request):
     """Parse Tabulator's sort[n][field/dir] query parameters."""
     sorters = {}
@@ -167,11 +174,13 @@ def quote_identifier(identifier):
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def paginated_report(db, report_type, page, sorters):
+def paginated_report(db, report_type, page, sorters, experiment=None):
     """Return the total row count and one sorted page of a report."""
     offset = (page - 1) * REPORT_PAGE_SIZE
     if report_type == "spectrogram":
         df = get_report(db, report_type)
+        if experiment is not None:
+            df = df[df["experiment_run_id"] == experiment]
         columns = set(df.columns)
         for field, _ in sorters:
             if field not in columns:
@@ -184,6 +193,11 @@ def paginated_report(db, report_type, page, sorters):
         return len(df), df.iloc[offset : offset + REPORT_PAGE_SIZE]
 
     relation = db.db.table(report_type.replace("-", "_"))
+    if experiment is not None:
+        relation = relation.filter(
+            duckdb.ColumnExpression("experiment_run_id")
+            == duckdb.ConstantExpression(experiment)
+        )
     columns = set(relation.columns)
     for field, _ in sorters:
         if field not in columns:
@@ -286,9 +300,14 @@ async def report(request):
         request,
         "report.html",
         {
-            "report_data_url": url_with(request, "report_data", report=report_type),
+            "report_data_url": url_with(
+                request, "report_data", report=report_type, experiment=experiment
+            ),
             "report_download_url": url_with(
-                request, "report_download", report=report_type
+                request,
+                "report_download",
+                report=report_type,
+                experiment=experiment,
             ),
             "section": "experiment" if experiment is not None else "overview",
             "view": "report",
@@ -305,7 +324,12 @@ async def report_data(request):
         if size != REPORT_PAGE_SIZE:
             raise ValueError(f"size must be {REPORT_PAGE_SIZE}")
         sorters = requested_sorters(request)
-        row_count, df = paginated_report(_db, report_type, page, sorters)
+        experiment = optional_positive_int_param(request, "experiment")
+        if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
+            raise ValueError("Report cannot be filtered by experiment")
+        row_count, df = paginated_report(
+            _db, report_type, page, sorters, experiment=experiment
+        )
     except ValueError as exc:
         return Response(str(exc), status_code=400, media_type="text/plain")
 
@@ -318,11 +342,17 @@ async def report_data(request):
 async def report_download(request):
     try:
         report_type = requested_report(request)
+        experiment = optional_positive_int_param(request, "experiment")
+        if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
+            raise ValueError("Report cannot be filtered by experiment")
     except ValueError as exc:
         return Response(str(exc), status_code=400, media_type="text/plain")
 
     csv = StringIO()
-    get_report(_db, report_type).to_csv(csv, index=False)
+    df = get_report(_db, report_type)
+    if experiment is not None:
+        df = df[df["experiment_run_id"] == experiment]
+    df.to_csv(csv, index=False)
     return Response(
         csv.getvalue(),
         media_type="text/csv",

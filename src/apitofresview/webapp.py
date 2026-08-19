@@ -464,13 +464,12 @@ def get_is_single_pathway(experiment, cluster):
 
 
 def spectrogram_bokeh(doc):
-    import holoviews  # type: ignore[reportMissingImports]
-    from apitofsim.plotting import (  # type: ignore[reportMissingImports]
+    import holoviews
+    from apitofsim.plotting import (
         basic_spectrogram,
         get_intensities,
     )
-    from bokeh.layouts import layout  # type: ignore[reportMissingImports]
-    from panel import layout  # type: ignore[reportMissingImports]
+    from bokeh.layouts import layout
 
     args = doc.session_context.request.arguments
 

@@ -41,7 +41,16 @@ hiddenimports = []
 # panel/holoviews lazily import most of their machinery at runtime.
 hiddenimports += collect_submodules("bokeh")
 hiddenimports += collect_submodules("panel")
-hiddenimports += collect_submodules("holoviews")
+# holoviews.tests.plotting.plotly calls pytest.importorskip("plotly") at import
+# time, and holoviews.plotting.plotly imports plotly at module level; both abort
+# submodule collection. Tests are never needed in the bundle anyway, and we
+# deliberately don't ship the plotly backend.
+hiddenimports += collect_submodules(
+    "holoviews",
+    filter=lambda name: not name.startswith(
+        ("holoviews.tests", "holoviews.plotting.plotly")
+    ),
+)
 # uvicorn picks its protocol/loop/lifespan implementations by string.
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += [

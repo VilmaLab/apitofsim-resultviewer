@@ -29708,7 +29708,7 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
         autoColumns: true,
         pagination: true,
         paginationMode: "remote",
-        paginationSize: 100,
+        paginationSize: 40,
         paginationCounter: "rows",
         sortMode: "remote"
       });

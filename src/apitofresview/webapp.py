@@ -56,7 +56,7 @@ CLUSTER_VIEWS = [
     ("realizations", "realizations", "Realizations"),
 ]
 
-REPORT_PAGE_SIZE = 100
+DEFAULT_REPORT_PAGE_SIZE = 40
 REPORT_TYPES = set(OVERVIEW_REPORT_TYPES) | set(EXPERIMENT_REPORT_TYPES)
 SORT_PARAM_RE = re.compile(r"^sort\[(\d+)\]\[(field|dir)\]$")
 
@@ -174,9 +174,9 @@ def quote_identifier(identifier):
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def paginated_report(db, report_type, page, sorters, experiment=None):
+def paginated_report(db, report_type, page, sorters, experiment=None, size=DEFAULT_REPORT_PAGE_SIZE):
     """Return the total row count and one sorted page of a report."""
-    offset = (page - 1) * REPORT_PAGE_SIZE
+    offset = (page - 1) * size
     if report_type == "spectrogram":
         df = get_report(db, report_type)
         if experiment is not None:
@@ -190,7 +190,7 @@ def paginated_report(db, report_type, page, sorters, experiment=None):
                 by=[field for field, _ in sorters],
                 ascending=[direction == "asc" for _, direction in sorters],
             )
-        return len(df), df.iloc[offset : offset + REPORT_PAGE_SIZE]
+        return len(df), df.iloc[offset : offset + size]
 
     relation = db.db.table(report_type.replace("-", "_"))
     if experiment is not None:
@@ -209,7 +209,7 @@ def paginated_report(db, report_type, page, sorters, experiment=None):
         )
         relation = relation.order(order)
     row_count = relation.count("*").fetchone()[0]
-    return row_count, relation.limit(REPORT_PAGE_SIZE, offset=offset).fetchdf()
+    return row_count, relation.limit(size, offset=offset).fetchdf()
 
 
 def selected_cluster(request, clusters):
@@ -317,23 +317,18 @@ async def report(request):
 
 
 async def report_data(request):
-    try:
-        report_type = requested_report(request)
-        page = positive_int_param(request, "page", 1)
-        size = positive_int_param(request, "size", REPORT_PAGE_SIZE)
-        if size != REPORT_PAGE_SIZE:
-            raise ValueError(f"size must be {REPORT_PAGE_SIZE}")
-        sorters = requested_sorters(request)
-        experiment = optional_positive_int_param(request, "experiment")
-        if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
-            raise ValueError("Report cannot be filtered by experiment")
-        row_count, df = paginated_report(
-            _db, report_type, page, sorters, experiment=experiment
-        )
-    except ValueError as exc:
-        return Response(str(exc), status_code=400, media_type="text/plain")
+    report_type = requested_report(request)
+    page = positive_int_param(request, "page", 1)
+    size = positive_int_param(request, "size", DEFAULT_REPORT_PAGE_SIZE)
+    sorters = requested_sorters(request)
+    experiment = optional_positive_int_param(request, "experiment")
+    if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
+        raise ValueError("Report cannot be filtered by experiment")
+    row_count, df = paginated_report(
+        _db, report_type, page, sorters, experiment=experiment, size=size
+    )
 
-    last_page = max(1, ceil(row_count / REPORT_PAGE_SIZE))
+    last_page = max(1, ceil(row_count / size))
     data = df.to_json(orient="records")
     content = f'{{"last_page":{last_page},"last_row":{row_count},"data":{data}}}'
     return Response(content, media_type="application/json")

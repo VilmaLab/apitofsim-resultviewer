@@ -27,7 +27,7 @@ window.addEventListener("DOMContentLoaded", () => {
             autoColumns: true,
             pagination: true,
             paginationMode: "remote",
-            paginationSize: 100,
+            paginationSize: 40,
             paginationCounter: "rows",
             sortMode: "remote",
         });

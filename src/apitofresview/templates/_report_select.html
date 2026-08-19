@@ -2,6 +2,9 @@
     {% if experiment %}
         <input type="hidden" name="experiment" value="{{ experiment }}">
     {% endif %}
+    {% if cluster %}
+        <input type="hidden" name="cluster" value="{{ cluster }}">
+    {% endif %}
     <label for="report-select">Report:</label>
     <select
         name="report"

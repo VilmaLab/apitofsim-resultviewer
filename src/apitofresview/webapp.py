@@ -174,13 +174,15 @@ def quote_identifier(identifier):
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def paginated_report(db, report_type, page, sorters, experiment=None, size=DEFAULT_REPORT_PAGE_SIZE):
+def paginated_report(db, report_type, page, sorters, experiment=None, cluster=None, size=DEFAULT_REPORT_PAGE_SIZE):
     """Return the total row count and one sorted page of a report."""
     offset = (page - 1) * size
     if report_type == "spectrogram":
         df = get_report(db, report_type)
         if experiment is not None:
             df = df[df["experiment_run_id"] == experiment]
+        if cluster is not None:
+            df = df[df["cluster_id"] == cluster]
         columns = set(df.columns)
         for field, _ in sorters:
             if field not in columns:
@@ -197,6 +199,11 @@ def paginated_report(db, report_type, page, sorters, experiment=None, size=DEFAU
         relation = relation.filter(
             duckdb.ColumnExpression("experiment_run_id")
             == duckdb.ConstantExpression(experiment)
+        )
+    if cluster is not None:
+        relation = relation.filter(
+            duckdb.ColumnExpression("cluster_id")
+            == duckdb.ConstantExpression(cluster)
         )
     columns = set(relation.columns)
     for field, _ in sorters:
@@ -322,10 +329,11 @@ async def report_data(request):
     size = positive_int_param(request, "size", DEFAULT_REPORT_PAGE_SIZE)
     sorters = requested_sorters(request)
     experiment = optional_positive_int_param(request, "experiment")
+    cluster = optional_positive_int_param(request, "cluster")
     if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
         raise ValueError("Report cannot be filtered by experiment")
     row_count, df = paginated_report(
-        _db, report_type, page, sorters, experiment=experiment, size=size
+        _db, report_type, page, sorters, experiment=experiment, cluster=cluster, size=size
     )
 
     last_page = max(1, ceil(row_count / size))

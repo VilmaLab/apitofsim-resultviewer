@@ -7,9 +7,6 @@ resolution-markers = [
     "sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
-[manifest]
-overrides = [{ name = "bokeh", git = "https://github.com/bryevdv/bokeh.git?branch=codex%2Fasgi-server-followups" }]
-
 [[package]]
 name = "altgraph"
 version = "0.17.5"
@@ -88,7 +85,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "apitofsim", extras = ["plot"], git = "https://github.com/vilmalab/apitofsim.git?tag=v0.0.15" },
-    { name = "bokeh", git = "https://github.com/bryevdv/bokeh.git?branch=codex%2Fasgi-server-followups" },
+    { name = "bokeh", git = "https://github.com/bokeh/bokeh.git?branch=branch-3.10" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "mplbed", specifier = ">=0.2.0" },
     { name = "panel", git = "https://github.com/holoviz/panel.git?branch=bk_3.10_compat" },
@@ -125,8 +122,8 @@ wheels = [
 
 [[package]]
 name = "bokeh"
-version = "0.12.14.dev1+4485.g1b40f030.dirty"
-source = { git = "https://github.com/bryevdv/bokeh.git?branch=codex%2Fasgi-server-followups#1b40f0307e7fba3aad4ba3231ad1451ffc4f6848" }
+version = "3.10.0+1.g0b3cdb57.dirty"
+source = { git = "https://github.com/bokeh/bokeh.git?branch=branch-3.10#0b3cdb5723e8166f1c95e8f737d7983ac695600e" }
 dependencies = [
     { name = "jinja2" },
     { name = "narwhals" },

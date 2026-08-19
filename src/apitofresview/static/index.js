@@ -29706,6 +29706,10 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
       new TabulatorFull(el, {
         ajaxURL: el.dataset.url,
         autoColumns: true,
+        columnDefaults: {
+          maxWidth: 320,
+          tooltip: true
+        },
         pagination: true,
         paginationMode: "remote",
         paginationSize: 40,

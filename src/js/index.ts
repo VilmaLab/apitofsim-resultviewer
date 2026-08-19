@@ -25,6 +25,10 @@ window.addEventListener("DOMContentLoaded", () => {
         new Tabulator(el, {
             ajaxURL: el.dataset.url,
             autoColumns: true,
+            columnDefaults: {
+                maxWidth: 320,
+                tooltip: true,
+            },
             pagination: true,
             paginationMode: "remote",
             paginationSize: 40,

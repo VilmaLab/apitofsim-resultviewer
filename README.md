@@ -50,16 +50,6 @@ apitofresview
 | `--no-browser` | Don't open a browser |
 | `--debug` | Show tracebacks in the browser |
 
-## The current way of running things
-
-The viewer's logic lives in the `apitofresview` package, but the original
-entry point is preserved as a thin shim, so the ASGI way of running still
-works unchanged:
-
-```sh
-DATABASE=/path/to/experiments.duckdb uvicorn main:app
-```
-
 ## Developing
 
 ```bash
@@ -68,7 +58,7 @@ npm install && npm run build     # build the frontend into the package
 uv run apitofresview --database /path/to/experiments.duckdb
 ```
 
-`uv run uvicorn apitofresview.webapp:create_app --factory` also works if you
+`DATABASE=/path/to/experiments.duckdb uv run uvicorn apitofresview.webapp:create_app --factory` also works if you
 want a plain ASGI server.
 
 ### Frontend assets

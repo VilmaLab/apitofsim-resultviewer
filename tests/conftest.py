@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 import sys
@@ -89,17 +90,17 @@ def live_server(browser_database):
         [
             sys.executable,
             "-m",
-            "apitofresview",
-            "--database",
-            str(browser_database),
+            "uvicorn",
+            "apitofresview.asgi:app",
+            "--host",
+            "127.0.0.1",
             "--port",
             str(port),
-            "--no-window",
-            "--no-browser",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env={**os.environ, "DATABASE": str(browser_database)},
     )
     try:
         _wait_until_serving(base_url, process)

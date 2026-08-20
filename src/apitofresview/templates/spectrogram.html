@@ -3,9 +3,9 @@
 {% block title %}Spectrogram{% endblock %}
 
 {% block content %}
-    <div x-data="{ current_tab: $persist('interactive') }">
+    <div x-data="{ current_tab: $persist('matplotlib') }">
         <nav class="bg-slate-100 flex flex-wrap w-full">
-            {% for variant in ['interactive', 'print'] %}
+            {% for variant in ['matplotlib', 'bokeh'] %}
                 <div class="text-nowrap px-4 py-2 hover:bg-slate-300" :class="{ 'bg-slate-300': current_tab === '{{ variant }}' }">
                     <a href="#{{ variant }}" @click="current_tab = '{{ variant }}'">
                         {{ variant|capitalize }}
@@ -14,12 +14,13 @@
             {% endfor %}
         </nav>
 
-        <div x-show="current_tab === 'interactive'">
-            {{ spectrogram_bokeh|safe }}
+        <div x-show="current_tab === 'matplotlib'">
+            {{ spectrogram_mpl|safe }}
         </div>
 
-        <div x-show="current_tab === 'print'">
-            {{ spectrogram_mpl|safe }}
+        <div x-show="current_tab === 'bokeh'">
+            <p class="p-4 text-slate-600">Bokeh-based plot is not implemented yet.</p>
+            {{ spectrogram_bokeh|safe }}
         </div>
     </div>
 {% endblock %}

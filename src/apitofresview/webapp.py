@@ -6,14 +6,15 @@ from io import StringIO
 from math import ceil
 from os import environ
 from urllib.parse import urlencode
+from functools import partial
 
 import duckdb
-from apitofsim.plotting import get_report  # type: ignore[reportMissingImports]
+from apitofsim.plotting import get_report, get_joint_survivals
 from apitofsim.workflow.db import (
-    ExperimentDatabase,  # type: ignore[reportMissingImports]
+    ExperimentDatabase,
 )
-from bokeh.server.asgi import BokehASGI  # type: ignore[reportMissingImports]
-from mplbed import (  # type: ignore[reportMissingImports]
+from bokeh.server.asgi import BokehASGI
+from mplbed import (
     FigureCollector,
     mplbed_starlette,
     safe_html,
@@ -232,7 +233,7 @@ def head_context(request):
 
 def nav_context(request):
     """Values the navigation chrome in base.html needs on every page."""
-    db = _db
+    db = request.app.state.db
     experiment = maybe_int(request.query_params.get("experiment"))
     report = selected_report(request, experiment)
     clusters = get_cluster_choices(db, experiment)
@@ -261,10 +262,6 @@ templates = Jinja2Templates(
     directory=_resource_dir("templates"),
     context_processors=[head_context, nav_context],
 )
-
-# Set by create_app before any route is served; referenced by the route handlers
-# and the template context processors above.
-_db: ExperimentDatabase = None  # type: ignore[assignment]
 
 
 async def overview(request):
@@ -324,6 +321,7 @@ async def report(request):
 
 
 async def report_data(request):
+    db = request.app.state.db
     report_type = requested_report(request)
     page = positive_int_param(request, "page", 1)
     size = positive_int_param(request, "size", DEFAULT_REPORT_PAGE_SIZE)
@@ -333,7 +331,7 @@ async def report_data(request):
     if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
         raise ValueError("Report cannot be filtered by experiment")
     row_count, df = paginated_report(
-        _db, report_type, page, sorters, experiment=experiment, cluster=cluster, size=size
+        db, report_type, page, sorters, experiment=experiment, cluster=cluster, size=size
     )
 
     last_page = max(1, ceil(row_count / size))
@@ -343,6 +341,7 @@ async def report_data(request):
 
 
 async def report_download(request):
+    db = request.app.state.db
     try:
         report_type = requested_report(request)
         experiment = optional_positive_int_param(request, "experiment")
@@ -352,7 +351,7 @@ async def report_download(request):
         return Response(str(exc), status_code=400, media_type="text/plain")
 
     csv = StringIO()
-    df = get_report(_db, report_type)
+    df = get_report(db, report_type)
     if experiment is not None:
         df = df[df["experiment_run_id"] == experiment]
     df.to_csv(csv, index=False)
@@ -366,6 +365,12 @@ async def report_download(request):
 
 
 async def survivals(request):
+    from apitofsim.plotting import make_survival_plot
+    from mplbed import mplbed_starlette, safe_html
+    db = request.app.state.db
+    experiment = maybe_int(request.query_params.get("experiment"))
+    joint_survivals = get_joint_survivals(db, experiment)
+    fig = make_survival_plot(joint_survivals.keys(), joint_survivals.values())
     return templates.TemplateResponse(
         request,
         "survivals.html",
@@ -373,6 +378,7 @@ async def survivals(request):
             "section": "experiment",
             "view": "survivals",
             "route": "survivals",
+            "survivals": safe_html.figure_html(fig),
         },
     )
 
@@ -389,7 +395,7 @@ async def cluster(request):
     )
 
 
-def spectrogram_mpl(experiment, cluster):
+def spectrogram_mpl(db, experiment, cluster):
     import holoviews  # type: ignore[reportMissingImports]
     from apitofsim.plotting import (  # type: ignore[reportMissingImports]
         basic_spectrogram,
@@ -397,10 +403,10 @@ def spectrogram_mpl(experiment, cluster):
     )
 
     df = get_intensities(
-        _db,
+        db,
         experiment_id=experiment,
         cluster_id=cluster,
-        is_single_pathway=get_is_single_pathway(experiment, cluster),  # type: ignore[arg-type]
+        is_single_pathway=get_is_single_pathway(db, experiment, cluster),  # type: ignore[arg-type]
     )
     renderer = holoviews.renderer("matplotlib")
     collector = FigureCollector(target="inline", on_close="remove")
@@ -412,6 +418,7 @@ def spectrogram_mpl(experiment, cluster):
 async def spectrogram_page(request):
     from bokeh.embed import server_document  # type: ignore[reportMissingImports]
 
+    db = request.app.state.db
     url = str(request.url_for("bokeh", path="/spectrogram"))
     experiment_id = request.query_params.get("experiment")
     cluster_id = request.query_params.get("cluster")
@@ -422,7 +429,7 @@ async def spectrogram_page(request):
             "cluster": cluster_id,
         },
     )
-    spectrogram = spectrogram_mpl(maybe_int(experiment_id), maybe_int(cluster_id))
+    spectrogram = spectrogram_mpl(db, maybe_int(experiment_id), maybe_int(cluster_id))
 
     return templates.TemplateResponse(
         request,
@@ -449,10 +456,10 @@ async def realizations(request):
     )
 
 
-def get_is_single_pathway(experiment, cluster):
+def get_is_single_pathway(db, experiment, cluster):
     if experiment is None or cluster is None:
         return None
-    row = _db.db.execute(
+    row = db.db.execute(
         """
         select is_single_pathway
         from experiment_cluster_report
@@ -463,7 +470,7 @@ def get_is_single_pathway(experiment, cluster):
     return row[0] if row else None
 
 
-def spectrogram_bokeh(doc):
+def spectrogram_bokeh(db, doc):
     import holoviews
     from apitofsim.plotting import (
         basic_spectrogram,
@@ -480,10 +487,10 @@ def spectrogram_bokeh(doc):
     experiment = arg("experiment")
     cluster = arg("cluster")
     df = get_intensities(
-        _db,
+        db,
         experiment_id=experiment,
         cluster_id=cluster,
-        is_single_pathway=get_is_single_pathway(experiment, cluster),  # type: ignore[arg-type]
+        is_single_pathway=get_is_single_pathway(db, experiment, cluster),  # type: ignore[arg-type]
     )
     renderer = holoviews.renderer("bokeh").instance(mode="server")
     plot = renderer.get_plot(basic_spectrogram(df), doc)
@@ -500,11 +507,10 @@ def create_app(database_path=None, debug=True):
     which keeps the ``uvicorn main:app`` / ``import main`` way of running
     working unchanged.
     """
-    global _db
     if database_path is None:
         database_path = environ["DATABASE"]
-    _db = ExperimentDatabase(database_path, readonly=True)
 
+    db = ExperimentDatabase(database_path, readonly=True)
     app = Starlette(
         debug=debug,
         routes=[
@@ -526,18 +532,10 @@ def create_app(database_path=None, debug=True):
                 "/static", StaticFiles(directory=_resource_dir("static")), name="static"
             ),
             Mount(
-                "/bokeh", BokehASGI({"/spectrogram": spectrogram_bokeh}), name="bokeh"
+                "/bokeh", BokehASGI({"/spectrogram": partial(spectrogram_bokeh, db)}), name="bokeh"
             ),
         ],
     )
+    app.state.db = db
     mplbed_starlette.setup(app)
     return app
-
-
-# Default app built from $DATABASE at import time, so ``uvicorn main:app`` and
-# ``import main`` keep working. When $DATABASE is absent (the packaged CLI
-# passes --database instead) leave it unset rather than failing at import.
-try:
-    app = create_app()
-except KeyError:
-    app = None

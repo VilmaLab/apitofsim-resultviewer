@@ -49,9 +49,62 @@ def test_navigation_and_report_workflow(page: Page, live_server):
 
     page.get_by_role("link", name="Single experiment").click()
     page.get_by_label("Experiment:").select_option("1")
+    expect(page.get_by_text("Overview", exact=True).last).to_be_visible()
     expect(page.get_by_text("Report", exact=True)).to_be_visible()
     expect(page.get_by_text("Survivals", exact=True)).to_be_visible()
     expect(page.get_by_text("Cluster", exact=True)).to_be_visible()
+
+    assert_clean_browser(*errors)
+
+
+def test_selected_experiment_opens_overview_with_summary_and_config(
+    page: Page, live_server
+):
+    errors = watch_browser_errors(page)
+
+    page.goto(f"{live_server}/experiment?experiment=1")
+
+    experiment_tabs = page.get_by_role("navigation").nth(1).get_by_role("link")
+    expect(experiment_tabs.first).to_have_text("Overview")
+    expect(experiment_tabs.first.locator("..")).to_have_class(
+        re.compile(r"\bbg-slate-300\b")
+    )
+
+    overview = page.get_by_role("main")
+    expect(overview.get_by_role("heading", name="Overview")).to_be_visible()
+    table = overview.get_by_role("table")
+    for label, value in [
+        ("Experiment run ID", "1"),
+        ("Configuration name", "Browser test"),
+        ("Start time", "2 Jan 2026, 03:04:05"),
+        ("Successes", "1"),
+        ("Failures", "0"),
+        ("Pathway mode", "Single pathway"),
+    ]:
+        row = table.get_by_role("row").filter(has_text=label)
+        expect(row.get_by_role("cell")).to_have_text(value)
+
+    viewer = overview.locator("json-viewer")
+    expect(viewer).to_be_visible()
+    assert viewer.evaluate("element => element.data") == {
+        "experiment_config": {"temperature": 300, "label": "experiment"},
+        "run_config": {"simulation_mode": "SINGLE_CLUSTER", "label": "run"},
+    }
+
+    page.set_viewport_size({"width": 320, "height": 720})
+    expect(table).to_be_visible()
+    expect(viewer).to_be_visible()
+
+    assert_clean_browser(*errors)
+
+
+def test_unknown_experiment_has_a_clear_empty_state(page: Page, live_server):
+    errors = watch_browser_errors(page)
+
+    page.goto(f"{live_server}/experiment?experiment=999")
+
+    expect(page.get_by_text("Experiment 999 was not found.", exact=True)).to_be_visible()
+    expect(page.locator("json-viewer")).to_have_count(0)
 
     assert_clean_browser(*errors)
 

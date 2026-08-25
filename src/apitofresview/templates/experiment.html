@@ -3,9 +3,41 @@
 {% block title %}Experiment{% endblock %}
 
 {% block content %}
+<main class="p-4">
     {% if not experiment %}
-        <p class="p-4 text-slate-600">Choose an experiment above to get started.</p>
+        <p class="text-slate-600">Choose an experiment above to get started.</p>
+    {% elif not overview %}
+        <p class="text-slate-600">Experiment {{ experiment }} was not found.</p>
+    {% else %}
+        <h1 class="mb-4 text-2xl font-semibold">Overview</h1>
+
+        <div class="overflow-x-auto">
+            <table class="w-full max-w-3xl border-collapse text-left">
+                <caption class="sr-only">Basic information for experiment {{ experiment }}</caption>
+                <tbody class="divide-y divide-slate-200 border-y border-slate-300">
+                    {% for label, value in [
+                        ('Experiment run ID', overview.experiment_run_id),
+                        ('Configuration name', overview.config_name),
+                        ('Start time', overview.start_time),
+                        ('Successes', overview.successes),
+                        ('Failures', overview.failures),
+                        ('Pathway mode', overview.pathway_mode),
+                    ] %}
+                    <tr>
+                        <th scope="row" class="w-1/3 min-w-40 bg-slate-50 px-3 py-2 font-medium">
+                            {{ label }}
+                        </th>
+                        <td class="px-3 py-2">{{ value }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <h2 class="mb-3 mt-8 text-xl font-semibold">Configuration</h2>
+        <div class="max-w-full overflow-x-auto border border-slate-300 bg-slate-950 p-3">
+            <json-viewer>{{ overview.configuration | tojson }}</json-viewer>
+        </div>
     {% endif %}
-    <div class="flex" id="viewer">
-    </div>
+</main>
 {% endblock %}

@@ -2,6 +2,7 @@ import AlpineModule from "alpinejs";
 import persist from "@alpinejs/persist";
 import HtmxModule from "htmx.org";
 import "htmx-ext-sse";
+import "@alenaksu/json-viewer";
 import { TabulatorFull as Tabulator } from "tabulator-tables";
 
 declare global {

@@ -29,13 +29,20 @@ def browser_database(tmp_path_factory):
         )
         db.db.execute("insert into pathway values (1, 1, 2, 3)")
         db.db.execute(
-            "insert into experiment_config values (1, 'Browser test', '{}')"
+            """
+            insert into experiment_config values
+            (1, 'Browser test', '{"temperature": 300, "label": "experiment"}')
+            """
         )
         db.db.execute(
             "insert into experiment_config values (2, 'Other run', '{}')"
         )
         db.db.execute(
-            "insert into experiment_run values (1, 1, '{}', '2026-01-02 03:04:05')"
+            """
+            insert into experiment_run values
+            (1, 1, '{"simulation_mode": "SINGLE_CLUSTER", "label": "run"}',
+             '2026-01-02 03:04:05')
+            """
         )
         db.db.execute(
             "insert into experiment_run values (2, 2, '{}', '2026-01-03 03:04:05')"

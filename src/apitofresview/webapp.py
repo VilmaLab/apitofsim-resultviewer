@@ -1,5 +1,6 @@
 """The result viewer's Starlette application."""
 
+import json
 import re
 from importlib.resources import files
 from io import StringIO
@@ -46,6 +47,7 @@ EXPERIMENT_REPORT_TYPES = [
 ]
 
 EXPERIMENT_VIEWS = [
+    ("overview", "experiment", "Overview"),
     ("report", "report", "Report"),
     ("survivals", "survivals", "Survivals"),
     ("cluster", "cluster", "Cluster"),
@@ -78,6 +80,44 @@ def get_experiment_choices(db):
         value = row.experiment_run_id
         experiment_choices.append((label, value))
     return experiment_choices
+
+
+def get_experiment_overview(db, experiment):
+    """Return display-ready run metadata and configuration for one experiment."""
+    row = db.db.execute(
+        """
+        select
+            summary.experiment_run_id,
+            summary.config_name,
+            summary.start_time,
+            summary.successes,
+            summary.failures,
+            summary.is_single_pathway,
+            config.config,
+            run.run_config
+        from experiment_summary as summary
+        join experiment_run as run on run.id = summary.experiment_run_id
+        join experiment_config as config on config.id = run.experiment_config_id
+        where summary.experiment_run_id = ?
+        """,
+        (experiment,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    start_time = row[2]
+    return {
+        "experiment_run_id": row[0],
+        "config_name": row[1],
+        "start_time": f"{start_time.day} {start_time:%b %Y, %H:%M:%S}",
+        "successes": row[3],
+        "failures": row[4],
+        "pathway_mode": "Single pathway" if row[5] else "Multi-pathway",
+        "configuration": {
+            "experiment_config": json.loads(row[6]),
+            "run_config": json.loads(row[7]),
+        },
+    }
 
 
 def get_cluster_choices(db, experiment):
@@ -276,12 +316,19 @@ async def overview(request):
 
 
 async def experiment(request):
+    experiment_id = maybe_int(request.query_params.get("experiment"))
     return templates.TemplateResponse(
         request,
         "experiment.html",
         {
             "section": "experiment",
+            "view": "overview",
             "route": "experiment",
+            "overview": (
+                get_experiment_overview(request.app.state.db, experiment_id)
+                if experiment_id is not None
+                else None
+            ),
         },
     )
 

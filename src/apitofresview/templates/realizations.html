@@ -3,6 +3,33 @@
 {% block title %}Realizations{% endblock %}
 
 {% block content %}
-    <div class="flex" id="viewer">
-    </div>
+    <select
+        name="plottype"
+        id="plottype-select"
+        onchange="this.form.requestSubmit()"
+        class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+        <option value="" {% if not plot_type %}selected{% endif %}>
+            --- Please choose an option ---
+        </option>
+        {% for plot_type_opt in plot_type_opts %}
+            <option value="{{ plot_type_opt }}" {% if plot_type == plot_type_opt %}selected{% endif %}>
+                {{ plot_type_opt }}
+            </option>
+        {% endfor %}
+    </select>
+    <select
+        name="rescale"
+        id="rescale-select"
+        onchange="this.form.requestSubmit()"
+        class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+        <option value="" {% if not rescale %}selected{% endif %}>
+            --- Please choose an option ---
+        </option>
+        {% for rescale_opt in rescale_opts %}
+            <option value="{{ rescale_opt }}" {% if rescale == rescale_opt %}selected{% endif %}>
+                {{ rescale_opt }}
+            </option>
+        {% endfor %}
+    </select>
+    {{ fig }}
 {% endblock %}

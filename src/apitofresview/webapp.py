@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from functools import partial
 
 import duckdb
-from apitofsim.plotting import get_report, get_joint_survivals
+from apitofsim.plotting.report import get_report
 from apitofsim.workflow.db import (
     ExperimentDatabase,
 )
@@ -365,7 +365,7 @@ async def report_download(request):
 
 
 async def survivals(request):
-    from apitofsim.plotting import make_survival_plot
+    from apitofsim.plotting.survivals import make_survival_plot, get_joint_survivals
     from mplbed import mplbed_starlette, safe_html
     db = request.app.state.db
     experiment = maybe_int(request.query_params.get("experiment"))
@@ -397,7 +397,7 @@ async def cluster(request):
 
 def spectrogram_mpl(db, experiment, cluster):
     import holoviews  # type: ignore[reportMissingImports]
-    from apitofsim.plotting import (  # type: ignore[reportMissingImports]
+    from apitofsim.plotting.spectrogram import (  # type: ignore[reportMissingImports]
         basic_spectrogram,
         get_intensities,
     )
@@ -445,6 +445,16 @@ async def spectrogram_page(request):
 
 
 async def realizations(request):
+    from apitofsim.plotting.events import plot_events_cluster
+
+    db = request.app.state.db
+    experiment_id = request.query_params.get("experiment")
+    cluster_id = request.query_params.get("cluster")
+    plot_type = request.query_params.get("plot_type", "beeswarm")
+    rescale = request.query_params.get("rescale", "none")
+
+    is_single_pathway = get_is_single_pathway(db, experiment_id, cluster_id)
+    fig = plot_events_cluster(db, experiment_id, is_single_pathway, cluster_id, rescale, plot_type)
     return templates.TemplateResponse(
         request,
         "realizations.html",
@@ -452,7 +462,23 @@ async def realizations(request):
             "section": "experiment",
             "view": "realizations",
             "route": "realizations",
-        },
+            "plot_type": plot_type,
+            "rescale": rescale,
+            "fig": safe_html.figure_html(fig),
+            "plot_type_opts": [
+                "off-center"
+                "off-center-facet",
+                "beeswarm",
+                "beeswarm-facet",
+                "stripplot",
+                "stripplot-facet",
+                "violinplot",
+                "violinplot-facet",
+            ],
+            "rescale_opts": [
+                "none", "equal", "schematic"
+            ]
+        }
     )
 
 
@@ -472,7 +498,7 @@ def get_is_single_pathway(db, experiment, cluster):
 
 def spectrogram_bokeh(db, doc):
     import holoviews
-    from apitofsim.plotting import (
+    from apitofsim.plotting.spectrogram import (
         basic_spectrogram,
         get_intensities,
     )

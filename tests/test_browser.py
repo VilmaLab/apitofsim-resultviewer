@@ -86,6 +86,8 @@ def test_selected_experiment_opens_overview_with_summary_and_config(
 
     viewer = overview.locator("json-viewer")
     expect(viewer).to_be_visible()
+    expect(viewer).to_have_css("background-color", "rgb(245, 245, 245)")
+    expect(viewer).to_have_css("color", "rgb(51, 51, 51)")
     assert viewer.evaluate("element => element.data") == {
         "experiment_config": {"temperature": 300, "label": "experiment"},
         "run_config": {"simulation_mode": "SINGLE_CLUSTER", "label": "run"},

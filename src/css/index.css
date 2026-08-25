@@ -1,3 +1,4 @@
 @import "tailwindcss" source(none);
 @source "../apitofresview/templates";
 @import "tabulator-tables/dist/css/tabulator.min.css";
+@import "./json-viewer/themes/light.css";

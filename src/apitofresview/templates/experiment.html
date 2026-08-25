@@ -35,8 +35,8 @@
         </div>
 
         <h2 class="mb-3 mt-8 text-xl font-semibold">Configuration</h2>
-        <div class="max-w-full overflow-x-auto border border-slate-300 bg-slate-950 p-3">
-            <json-viewer>{{ overview.configuration | tojson }}</json-viewer>
+        <div class="max-w-full overflow-x-auto border border-slate-300 bg-neutral-100 p-3">
+            <json-viewer class="json-viewer-theme-light">{{ overview.configuration | tojson }}</json-viewer>
         </div>
     {% endif %}
 </main>

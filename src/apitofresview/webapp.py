@@ -2,10 +2,12 @@
 
 import json
 import re
+import importlib.util
 from importlib.resources import files
 from io import StringIO
 from math import ceil
 from os import environ
+from typing import Annotated, Literal, get_args
 from urllib.parse import urlencode
 from functools import partial
 
@@ -25,6 +27,23 @@ from starlette.responses import Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
+from pydanticstarlette import (
+    LenientInt,
+    OptionalPositiveInt,
+    PositiveInt,
+    Sorters,
+    lenient_int,
+    query_params,
+)
+
+
+# This is a guard against a Panel bug with BokehASGI if we accidentally end up with Panel installed.
+# Can probably be removed at some point.
+if importlib.util.find_spec("panel") is not None:
+    import panel.io.resources as panel_resources
+
+    panel_resources.RESOURCE_MODE = "cdn"
 
 
 def _resource_dir(rel):
@@ -60,8 +79,74 @@ CLUSTER_VIEWS = [
 ]
 
 DEFAULT_REPORT_PAGE_SIZE = 40
-REPORT_TYPES = set(OVERVIEW_REPORT_TYPES) | set(EXPERIMENT_REPORT_TYPES)
-SORT_PARAM_RE = re.compile(r"^sort\[(\d+)\]\[(field|dir)\]$")
+# The page sizes the report table accepts: the UI's fixed size and the one
+# the tests paginate with.
+PAGE_SIZES = (40, 100)
+
+ReportType = Literal[
+    "cluster-report",
+    "pathway-report",
+    "experiment-pathway-report",
+    "experiment-cluster-report",
+    "experiment-summary",
+    "spectrogram",
+]
+assert set(get_args(ReportType)) == set(OVERVIEW_REPORT_TYPES) | set(EXPERIMENT_REPORT_TYPES), "keep ReportType in sync"
+
+# Query values arrive as strings; coerce to int before the Literal check.
+PageSize = Annotated[Literal[40, 100], BeforeValidator(int)]
+assert set(get_args(get_args(PageSize)[0])) == set(PAGE_SIZES), "keep PageSize in sync"
+
+
+class ReportParamsBase(BaseModel):
+    """Parameters shared by the report data and report download endpoints."""
+
+    report: ReportType
+    experiment: OptionalPositiveInt = None
+
+    @model_validator(mode="after")
+    def experiment_filtering(self):
+        if self.experiment is not None and self.report not in EXPERIMENT_REPORT_TYPES:
+            raise ValueError("Report cannot be filtered by experiment")
+        return self
+
+
+class ReportDataParams(ReportParamsBase):
+    """Strict parameters for the paginated report JSON endpoint."""
+
+    page: PositiveInt = 1
+    size: PageSize = DEFAULT_REPORT_PAGE_SIZE
+    cluster: OptionalPositiveInt = None
+    sorters: Sorters = Field(default_factory=list, validation_alias="sort")
+
+
+class ExperimentParams(BaseModel):
+    """Lenient parameters for pages keyed on an experiment run."""
+
+    experiment: LenientInt = None
+
+
+class ClusterPageParams(BaseModel):
+    """Lenient parameters for cluster sub-pages.
+
+    Kept as raw strings because they are forwarded to Bokeh/Mplbed verbatim;
+    numeric use goes through lenient_int.
+    """
+
+    experiment: str | None = None
+    cluster: str | None = None
+
+
+class RealizationsParams(ClusterPageParams):
+    plot_type: str = "beeswarm"
+    rescale: str = "none"
+
+
+class ReportPageParams(BaseModel):
+    """Lenient parameters for the report page itself (navigation state)."""
+
+    report: str = ""
+    experiment: LenientInt = None
 
 
 def pathway_type_lbl(is_single_pathway):
@@ -139,13 +224,6 @@ def get_cluster_choices(db, experiment):
     ]
 
 
-def maybe_int(value):
-    try:
-        return int(value)
-    except TypeError, ValueError:
-        return None
-
-
 def url_with(request, name, **params):
     """Build a URL for a named route, dropping empty query parameters."""
     url = str(request.url_for(name))
@@ -157,58 +235,8 @@ def report_types_for(experiment):
     return EXPERIMENT_REPORT_TYPES if experiment is not None else OVERVIEW_REPORT_TYPES
 
 
-def selected_report(request, experiment):
-    report = request.query_params.get("report", "")
+def selected_report(report, experiment):
     return report if report in report_types_for(experiment) else ""
-
-
-def requested_report(request):
-    """Return a validated report type from an API request."""
-    report_type = request.query_params.get("report", "")
-    if report_type not in REPORT_TYPES:
-        raise ValueError("Unknown report type")
-    return report_type
-
-
-def positive_int_param(request, name, default):
-    value = request.query_params.get(name)
-    try:
-        result = default if value is None else int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a positive integer") from exc
-    if result < 1:
-        raise ValueError(f"{name} must be a positive integer")
-    return result
-
-
-def optional_positive_int_param(request, name):
-    if request.query_params.get(name) is None:
-        return None
-    return positive_int_param(request, name, 1)
-
-
-def requested_sorters(request):
-    """Parse Tabulator's sort[n][field/dir] query parameters."""
-    sorters = {}
-    for key, value in request.query_params.multi_items():
-        if not key.startswith("sort["):
-            continue
-        match = SORT_PARAM_RE.fullmatch(key)
-        if match is None:
-            raise ValueError("Invalid sort parameter")
-        index, part = match.groups()
-        sorter = sorters.setdefault(int(index), {})
-        if part in sorter:
-            raise ValueError("Duplicate sort parameter")
-        sorter[part] = value
-
-    result = []
-    for index in sorted(sorters):
-        sorter = sorters[index]
-        if set(sorter) != {"field", "dir"} or sorter["dir"] not in {"asc", "desc"}:
-            raise ValueError("Invalid sorter")
-        result.append((sorter["field"], sorter["dir"]))
-    return result
 
 
 def quote_identifier(identifier):
@@ -261,7 +289,7 @@ def paginated_report(db, report_type, page, sorters, experiment=None, cluster=No
 
 
 def selected_cluster(request, clusters):
-    cluster = maybe_int(request.query_params.get("cluster"))
+    cluster = lenient_int(request.query_params.get("cluster"))
     return cluster if cluster in {value for _, value in clusters} else None
 
 
@@ -274,8 +302,8 @@ def head_context(request):
 def nav_context(request):
     """Values the navigation chrome in base.html needs on every page."""
     db = request.app.state.db
-    experiment = maybe_int(request.query_params.get("experiment"))
-    report = selected_report(request, experiment)
+    experiment = lenient_int(request.query_params.get("experiment"))
+    report = selected_report(request.query_params.get("report", ""), experiment)
     clusters = get_cluster_choices(db, experiment)
     cluster = selected_cluster(request, clusters)
     # Parameters the experiment picker carries over, minus anything we dropped.
@@ -344,9 +372,10 @@ async def comparison(request):
     )
 
 
-async def report(request):
-    experiment = maybe_int(request.query_params.get("experiment"))
-    report_type = selected_report(request, experiment)
+@query_params(ReportPageParams)
+async def report(request, params):
+    experiment = params.experiment
+    report_type = selected_report(params.report, experiment)
     return templates.TemplateResponse(
         request,
         "report.html",
@@ -367,56 +396,48 @@ async def report(request):
     )
 
 
-async def report_data(request):
+@query_params(ReportDataParams)
+async def report_data(request, params):
     db = request.app.state.db
-    report_type = requested_report(request)
-    page = positive_int_param(request, "page", 1)
-    size = positive_int_param(request, "size", DEFAULT_REPORT_PAGE_SIZE)
-    sorters = requested_sorters(request)
-    experiment = optional_positive_int_param(request, "experiment")
-    cluster = optional_positive_int_param(request, "cluster")
-    if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
-        raise ValueError("Report cannot be filtered by experiment")
     row_count, df = paginated_report(
-        db, report_type, page, sorters, experiment=experiment, cluster=cluster, size=size
+        db,
+        params.report,
+        params.page,
+        params.sorters,
+        experiment=params.experiment,
+        cluster=params.cluster,
+        size=params.size,
     )
 
-    last_page = max(1, ceil(row_count / size))
+    last_page = max(1, ceil(row_count / params.size))
     data = df.to_json(orient="records")
     content = f'{{"last_page":{last_page},"last_row":{row_count},"data":{data}}}'
     return Response(content, media_type="application/json")
 
 
-async def report_download(request):
+@query_params(ReportParamsBase)
+async def report_download(request, params):
     db = request.app.state.db
-    try:
-        report_type = requested_report(request)
-        experiment = optional_positive_int_param(request, "experiment")
-        if experiment is not None and report_type not in EXPERIMENT_REPORT_TYPES:
-            raise ValueError("Report cannot be filtered by experiment")
-    except ValueError as exc:
-        return Response(str(exc), status_code=400, media_type="text/plain")
-
     csv = StringIO()
-    df = get_report(db, report_type)
-    if experiment is not None:
-        df = df[df["experiment_run_id"] == experiment]
+    df = get_report(db, params.report)
+    if params.experiment is not None:
+        df = df[df["experiment_run_id"] == params.experiment]
     df.to_csv(csv, index=False)
     return Response(
         csv.getvalue(),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f'attachment; filename="{report_type}.csv"',
+            "Content-Disposition": f'attachment; filename="{params.report}.csv"',
         },
     )
 
 
-async def survivals(request):
+@query_params(ExperimentParams)
+async def survivals(request, params):
     from apitofsim.plotting.survivals import make_survival_plot, get_joint_survivals
     from mplbed import mplbed_starlette, safe_html
     db = request.app.state.db
-    experiment = maybe_int(request.query_params.get("experiment"))
-    joint_survivals = get_joint_survivals(db, experiment)
+    joint_survivals = get_joint_survivals(db, params.experiment)
     fig = make_survival_plot(joint_survivals.keys(), joint_survivals.values())
     return templates.TemplateResponse(
         request,
@@ -462,21 +483,28 @@ def spectrogram_mpl(db, experiment, cluster):
     return collector.consume_one()
 
 
-async def spectrogram_page(request):
-    from bokeh.embed import server_document  # type: ignore[reportMissingImports]
+def bokeh_document(request, path, *args, **kwargs):
+    from bokeh.embed import server_document
+    from markupsafe import Markup
 
+    url = str(request.url_for("bokeh", path=path))
+    return Markup(server_document(url, *args, **kwargs))
+
+
+@query_params(ClusterPageParams)
+async def spectrogram_page(request, params):
     db = request.app.state.db
-    url = str(request.url_for("bokeh", path="/spectrogram"))
-    experiment_id = request.query_params.get("experiment")
-    cluster_id = request.query_params.get("cluster")
-    script = server_document(
-        url,
+    script = bokeh_document(
+        request,
+        "/spectrogram",
         arguments={
-            "experiment": experiment_id,
-            "cluster": cluster_id,
+            "experiment": params.experiment,
+            "cluster": params.cluster,
         },
     )
-    spectrogram = spectrogram_mpl(db, maybe_int(experiment_id), maybe_int(cluster_id))
+    spectrogram = spectrogram_mpl(
+        db, lenient_int(params.experiment), lenient_int(params.cluster)
+    )
 
     return templates.TemplateResponse(
         request,
@@ -491,14 +519,15 @@ async def spectrogram_page(request):
     )
 
 
-async def realizations(request):
+@query_params(RealizationsParams)
+async def realizations(request, params):
     from apitofsim.plotting.events import plot_events_cluster
 
     db = request.app.state.db
-    experiment_id = request.query_params.get("experiment")
-    cluster_id = request.query_params.get("cluster")
-    plot_type = request.query_params.get("plot_type", "beeswarm")
-    rescale = request.query_params.get("rescale", "none")
+    experiment_id = params.experiment
+    cluster_id = params.cluster
+    plot_type = params.plot_type
+    rescale = params.rescale
 
     is_single_pathway = get_is_single_pathway(db, experiment_id, cluster_id)
     fig = plot_events_cluster(db, experiment_id, is_single_pathway, cluster_id, rescale, plot_type)
@@ -555,7 +584,7 @@ def spectrogram_bokeh(db, doc):
 
     def arg(name):
         vals = args.get(name)
-        return maybe_int(vals[-1].decode()) if vals else None
+        return lenient_int(vals[-1].decode()) if vals else None
 
     experiment = arg("experiment")
     cluster = arg("cluster")
@@ -577,7 +606,7 @@ def create_app(database_path=None, debug=True):
     """Build the Starlette application around the given experiment database.
 
     ``database_path`` defaults to the ``$DATABASE`` environment variable,
-    which keeps the ``uvicorn main:app`` / ``import main`` way of running
+    which keeps the ``uvicorn apitofresview:app`` way of running
     working unchanged.
     """
     if database_path is None:

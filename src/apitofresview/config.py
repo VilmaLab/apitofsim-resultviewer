@@ -2,8 +2,8 @@
 
 The viewer is read-only, so its only required setting is the path to the
 APi-ToF experiment database. It can be supplied on the command line with
-``--database`` or, for the current ``uvicorn main:app`` / ``$DATABASE`` way of
-running, through the environment variable below.
+``--database`` or, for when run via ``uvicorn``, with the ``$DATABASE``
+environment variable.
 """
 
 import os

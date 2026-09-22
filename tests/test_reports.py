@@ -39,6 +39,7 @@ def request(query_string):
             "path": "/",
             "headers": [],
             "query_string": query_string.encode(),
+            "app": main.app,
         }
     )
 

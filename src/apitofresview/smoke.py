@@ -29,6 +29,8 @@ HTTP_CHECKS = [
 
 IMPORT_CHECKS = [
     ("apitofresview.webapp", "apitofresview.webapp", "create_app"),
+    ("pydanticstarlette", "pydanticstarlette", "query_params"),
+    ("pydantic", "pydantic", "BaseModel"),
     ("apitofsim.plotting", "apitofsim.plotting", "get_report"),
     ("apitofsim.workflow.db", "apitofsim.workflow.db", "ExperimentDatabase"),
     ("bokeh.server.asgi", "bokeh.server.asgi", "BokehASGI"),

@@ -16,6 +16,7 @@ dependencies = [
     # No native window on Linux: pywebview needs PyGObject/WebKitGTK there,
     # which cannot be frozen reliably, so we open the system browser instead.
     "pywebview>=6.2.1; sys_platform != 'linux'",
+    "pydanticstarlette",
 ]
 
 [project.scripts]
@@ -57,6 +58,7 @@ apitofsim = [
   # be written with De Morgan (or the sdist used as the only source).
   # { url = "https://github.com/VilmaLab/apitofsim/archive/refs/tags/v0.0.16.tar.gz", marker = "(sys_platform != 'linux' or platform_machine != 'x86_64') and (sys_platform != 'darwin' or platform_machine != 'arm64') and (sys_platform != 'win32' or platform_machine != 'AMD64')" },
 ]
+pydanticstarlette = { git = "https://github.com/frankier/pydanticstarlette.git" }
 
 [build-system]
 requires = ["uv_build >= 0.11.7, <0.12.0"]

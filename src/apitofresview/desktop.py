@@ -31,6 +31,11 @@ def bind_socket(host="127.0.0.1", port=0):
     return sock
 
 
+def socket_url(sock):
+    host, port = sock.getsockname()[:2]
+    return f"http://{host}:{port}/"
+
+
 class _Server(uvicorn.Server):
     def install_signal_handlers(self):
         # Signal handlers can only be installed on the main thread, and the
@@ -51,8 +56,7 @@ class ServerThread:
 
     @property
     def url(self):
-        host, port = self.sock.getsockname()[:2]
-        return f"http://{host}:{port}/"
+        return socket_url(self.sock)
 
     def start(self, timeout=60.0):
         self.thread.start()
@@ -101,3 +105,38 @@ def run_browser(app, sock, open_browser=True, log_level="info"):
         pass
     finally:
         server.stop()
+
+
+def run_reload(host="127.0.0.1", port=0, open_browser=True, log_level="info"):
+    """Serve with uvicorn's reloader, restarting when source files change.
+
+    The reloader runs the application in a spawned subprocess, so unlike
+    run_browser and run_window it takes an app factory import string rather
+    than the app object. Binding the socket here keeps the reported port
+    authoritative and lets every restart share the same socket.
+    """
+    from uvicorn.supervisors import ChangeReload
+
+    sock = bind_socket(host, port)
+    config = uvicorn.Config(
+        "apitofresview.asgi:create_app_from_env",
+        factory=True,
+        reload=True,
+        log_level=log_level,
+        ws="websockets",
+    )
+    server = uvicorn.Server(config)
+    url = socket_url(sock)
+    print(
+        f"APiToF Result Viewer running at {url}  (reload enabled, Ctrl-C to quit)",
+        flush=True,
+    )
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        ChangeReload(config, target=server.run, sockets=[sock]).run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # ChangeReload closes the sockets it was given; this is a no-op then.
+        sock.close()

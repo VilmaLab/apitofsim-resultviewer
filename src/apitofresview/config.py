@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ENV_VAR = "DATABASE"
+DEBUG_ENV_VAR = "APITOF_DEBUG"
 
 
 class ConfigError(Exception):
@@ -20,6 +21,15 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Settings:
     database: Path
+
+
+def debug_from_env():
+    """Read the debug flag from the environment.
+
+    uvicorn's reloader runs the application in a spawned subprocess, so the CLI
+    passes --debug on to it this way rather than as an argument.
+    """
+    return os.environ.get(DEBUG_ENV_VAR, "").lower() in {"1", "true", "yes", "on"}
 
 
 def load(database=None):

@@ -343,8 +343,9 @@ async def overview(request):
     )
 
 
-async def experiment(request):
-    experiment_id = maybe_int(request.query_params.get("experiment"))
+@query_params(ExperimentParams)
+async def experiment(request, params):
+    experiment_id = params.experiment
     return templates.TemplateResponse(
         request,
         "experiment.html",

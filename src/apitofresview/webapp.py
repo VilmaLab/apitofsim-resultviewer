@@ -133,13 +133,22 @@ class ClusterPageParams(BaseModel):
     numeric use goes through lenient_int.
     """
 
-    experiment: str | None = None
-    cluster: str | None = None
+    experiment: int
+    cluster: int
 
 
 class RealizationsParams(ClusterPageParams):
-    plot_type: str = "beeswarm"
-    rescale: str = "none"
+    plottype: Literal[
+        "off-center",
+        "off-center-facet",
+        "beeswarm",
+        "beeswarm-facet",
+        "stripplot",
+        "stripplot-facet",
+        "violinplot",
+        "violinplot-facet"
+    ] = "beeswarm"
+    rescale: Literal["equal", "schematic", "none"] = "none"
 
 
 class ReportPageParams(BaseModel):
@@ -504,7 +513,7 @@ async def spectrogram_page(request, params):
         },
     )
     spectrogram = spectrogram_mpl(
-        db, lenient_int(params.experiment), lenient_int(params.cluster)
+        db, params.experiment, params.cluster
     )
 
     return templates.TemplateResponse(
@@ -527,7 +536,7 @@ async def realizations(request, params):
     db = request.app.state.db
     experiment_id = params.experiment
     cluster_id = params.cluster
-    plot_type = params.plot_type
+    plot_type = params.plottype
     rescale = params.rescale
 
     is_single_pathway = get_is_single_pathway(db, experiment_id, cluster_id)

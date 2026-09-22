@@ -9,7 +9,7 @@
             id="plottype-select"
             onchange="this.form.requestSubmit()"
             class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
-            <option value="" {% if not plot_type %}selected{% endif %}>
+            <option value="" {% if not plot_type %}selected{% endif %} disabled>
                 --- Please choose an option ---
             </option>
             {% for plot_type_opt in plot_type_opts %}
@@ -23,7 +23,7 @@
             id="rescale-select"
             onchange="this.form.requestSubmit()"
             class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
-            <option value="" {% if not rescale %}selected{% endif %}>
+            <option value="" {% if not rescale %}selected{% endif %} disabled>
                 --- Please choose an option ---
             </option>
             {% for rescale_opt in rescale_opts %}
@@ -32,6 +32,8 @@
                 </option>
             {% endfor %}
         </select>
+        <input type="hidden" name="experiment" value="{{ experiment }}">
+        <input type="hidden" name="cluster" value="{{ cluster }}">
     </form>
     {{ fig }}
 {% endblock %}

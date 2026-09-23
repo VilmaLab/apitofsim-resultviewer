@@ -22,6 +22,8 @@ datas = []
 # templates/ and static/ live inside the package and are found through
 # importlib.resources, so they must land at apitofresview/... in the bundle.
 datas += collect_data_files("apitofresview")
+# apitofsim loads workflow SQL at import time through importlib.resources.
+datas += collect_data_files("apitofsim")
 # mplbed reads webaggext.js through importlib.resources.
 datas += collect_data_files("mplbed")
 # mplbed serves matplotlib's backends/web_backend and mpl-data as static dirs.

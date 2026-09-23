@@ -76,6 +76,7 @@ CLUSTER_VIEWS = [
     ("report", "report", "Report"),
     ("spectrogram", "spectrogram", "Spectrogram"),
     ("realizations", "realizations", "Realizations"),
+    ("explorer", "explorer", "Explorer"),
 ]
 
 DEFAULT_REPORT_PAGE_SIZE = 40
@@ -568,6 +569,25 @@ async def realizations(request, params):
     )
 
 
+@query_params(ClusterPageParams)
+async def explorer(request, params):
+    from apitofsim.plotting.events import plot_events_cluster
+
+    db = request.app.state.db
+    experiment_id = params.experiment
+    cluster_id = params.cluster
+    
+    return templates.TemplateResponse(
+        request,
+        "explorer.html",
+        {
+            "section": "experiment",
+            "view": "explorer",
+            "route": "explorer",
+        }
+    )
+
+
 def get_is_single_pathway(db, experiment, cluster):
     if experiment is None or cluster is None:
         return None
@@ -583,6 +603,36 @@ def get_is_single_pathway(db, experiment, cluster):
 
 
 def spectrogram_bokeh(db, doc):
+    import holoviews
+    from apitofsim.plotting.spectrogram import (
+        basic_spectrogram,
+        get_intensities,
+    )
+    from bokeh.layouts import layout
+
+    args = doc.session_context.request.arguments
+
+    def arg(name):
+        vals = args.get(name)
+        return lenient_int(vals[-1].decode()) if vals else None
+
+    experiment = arg("experiment")
+    cluster = arg("cluster")
+    df = get_intensities(
+        db,
+        experiment_id=experiment,
+        cluster_id=cluster,
+        is_single_pathway=get_is_single_pathway(db, experiment, cluster),  # type: ignore[arg-type]
+    )
+    renderer = holoviews.renderer("bokeh").instance(mode="server")
+    plot = renderer.get_plot(basic_spectrogram(df), doc)
+    root = layout(  # type: ignore[call-arg]
+        [[plot.state]], sizing_mode="fixed"
+    )
+    doc.add_root(root)
+
+
+def explorer_bokeh(db, doc):
     import holoviews
     from apitofsim.plotting.spectrogram import (
         basic_spectrogram,
@@ -638,6 +688,9 @@ def create_app(database_path=None, debug=True):
             ),
             Route(
                 "/experiment/cluster/realizations", realizations, name="realizations"
+            ),
+            Route(
+                "/experiment/cluster/explorer", explorer, name="explorer"
             ),
             Route("/comparison", comparison, name="comparison"),
             Mount(

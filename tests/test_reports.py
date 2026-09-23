@@ -6,6 +6,7 @@ import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 import pytest
@@ -28,7 +29,15 @@ connection.close()
 os.environ["DATABASE"] = str(DATABASE_PATH)
 os.environ.setdefault("MPLCONFIGDIR", str(Path(TEST_DIRECTORY.name) / "matplotlib"))
 
-import main  # noqa: E402
+from apitofresview import webapp  # noqa: E402
+
+
+database = SimpleNamespace(
+    db=duckdb.connect(str(DATABASE_PATH), read_only=True),
+    is_realization_db=lambda: False,
+    is_experiment_db=lambda: False,
+)
+app = SimpleNamespace(state=SimpleNamespace(db=database))
 
 
 def request(query_string):
@@ -39,7 +48,7 @@ def request(query_string):
             "path": "/",
             "headers": [],
             "query_string": query_string.encode(),
-            "app": main.app,
+            "app": app,
         }
     )
 
@@ -54,22 +63,22 @@ def call(handler, query_string):
 @pytest.fixture(scope="module", autouse=True)
 def close_database():
     yield
-    main.db.close()
+    app.state.db.db.close()
     TEST_DIRECTORY.cleanup()
 
 
 class TestReportData:
     def test_pages_include_total_metadata(self):
         first = call(
-            main.report_data,
+            webapp.report_data,
             "report=cluster-report&page=1&size=100",
         )
         last = call(
-            main.report_data,
+            webapp.report_data,
             "report=cluster-report&page=3&size=100",
         )
         out_of_range = call(
-            main.report_data,
+            webapp.report_data,
             "report=cluster-report&page=4&size=100",
         )
 
@@ -85,7 +94,7 @@ class TestReportData:
 
     def test_empty_report_still_has_one_page(self):
         response = call(
-            main.report_data,
+            webapp.report_data,
             "report=pathway-report&page=1&size=100",
         )
         assert json.loads(response.body) == {
@@ -96,7 +105,7 @@ class TestReportData:
 
     def test_remote_multi_column_sort_applies_before_pagination(self):
         response = call(
-            main.report_data,
+            webapp.report_data,
             "report=cluster-report&page=1&size=100"
             "&sort%5B0%5D%5Bfield%5D=group_id"
             "&sort%5B0%5D%5Bdir%5D=asc"
@@ -124,13 +133,13 @@ class TestReportData:
         ],
     )
     def test_invalid_parameters_are_rejected(self, query):
-        assert call(main.report_data, query).status_code == 400
+        assert call(webapp.report_data, query).status_code == 400
 
 
 class TestReportDownload:
     def test_csv_contains_the_unsorted_complete_report_without_an_index(self):
         response = call(
-            main.report_download,
+            webapp.report_download,
             "report=cluster-report"
             "&sort%5B0%5D%5Bfield%5D=id"
             "&sort%5B0%5D%5Bdir%5D=desc",

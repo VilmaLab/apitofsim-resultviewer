@@ -23,7 +23,6 @@ HTTP_CHECKS = [
     ("static/index.js", None),
     ("static/index.css", None),
     ("webagg/mpl.js", None),
-    ("webagg/webaggext.js", None),
     ("webagg/_static/js/mpl.js", None),
 ]
 
@@ -31,7 +30,7 @@ IMPORT_CHECKS = [
     ("apitofresview.webapp", "apitofresview.webapp", "create_app"),
     ("pydanticstarlette", "pydanticstarlette", "query_params"),
     ("pydantic", "pydantic", "BaseModel"),
-    ("apitofsim.plotting", "apitofsim.plotting", "get_report"),
+    ("apitofsim.plotting.report", "apitofsim.plotting.report", "get_report"),
     ("apitofsim.workflow.db", "apitofsim.workflow.db", "ExperimentDatabase"),
     ("bokeh.server.asgi", "bokeh.server.asgi", "BokehASGI"),
     ("bokeh.embed", "bokeh.embed", "server_document"),

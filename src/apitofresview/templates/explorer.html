@@ -3,5 +3,13 @@
 {% block title %}Explorer{% endblock %}
 
 {% block content %}
-    Test
+    <div id="explorer-frame" class="explorer-frame">
+        {{ explorer_bokeh }}
+    </div>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+    .explorer-frame { padding: 6px; min-height: 70vh; background: #f8fafc; overflow-x: auto; }
+</style>
 {% endblock %}

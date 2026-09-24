@@ -571,12 +571,9 @@ async def realizations(request, params):
 
 @query_params(ClusterPageParams)
 async def explorer(request, params):
-    from apitofsim.plotting.events import plot_events_cluster
-
-    db = request.app.state.db
-    experiment_id = params.experiment
-    cluster_id = params.cluster
-    
+    script = bokeh_document(request, "/explorer", arguments={
+        "experiment": params.experiment, "cluster": params.cluster,
+    })
     return templates.TemplateResponse(
         request,
         "explorer.html",
@@ -584,6 +581,7 @@ async def explorer(request, params):
             "section": "experiment",
             "view": "explorer",
             "route": "explorer",
+            "explorer_bokeh": script,
         }
     )
 
@@ -633,12 +631,7 @@ def spectrogram_bokeh(db, doc):
 
 
 def explorer_bokeh(db, doc):
-    import holoviews
-    from apitofsim.plotting.spectrogram import (
-        basic_spectrogram,
-        get_intensities,
-    )
-    from bokeh.layouts import layout
+    from apitofresview.plotting.explorer import build_document
 
     args = doc.session_context.request.arguments
 
@@ -648,18 +641,7 @@ def explorer_bokeh(db, doc):
 
     experiment = arg("experiment")
     cluster = arg("cluster")
-    df = get_intensities(
-        db,
-        experiment_id=experiment,
-        cluster_id=cluster,
-        is_single_pathway=get_is_single_pathway(db, experiment, cluster),  # type: ignore[arg-type]
-    )
-    renderer = holoviews.renderer("bokeh").instance(mode="server")
-    plot = renderer.get_plot(basic_spectrogram(df), doc)
-    root = layout(  # type: ignore[call-arg]
-        [[plot.state]], sizing_mode="fixed"
-    )
-    doc.add_root(root)
+    build_document(db, doc, experiment, cluster)
 
 
 def create_app(database_path=None, debug=True):
@@ -697,7 +679,10 @@ def create_app(database_path=None, debug=True):
                 "/static", StaticFiles(directory=_resource_dir("static")), name="static"
             ),
             Mount(
-                "/bokeh", BokehASGI({"/spectrogram": partial(spectrogram_bokeh, db)}), name="bokeh"
+                "/bokeh", BokehASGI({
+                    "/spectrogram": partial(spectrogram_bokeh, db),
+                    "/explorer": partial(explorer_bokeh, db),
+                }), name="bokeh"
             ),
         ],
     )

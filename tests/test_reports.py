@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import duckdb
 import pytest
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 
 
@@ -133,7 +134,11 @@ class TestReportData:
         ],
     )
     def test_invalid_parameters_are_rejected(self, query):
-        assert call(webapp.report_data, query).status_code == 400
+        # query_params raises HTTPException(400); Starlette's default handler
+        # turns it into the plain-text response the caller sees.
+        with pytest.raises(HTTPException) as excinfo:
+            call(webapp.report_data, query)
+        assert excinfo.value.status_code == 400
 
 
 class TestReportDownload:

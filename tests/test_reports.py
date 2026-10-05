@@ -56,9 +56,7 @@ def request(query_string):
 
 def call(handler, query_string):
     with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(
-            asyncio.run, handler(request(query_string))
-        ).result()
+        return executor.submit(asyncio.run, handler(request(query_string))).result()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -145,9 +143,7 @@ class TestReportDownload:
     def test_csv_contains_the_unsorted_complete_report_without_an_index(self):
         response = call(
             webapp.report_download,
-            "report=cluster-report"
-            "&sort%5B0%5D%5Bfield%5D=id"
-            "&sort%5B0%5D%5Bdir%5D=desc",
+            "report=cluster-report&sort%5B0%5D%5Bfield%5D=id&sort%5B0%5D%5Bdir%5D=desc",
         )
         rows = list(csv.DictReader(io.StringIO(response.body.decode())))
 

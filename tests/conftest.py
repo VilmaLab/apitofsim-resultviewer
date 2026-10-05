@@ -34,9 +34,7 @@ def browser_database(tmp_path_factory):
             (1, 'Browser test', '{"temperature": 300, "label": "experiment"}')
             """
         )
-        db.db.execute(
-            "insert into experiment_config values (2, 'Other run', '{}')"
-        )
+        db.db.execute("insert into experiment_config values (2, 'Other run', '{}')")
         db.db.execute(
             """
             insert into experiment_run values
@@ -81,7 +79,7 @@ def _wait_until_serving(base_url, process):
             with urllib.request.urlopen(base_url, timeout=1) as response:
                 if response.status == 200:
                     return
-        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+        except urllib.error.URLError, ConnectionError, TimeoutError, OSError:
             pass
         time.sleep(0.1)
     process.terminate()

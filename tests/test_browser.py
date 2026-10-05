@@ -13,15 +13,19 @@ def watch_browser_errors(page):
     page.on("pageerror", lambda error: page_errors.append(error))
     page.on(
         "console",
-        lambda message: console_errors.append((message.text, message.location))
-        if message.type == "error"
-        else None,
+        lambda message: (
+            console_errors.append((message.text, message.location))
+            if message.type == "error"
+            else None
+        ),
     )
     page.on(
         "response",
-        lambda response: failed_responses.append((response.status, response.url))
-        if response.status >= 400
-        else None,
+        lambda response: (
+            failed_responses.append((response.status, response.url))
+            if response.status >= 400
+            else None
+        ),
     )
     return page_errors, console_errors, failed_responses
 
@@ -105,7 +109,9 @@ def test_unknown_experiment_has_a_clear_empty_state(page: Page, live_server):
 
     page.goto(f"{live_server}/experiment?experiment=999")
 
-    expect(page.get_by_text("Experiment 999 was not found.", exact=True)).to_be_visible()
+    expect(
+        page.get_by_text("Experiment 999 was not found.", exact=True)
+    ).to_be_visible()
     expect(page.locator("json-viewer")).to_have_count(0)
 
     assert_clean_browser(*errors)
@@ -116,9 +122,7 @@ def test_report_can_be_sorted_and_downloaded(page: Page, live_server):
     page.goto(f"{live_server}/report?report=cluster-report")
     expect(page.locator(".tabulator-row")).to_have_count(3)
 
-    page.locator(
-        '.tabulator-col[tabulator-field="cluster_atomic_mass"]'
-    ).click()
+    page.locator('.tabulator-col[tabulator-field="cluster_atomic_mass"]').click()
     expect(page.locator(".tabulator-row").first).to_contain_text("Product A")
 
     expect(page.get_by_role("link", name="Download CSV")).to_have_attribute(

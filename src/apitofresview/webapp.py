@@ -1,7 +1,6 @@
 """The result viewer's Starlette application."""
 
 import json
-import re
 import importlib.util
 from importlib.resources import files
 from io import StringIO
@@ -455,7 +454,7 @@ async def report_download(request, params):
 @query_params(ExperimentParams)
 async def survivals(request, params):
     from apitofsim.plotting.survivals import make_survival_plot, get_joint_survivals
-    from mplbed import mplbed_starlette, safe_html
+    from mplbed import safe_html
 
     db = request.app.state.db
     joint_survivals = get_joint_survivals(db, params.experiment)

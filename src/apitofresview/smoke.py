@@ -28,7 +28,11 @@ HTTP_CHECKS = [
 
 IMPORT_CHECKS = [
     ("apitofresview.webapp", "apitofresview.webapp", "create_app"),
-    ("pydanticstarlette", "pydanticstarlette", "query_params"),
+    (
+        "workingtitle.pydanticstarlette",
+        "workingtitle.pydanticstarlette",
+        "query_params",
+    ),
     ("pydantic", "pydantic", "BaseModel"),
     ("apitofsim.plotting.report", "apitofsim.plotting.report", "get_report"),
     ("apitofsim.workflow.db", "apitofsim.workflow.db", "ExperimentDatabase"),

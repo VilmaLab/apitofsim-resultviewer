@@ -28,7 +28,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from pydantic import BaseModel, BeforeValidator, Field, model_validator
-from pydanticstarlette import (
+from workingtitle.pydanticstarlette import (
     LenientInt,
     OptionalPositiveInt,
     PositiveInt,
@@ -92,7 +92,9 @@ ReportType = Literal[
     "experiment-summary",
     "spectrogram",
 ]
-assert set(get_args(ReportType)) == set(OVERVIEW_REPORT_TYPES) | set(EXPERIMENT_REPORT_TYPES), "keep ReportType in sync"
+assert set(get_args(ReportType)) == set(OVERVIEW_REPORT_TYPES) | set(
+    EXPERIMENT_REPORT_TYPES
+), "keep ReportType in sync"
 
 # Query values arrive as strings; coerce to int before the Literal check.
 PageSize = Annotated[Literal[40, 100], BeforeValidator(int)]
@@ -147,7 +149,7 @@ class RealizationsParams(ClusterPageParams):
         "stripplot",
         "stripplot-facet",
         "violinplot",
-        "violinplot-facet"
+        "violinplot-facet",
     ] = "beeswarm"
     rescale: Literal["equal", "schematic", "none"] = "none"
 
@@ -253,7 +255,15 @@ def quote_identifier(identifier):
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def paginated_report(db, report_type, page, sorters, experiment=None, cluster=None, size=DEFAULT_REPORT_PAGE_SIZE):
+def paginated_report(
+    db,
+    report_type,
+    page,
+    sorters,
+    experiment=None,
+    cluster=None,
+    size=DEFAULT_REPORT_PAGE_SIZE,
+):
     """Return the total row count and one sorted page of a report."""
     offset = (page - 1) * size
     if report_type == "spectrogram":
@@ -281,8 +291,7 @@ def paginated_report(db, report_type, page, sorters, experiment=None, cluster=No
         )
     if cluster is not None:
         relation = relation.filter(
-            duckdb.ColumnExpression("cluster_id")
-            == duckdb.ConstantExpression(cluster)
+            duckdb.ColumnExpression("cluster_id") == duckdb.ConstantExpression(cluster)
         )
     columns = set(relation.columns)
     for field, _ in sorters:
@@ -447,6 +456,7 @@ async def report_download(request, params):
 async def survivals(request, params):
     from apitofsim.plotting.survivals import make_survival_plot, get_joint_survivals
     from mplbed import mplbed_starlette, safe_html
+
     db = request.app.state.db
     joint_survivals = get_joint_survivals(db, params.experiment)
     fig = make_survival_plot(joint_survivals.keys(), joint_survivals.values())
@@ -513,9 +523,7 @@ async def spectrogram_page(request, params):
             "cluster": params.cluster,
         },
     )
-    spectrogram = spectrogram_mpl(
-        db, params.experiment, params.cluster
-    )
+    spectrogram = spectrogram_mpl(db, params.experiment, params.cluster)
 
     return templates.TemplateResponse(
         request,
@@ -541,7 +549,9 @@ async def realizations(request, params):
     rescale = params.rescale
 
     is_single_pathway = get_is_single_pathway(db, experiment_id, cluster_id)
-    fig = plot_events_cluster(db, experiment_id, is_single_pathway, cluster_id, rescale, plot_type)
+    fig = plot_events_cluster(
+        db, experiment_id, is_single_pathway, cluster_id, rescale, plot_type
+    )
     return templates.TemplateResponse(
         request,
         "realizations.html",
@@ -553,8 +563,7 @@ async def realizations(request, params):
             "rescale": rescale,
             "fig": safe_html.figure_html(fig),
             "plot_type_opts": [
-                "off-center"
-                "off-center-facet",
+                "off-centeroff-center-facet",
                 "beeswarm",
                 "beeswarm-facet",
                 "stripplot",
@@ -562,18 +571,21 @@ async def realizations(request, params):
                 "violinplot",
                 "violinplot-facet",
             ],
-            "rescale_opts": [
-                "none", "equal", "schematic"
-            ]
-        }
+            "rescale_opts": ["none", "equal", "schematic"],
+        },
     )
 
 
 @query_params(ClusterPageParams)
 async def explorer(request, params):
-    script = bokeh_document(request, "/explorer", arguments={
-        "experiment": params.experiment, "cluster": params.cluster,
-    })
+    script = bokeh_document(
+        request,
+        "/explorer",
+        arguments={
+            "experiment": params.experiment,
+            "cluster": params.cluster,
+        },
+    )
     return templates.TemplateResponse(
         request,
         "explorer.html",
@@ -582,7 +594,7 @@ async def explorer(request, params):
             "view": "explorer",
             "route": "explorer",
             "explorer_bokeh": script,
-        }
+        },
     )
 
 
@@ -671,18 +683,20 @@ def create_app(database_path=None, debug=True):
             Route(
                 "/experiment/cluster/realizations", realizations, name="realizations"
             ),
-            Route(
-                "/experiment/cluster/explorer", explorer, name="explorer"
-            ),
+            Route("/experiment/cluster/explorer", explorer, name="explorer"),
             Route("/comparison", comparison, name="comparison"),
             Mount(
                 "/static", StaticFiles(directory=_resource_dir("static")), name="static"
             ),
             Mount(
-                "/bokeh", BokehASGI({
-                    "/spectrogram": partial(spectrogram_bokeh, db),
-                    "/explorer": partial(explorer_bokeh, db),
-                }), name="bokeh"
+                "/bokeh",
+                BokehASGI(
+                    {
+                        "/spectrogram": partial(spectrogram_bokeh, db),
+                        "/explorer": partial(explorer_bokeh, db),
+                    }
+                ),
+                name="bokeh",
             ),
         ],
     )

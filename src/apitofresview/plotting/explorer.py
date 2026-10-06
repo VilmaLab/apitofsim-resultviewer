@@ -359,17 +359,6 @@ def build_document(db, doc, experiment: int, cluster: int):
     event_types = CheckboxGroup(
         labels=[v.title() for v in EVENT_TYPES], active=[0, 1, 2]
     )
-    quick = Select(
-        title="Event preset",
-        value="All",
-        options=[
-            "All",
-            "Collision only",
-            "Fragmentation only",
-            "Collision + fragmentation",
-            "Escape only",
-        ],
-    )
     mode = Select(
         title="X coordinate",
         value="schematic",
@@ -427,7 +416,7 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     left_controls = column(
         group("Fates", column(fate, fate_facets, spacing=4)),
-        group("Events", column(event_types, quick, spacing=4)),
+        group("Events", column(event_types, spacing=4)),
         group("X axis", column(mode, schematic, restrictions, spacing=4)),
         group("Layout", column(layout, violin, spacing=4)),
         group("Views", column(row(show_events, show_cdf), show_bars, spacing=4)),
@@ -1049,17 +1038,6 @@ def build_document(db, doc, experiment: int, cluster: int):
             state["auto_cdf"] = False
         render()
 
-    def preset_changed(attr, old, new):
-        presets = {
-            "All": [0, 1, 2],
-            "Collision only": [0],
-            "Fragmentation only": [1],
-            "Collision + fragmentation": [0, 1],
-            "Escape only": [2],
-        }
-        event_types.active = presets[new]
-
-    quick.on_change("value", preset_changed)
     for widget, property_name in [
         (fate, "active"),
         (fate_facets, "active"),

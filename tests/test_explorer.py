@@ -221,8 +221,16 @@ def test_realization_coordinate(monkeypatch):
         assert not events.ygrid[0].visible
 
     check({1: 1, 2: 2, 3: 2, 4: 3}, [1, 4])
+    pager = next(
+        w
+        for w in doc.select({"type": plot.CheckboxGroup})
+        if w.labels == ["Realizations pager"]
+    )
+    pager.active = [0]
     next(iter(doc.select({"type": RangeSlider}))).value = (2, 4)
     check({2: 1, 3: 1, 4: 2}, [1, 3])
+    pager.active = []
+    check({1: 1, 2: 2, 3: 2, 4: 3}, [1, 4])
     fate = next(
         w for w in doc.select({"type": plot.CheckboxGroup}) if "Incomplete" in w.labels
     )
@@ -601,13 +609,23 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     fates.active = list(range(len(fates.labels)))
     slider = next(iter(doc.select({"type": RangeSlider})))
     pager = checkbox("Realizations pager")
-    assert not pager.active and not slider.visible
+    counts = next(
+        d for d in doc.select({"type": Div}) if "total realizations" in d.text
+    )
+    assert not pager.active and not slider.visible and not counts.visible
     pager.active = [0]
-    assert slider.visible
+    assert slider.visible and counts.visible
     slider.value = (2, 3)
     assert text_contains("2 selected / 3 total realizations")
     pager.active = []
     assert not slider.visible and slider.value == (2, 3)
+    assert not counts.visible
+    assert text_contains("3 selected / 3 total realizations")
+    assert {p.title.text for p in plots() if p.title and p.title.text} == {
+        f"{name} (N=1)" for name in fates.labels
+    }
+    pager.active = [0]
+    assert slider.visible and counts.visible
     assert text_contains("2 selected / 3 total realizations")
     fates.active = [fates.labels.index("Parent → A + B")]
     assert text_contains("No realizations in this cohort")

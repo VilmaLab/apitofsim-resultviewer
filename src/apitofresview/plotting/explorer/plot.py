@@ -779,7 +779,11 @@ def build_document(db, doc, experiment: int, cluster: int):
     )
 
     def selected_cohort():
-        lo, hi = (int(v) for v in selector.value)
+        lo, hi = (
+            (int(v) for v in selector.value)
+            if enabled(show_pager)
+            else (1, max(total, 1))
+        )
         chosen_fates = {fate_names[i] for i in fate.active}
         return select_realizations(realizations, (lo, hi), chosen_fates)
 
@@ -872,6 +876,7 @@ def build_document(db, doc, experiment: int, cluster: int):
             counts.text = (
                 f"<b>{chosen.height} selected / {total} total realizations</b>"
             )
+            counts.visible = selector.visible = enabled(show_pager)
             incomplete = chosen.filter(
                 pl.col("fate").is_in(["Incomplete", "Ambiguous"])
             ).height
@@ -1201,12 +1206,9 @@ def build_document(db, doc, experiment: int, cluster: int):
         (show_events, "active"),
         (x_markers, "active"),
         (show_bars, "active"),
+        (show_pager, "active"),
         (selector, "value"),
     ]:
         widget.on_change(property_name, control_changed)
     show_cdf.on_change("active", cdf_changed)
-    show_pager.on_change(
-        "active",
-        lambda attr, old, new: setattr(selector, "visible", enabled(show_pager)),
-    )
     render()

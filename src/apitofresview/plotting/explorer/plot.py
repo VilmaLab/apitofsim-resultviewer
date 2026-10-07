@@ -209,7 +209,6 @@ def _highlight(plot, events, selected_id, event_id):
 
 def _event_plot(
     events,
-    title,
     shared_x,
     height,
     layout,
@@ -221,7 +220,8 @@ def _event_plot(
     on_selected,
 ):
     plot = figure(
-        title=title,
+        name="events",
+        title=None,
         height=height,
         min_height=360,
         min_width=210,
@@ -348,7 +348,6 @@ def _event_plot(
 
 def _cdf_plot(
     cdf,
-    title,
     n,
     shared_x,
     left_edge,
@@ -360,7 +359,8 @@ def _cdf_plot(
     regions,
 ):
     plot = figure(
-        title=f"Cumulative fragmentation · {title} (N={n})",
+        name="cdf",
+        title=None,
         height=175,
         min_height=150,
         x_range=shared_x,
@@ -396,10 +396,11 @@ def _cdf_plot(
     return plot
 
 
-def _bar_plot(bars, title, n, shared_x):
+def _bar_plot(bars, shared_x):
     top = bars["fraction"].max() or 0
     plot = figure(
-        title=f"Bar chart · {title} (N={n})",
+        name="bars",
+        title=None,
         height=155,
         min_height=130,
         x_range=shared_x,
@@ -558,7 +559,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     left = column(left_toggle, left_controls, width=205, spacing=4)
     right = column(right_toggle, right_controls, width=38, spacing=4)
     right_controls.visible = False
-    center_plots = column(sizing_mode="stretch_width", spacing=4)
+    center_plots = column(sizing_mode="stretch_width", spacing=0)
     center = column(
         counts,
         quality,
@@ -844,7 +845,6 @@ def build_document(db, doc, experiment: int, cluster: int):
                 right_edge + margin,
             )
             panels = []
-            axis_figures = []
             if enabled(schematic) and spatial and regional and not chosen.is_empty():
                 panels.append(
                     _schematic_plot(mapped_regions, shared_x, available_width)
@@ -873,7 +873,6 @@ def build_document(db, doc, experiment: int, cluster: int):
                     plots.append(
                         _event_plot(
                             visible,
-                            row_name if enabled(fate_facets) else "Realizations",
                             shared_x,
                             plot_height,
                             layout.value,
@@ -893,7 +892,6 @@ def build_document(db, doc, experiment: int, cluster: int):
                         plots.append(
                             _cdf_plot(
                                 cdf,
-                                row_name,
                                 members.height,
                                 shared_x,
                                 left_edge,
@@ -906,10 +904,12 @@ def build_document(db, doc, experiment: int, cluster: int):
                             )
                         )
                     if enabled(show_bars) and regional:
-                        plots.append(
-                            _bar_plot(bars, row_name, members.height, shared_x)
-                        )
+                        plots.append(_bar_plot(bars, shared_x))
+                if enabled(fate_facets) and plots:
+                    plots[0].title = f"{row_name} (N={members.height})"
                 for plot in plots:
+                    plot.min_border_top = 0
+                    plot.min_border_bottom = 0
                     if regional:
                         centers = [
                             (lo + hi) / 2
@@ -930,18 +930,17 @@ def build_document(db, doc, experiment: int, cluster: int):
                         plot.xgrid.grid_line_color = "#94a3b8"
                         plot.xgrid.grid_line_alpha = 0.3
                     prepare_toolbar(plot)
+                if plots:
+                    for upper in plots[:-1]:
+                        upper.xaxis.visible = False
+                    plots[-1].xaxis.axis_label = (
+                        "Elapsed time (s)"
+                        if not spatial
+                        else "Axial distance (mm)"
+                        if mode.value == "physical"
+                        else "Zone"
+                    )
                 panels.extend(plots)
-                axis_figures.extend(plots)
-            if axis_figures:
-                for upper in axis_figures[:-1]:
-                    upper.xaxis.visible = False
-                axis_figures[-1].xaxis.axis_label = (
-                    "Elapsed time (s)"
-                    if not spatial
-                    else "Axial distance (mm)"
-                    if mode.value == "physical"
-                    else "Zone"
-                )
             if chosen.is_empty():
                 panels.insert(
                     0,

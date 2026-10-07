@@ -411,8 +411,9 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     from bokeh.plotting import figure
 
     plots = list(doc.select({"type": type(figure())}))
-    event_plots = [p for p in plots if p.title and p.title.text == "Realizations"]
+    event_plots = [p for p in plots if p.name == "events"]
     assert len(event_plots) == 1
+    assert not any(p.title and p.title.text for p in plots)
     assert sum(bool(p.xaxis[0].visible) for p in plots) == 1
     assert {g.title for g in doc.select({"type": GroupBox})} >= {
         "Pathways",
@@ -507,7 +508,28 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     checkbox("Cumulative").active = [0]
     checkbox("Bar chart").active = [0]
     checkbox("Facet pathways").active = [0]
-    assert {p.title.text for p in plots() if p.title} >= set(fates.labels)
+    assert {p.title.text for p in plots() if p.title and p.title.text} == {
+        f"{name} (N=1)" for name in fates.labels
+    }
+    views = [p for p in plots() if p.name in {"events", "cdf", "bars"}]
+    assert len(views) == 3 * len(fates.labels)
+    assert len({p.x_range for p in views}) == 1
+    assert sum(bool(p.xaxis[0].visible) for p in views) == len(fates.labels)
+    assert all(p.min_border_top == p.min_border_bottom == 0 for p in views)
+    for name in ("events", "cdf", "bars"):
+        assert all(
+            bool(p.xaxis[0].visible) == (name == "bars")
+            for p in views
+            if p.name == name
+        )
+    for label in ("Realizations", "Cumulative"):
+        checkbox(label).active = []
+        assert {p.title.text for p in plots() if p.title and p.title.text} == {
+            f"{name} (N=1)" for name in fates.labels
+        }
+        assert sum(bool(p.xaxis[0].visible) for p in plots()) == len(fates.labels)
+    checkbox("Realizations").active = [0]
+    checkbox("Cumulative").active = [0]
     fates.active = [fates.labels.index("Parent → Parent")]
     assert text_contains("1 selected / 3 total realizations")
     assert not text_contains("Realization #1")
@@ -529,9 +551,8 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert checkbox("Bar chart").disabled and not schematic.visible
     assert checkbox("Cumulative").active == [0]
     assert not text_contains("unavailable in elapsed time")
-    assert any(
-        p.title.text.startswith("Cumulative fragmentation") for p in plots() if p.title
-    )
+    assert any(p.name == "cdf" for p in plots())
+    assert not any(p.title and p.title.text for p in plots())
     mode.value = "schematic"
     assert schematic.visible and schematic.labels == ["Schematic"]
     assert checkbox("Cumulative").active == []
@@ -545,7 +566,7 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
         layout.value = value
         assert checkbox("Envelope").visible == (value == "beeswarm")
         checkbox("Envelope").active = [0]
-        event_plot = next(p for p in plots() if p.title.text == "Realizations")
+        event_plot = next(p for p in plots() if p.name == "events")
         guide_hover = next(
             tool
             for tool in event_plot.tools

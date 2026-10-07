@@ -390,8 +390,8 @@ def test_bokeh_document_modes_and_views(monkeypatch):
                     assert p.xgrid[0].grid_line_alpha == 0.3
     for toggle in doc.select({"type": CheckboxGroup}):
         if toggle.labels and toggle.labels[0] in (
-            "CDF",
-            "Regional bars",
+            "Cumulative",
+            "Bar chart",
             "Realizations",
         ):
             toggle.active = [0]
@@ -504,8 +504,8 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert text_contains("Selected hidden event #1")
     checkbox("Collision").active = [0, 1, 2]
     assert not text_contains("Selected hidden event #1")
-    checkbox("CDF").active = [0]
-    checkbox("Regional bars").active = [0]
+    checkbox("Cumulative").active = [0]
+    checkbox("Bar chart").active = [0]
     checkbox("Facet pathways").active = [0]
     assert {p.title.text for p in plots() if p.title} >= set(fates.labels)
     fates.active = [fates.labels.index("Parent → Parent")]
@@ -523,22 +523,22 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     checkbox("Facet pathways").active = []
     mode = next(w for w in doc.select({"type": Select}) if w.title == "X coordinate")
     checkbox("Realizations").active = []
-    checkbox("CDF").active = []
+    checkbox("Cumulative").active = []
+    schematic = checkbox("Schematic")
     mode.value = "time"
-    assert (
-        checkbox("Regional bars").disabled and checkbox("Schematic / guides").disabled
+    assert checkbox("Bar chart").disabled and not schematic.visible
+    assert checkbox("Cumulative").active == [0]
+    assert not text_contains("unavailable in elapsed time")
+    assert any(
+        p.title.text.startswith("Cumulative fragmentation") for p in plots() if p.title
     )
-    assert checkbox("CDF").active == [0]
-    assert text_contains("Schematic and regional bars are unavailable in elapsed time.")
-    assert any(p.title.text.startswith("Fragmentation CDF") for p in plots() if p.title)
     mode.value = "schematic"
-    assert checkbox("CDF").active == []
-    assert not checkbox("Regional bars").disabled
+    assert schematic.visible and schematic.labels == ["Schematic"]
+    assert checkbox("Cumulative").active == []
+    assert not checkbox("Bar chart").disabled
     mode.value = "physical"
-    assert (
-        checkbox("Regional bars").disabled
-        and not checkbox("Schematic / guides").disabled
-    )
+    assert checkbox("Bar chart").disabled and checkbox("Guides").visible
+    assert not text_contains("Physical mode shows boundary guides")
     checkbox("Realizations").active = [0]
     layout = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")
     for value in ("strip", "beeswarm", "radial"):
@@ -546,6 +546,21 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
         assert checkbox("Envelope").visible == (value == "beeswarm")
         checkbox("Envelope").active = [0]
         event_plot = next(p for p in plots() if p.title.text == "Realizations")
+        guide_hover = next(
+            tool
+            for tool in event_plot.tools
+            if isinstance(tool, plot.HoverTool)
+            and tool.tooltips == [("Boundary", "@name")]
+        )
+        assert guide_hover.mode == "vline"
+        assert guide_hover.renderers[0].data_source.data["name"] == [
+            "Start",
+            *[name + " end" for name in data.REGIONS],
+        ]
+        assert not any(
+            label.text in guide_hover.renderers[0].data_source.data["name"]
+            for label in event_plot.select({"type": plot.Label})
+        )
         assert event_plot.yaxis[0].visible == (value == "radial")
         assert event_plot.yaxis[0].axis_label == (
             "Radial distance (mm)" if value == "radial" else None

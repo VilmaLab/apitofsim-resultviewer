@@ -1,69 +1,231 @@
-"""Numerical and storage contracts of the realization explorer."""
+"""Numerical, storage and interaction behavior of the realization Explorer."""
+
+from math import exp, sin
+from types import SimpleNamespace
 
 import duckdb
+import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
-from apitofresview.plotting.explorer import (
-    Cohort,
-    Coordinates,
-    Event,
-    Realization,
-    aggregate,
-    build_document,
-    classify,
-    load_cohort,
-    region_index,
-)
+from apitofresview.plotting.explorer import build_document
+from apitofresview.plotting.explorer import data, plot
 
 
-def event(id, kind, rid, t, z, pathway=None):
-    return Event(id, kind, rid, t, 3, 4, z, pathway)
+EVENT_SCHEMA = {
+    "id": pl.Int64,
+    "type": pl.String,
+    "realization_id": pl.Int64,
+    "t": pl.Float64,
+    "x": pl.Float64,
+    "y": pl.Float64,
+    "z": pl.Float64,
+    "pathway_id": pl.Int64,
+    "z_clamped": pl.Boolean,
+}
+BOUNDARIES = (0.0, 1.0, 2.0, 3.0, 4.0, 5.0)
 
 
-def realization(rid, *events):
-    r = Realization(rid, 10, list(events))
-    classify(r)
-    return r
+def event(id, kind, rid, t, z, pathway=None, clamped=False):
+    return (id, kind, rid, t, 3.0, 4.0, z, pathway, clamped)
+
+
+def cohort(ids, *events, boundaries=BOUNDARIES):
+    regions = data.make_regions(boundaries)
+    events = data.preprocess_events(
+        pl.DataFrame(events, schema=EVENT_SCHEMA, orient="row"), regions
+    )
+    realizations = pl.DataFrame(
+        {"id": ids, "experiment_result_id": [10] * len(ids)},
+        schema={"id": pl.Int64, "experiment_result_id": pl.Int64},
+    )
+    return (
+        data.classify(realizations, events),
+        events,
+        pl.DataFrame(schema={"pathway_id": pl.Int64, "pathway": pl.String}),
+        regions,
+    )
 
 
 def test_fates_coordinates_and_aggregate():
-    a = realization(
-        1, event(1, "collision", 1, 0.1, 0), event(2, "fragmentation", 1, 2, 2, 7)
+    realizations, events, _, regions = cohort(
+        [1, 2, 3, 4, 5],
+        event(1, "collision", 1, 0.1, 0),
+        event(2, "fragmentation", 1, 2, 2, 7),
+        event(3, "fragmentation", 2, 3, 2, 7),
+        event(4, "escape", 3, 4, 5),
+        event(5, "collision", 4, 1, 1),
+        event(6, "fragmentation", 5, 2, 2, 7),
+        event(7, "escape", 5, 3, 5),
     )
-    b = realization(2, event(3, "fragmentation", 2, 3, 2, 7))
-    c = realization(3, event(4, "escape", 3, 4, 5))
-    d = realization(4, event(5, "collision", 4, 1, 1))
-    e = realization(
-        5, event(6, "fragmentation", 5, 2, 2, 7), event(7, "escape", 5, 3, 5)
-    )
-    assert [r.fate for r in (a, b, c, d, e)] == [
+    assert realizations["fate"].to_list() == [
         "Pathway 7",
         "Pathway 7",
         "Escaped",
         "Incomplete",
         "Ambiguous",
     ]
-    physical = (0, 1, 2, 3, 4, 5)
-    assert [region_index(v, physical) for v in (0, 1, 2, 5, -1)] == [0, 1, 2, 4, None]
-    mapping = Coordinates(physical, "schematic")
-    assert mapping.boundaries == (0, 2, 3, 4, 7, 9)
-    assert mapping.position(a.terminal) == 3
-    assert mapping.position(c.terminal) == sum(mapping.slot) / 2
-    xs, ys, bars, escaped, unresolved = aggregate([a, b, c, d, e], mapping)
-    assert xs == [3, 3]
-    assert ys == [0, 0.4]
-    assert bars == [0, 0, 0.4, 0, 0, 0.2]
+    assert realizations["terminal_event_id"].to_list() == [2, 3, 4, None, None]
+    mapping = data.coordinate_regions(regions, "schematic")
+    assert mapping["left"].to_list() == [0, 2, 3, 4, 7]
+    assert mapping["right"].to_list() == [2, 3, 4, 7, 9]
+    positioned = data.position_events(events, mapping, "schematic")
+    assert positioned.filter(pl.col("id") == 2)["position"][0] == 3
+    assert (
+        positioned.filter(pl.col("id") == 4)["position"][0]
+        == sum(data.escape_slot(mapping)) / 2
+    )
+    cdf, bars, escaped, unresolved = data.aggregate(realizations, positioned, mapping)
+    assert cdf.to_dict(as_series=False) == {"position": [3, 3], "fraction": [0, 0.4]}
+    assert bars["fraction"].to_list() == [0, 0, 0.4, 0, 0, 0.2]
     assert (escaped, unresolved) == (1, 2)
-    assert aggregate([], mapping) == ([], [], [], 0, 0)
-    assert aggregate([c], mapping)[2][-1] == 1
-    assert aggregate([a], mapping)[1][-1] == 1
-    assert Coordinates(physical, "time").position(a.terminal) == 2
-    assert a.events[0].radial == 5
+    cdf, bars, escaped, unresolved = data.aggregate(
+        realizations.head(0), positioned.head(0), mapping
+    )
+    assert cdf.is_empty() and bars["fraction"].sum() == 0
+    assert (escaped, unresolved) == (0, 0)
+    for rid, column in [(1, "cdf"), (3, "bars")]:
+        members = realizations.filter(pl.col("id") == rid)
+        cdf, bars, _, _ = data.aggregate(
+            members, data.events_for(positioned, members), mapping
+        )
+        assert (cdf if column == "cdf" else bars)["fraction"][-1] == 1
+    assert (
+        data.position_events(events, data.coordinate_regions(regions, "time"), "time")[
+            "position"
+        ].to_list()
+        == events["t"].to_list()
+    )
+    assert events["radial"].to_list() == [5] * events.height
+
+
+@pytest.mark.parametrize(
+    "history,fate,terminal",
+    [
+        ([], "Incomplete", None),
+        ([event(1, "collision", 1, 1, 1)], "Incomplete", None),
+        ([event(1, "fragmentation", 1, 1, 1)], "Incomplete", None),
+        ([event(1, "fragmentation", 1, 1, 6, 7)], "Incomplete", None),
+        ([event(1, "escape", 1, 1, 6)], "Escaped", 1),
+        (
+            [event(1, "escape", 1, 1, 5), event(2, "collision", 1, 2, 4)],
+            "Incomplete",
+            None,
+        ),
+        (
+            [
+                event(1, "fragmentation", 1, 1, 2, 7),
+                event(2, "fragmentation", 1, 1, 2, 7),
+            ],
+            "Ambiguous",
+            None,
+        ),
+        (
+            [event(1, "fragmentation", 1, 1, 2, 7), event(2, "escape", 1, 2, 5)],
+            "Ambiguous",
+            None,
+        ),
+        (
+            [event(2, "fragmentation", 1, 1, 5, 7), event(1, "collision", 1, 1, 5)],
+            "Pathway 7",
+            2,
+        ),
+        (
+            [event(1, "fragmentation", 1, 1, 2, 7), event(2, "collision", 1, 1, 2)],
+            "Incomplete",
+            None,
+        ),
+    ],
+)
+def test_terminal_histories(history, fate, terminal):
+    realizations, events, _, _ = cohort([1], *history)
+    assert realizations["fate"][0] == fate
+    assert realizations["terminal_event_id"][0] == terminal
+    assert events["id"].to_list() == sorted(e[0] for e in history)
+
+
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ("physical", [0, 1, 2, 5, 6, 5]),
+        ("equal", [0, 1, 2, 5, 6, 5.325]),
+        ("schematic", [0, 2, 3, 9, 11, 9.65]),
+        ("time", [0, 1, 2, 3, 4, 5]),
+    ],
+)
+def test_coordinate_modes_and_boundaries(mode, expected):
+    _, events, _, regions = cohort(
+        [1],
+        *[
+            event(i + 1, "escape" if i == 5 else "collision", 1, i, z)
+            for i, z in enumerate([0, 1, 2, 5, 6, 5])
+        ],
+    )
+    assert events["region"].to_list() == [0, 1, 2, 4, None, 4]
+    positioned = data.position_events(
+        events, data.coordinate_regions(regions, mode), mode
+    )
+    assert positioned["position"].to_list() == pytest.approx(expected)
+
+
+def test_zero_width_regions():
+    _, events, _, regions = cohort(
+        [1],
+        event(1, "fragmentation", 1, 1, 0, 7),
+        boundaries=(0.0, 0.0, 1.0, 2.0, 3.0, 4.0),
+    )
+    assert events["region"][0] == 1
+    positioned = data.position_events(
+        events, data.coordinate_regions(regions, "schematic"), "schematic"
+    )
+    assert positioned["position"][0] == 0
+
+
+def test_layouts_and_violin():
+    _, events, _, regions = cohort(
+        [1],
+        event(3, "collision", 1, 0, 0),
+        event(1, "collision", 1, 1, 0),
+        event(2, "collision", 1, 2, 0),
+        event(4, "collision", 1, 3, 2),
+        event(5, "escape", 1, 4, 5),
+    )
+    events = data.position_events(
+        events, data.coordinate_regions(regions, "physical"), "physical"
+    )
+    assert data.layout_events(events, "radial")["plot_y"].to_list() == [5] * 5
+    assert data.layout_events(events, "strip")["plot_y"].to_list() == pytest.approx(
+        [0.25 * sin(i * 12.9898) for i in events["id"]]
+    )
+    assert data.layout_events(events, "beeswarm")["plot_y"].to_list() == pytest.approx(
+        [-0.18, 0, 0.18, 0, 0]
+    )
+    assert_frame_equal(
+        data.layout_events(events, "beeswarm").select("id", "plot_y").sort("id"),
+        data.layout_events(events.reverse(), "beeswarm")
+        .select("id", "plot_y")
+        .sort("id"),
+    )
+    envelope = data.violin(events)
+    assert envelope.height == 160
+    grid = [2 * i / 79 for i in range(80)]
+    density = [
+        sum(exp(-0.5 * ((x - v) / (2 / 18)) ** 2) for v in [0, 0, 0, 2]) for x in grid
+    ]
+    upper = [0.4 * d / max(density) for d in density]
+    assert envelope["position"].to_list() == pytest.approx(grid + grid[::-1])
+    assert envelope["plot_y"].to_list() == pytest.approx(
+        upper + [-v for v in upper[::-1]]
+    )
+    for subset in (events.head(0), events.head(1), events.head(3)):
+        assert data.violin(subset).is_empty()
+        assert data.layout_events(subset, "beeswarm").height == subset.height
 
 
 @pytest.mark.parametrize("negative_z", [False, True])
-def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z):
-    conn = duckdb.connect(":memory:")
+def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp_path):
+    database_path = str(tmp_path / "explorer.duckdb")
+    conn = duckdb.connect(database_path)
     conn.execute(
         "create table multi_pathway_experiment_result(id int, experiment_run_id int, cluster_id int)"
     )
@@ -99,46 +261,74 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z):
         conn.execute(
             "update fragmentation_event set postime = struct_update(postime, z := -0.000002)"
         )
-    import apitofsim.plotting.events as geometry
+    geometry = data
 
     monkeypatch.setattr(geometry, "get_geometry", lambda *args: None)
     monkeypatch.setattr(
         geometry, "lengths_to_cumulative_lengths", lambda *args: (0, 1, 2, 3, 4, 5)
     )
-    db = type("DB", (), {"db": conn})()
-    cohort = load_cohort(db, 1, 1)
-    assert [r.id for r in cohort.realizations] == [100, 102]
-    assert [r.fate for r in cohort.realizations] == ["Pathway 7", "Escaped"]
-    assert [e.id for e in cohort.realizations[0].events] == [501, 502]
-    assert cohort.realizations[0].events[1].pathway_id == 7
-    assert cohort.pathways == {7: "A + B"}
-    assert sum(e.z_clamped for r in cohort.realizations for e in r.events) == (
-        2 if negative_z else 0
-    )
-    if negative_z:
-        assert [e.z for e in cohort.realizations[0].events] == [0, 0]
-        coordinates = Coordinates(cohort.boundaries, "schematic")
-        assert aggregate(cohort.realizations, coordinates)[2][0] == 0.5
-        assert (
-            conn.execute("select postime.z from fragmentation_event").fetchone()[0] < 0
+    snapshots = {
+        table: conn.execute(f"select * from {table}").fetchall()
+        for table in (
+            "realization",
+            "collision_event",
+            "fragmentation_event",
+            "escape_event",
         )
+    }
+    conn.close()
+    conn = duckdb.connect(database_path, read_only=True)
+    db = SimpleNamespace(db=conn)
+    realizations, events, pathways, regions = data.load_data(db, 1, 1)
+    assert realizations["id"].to_list() == [100, 102]
+    assert realizations["fate"].to_list() == ["Pathway 7", "Escaped"]
+    assert events["id"].to_list() == [501, 502, 503]
+    assert events.filter(pl.col("id") == 502)["pathway_id"][0] == 7
+    assert pathways.to_dict(as_series=False) == {
+        "pathway_id": [7],
+        "pathway": ["A + B"],
+    }
+    assert events["z_clamped"].sum() == (2 if negative_z else 0)
+    if negative_z:
+        assert events.head(2)["z"].to_list() == [0, 0]
+        regions = data.coordinate_regions(regions, "schematic")
+        events = data.position_events(events, regions, "schematic")
+        assert data.aggregate(realizations, events, regions)[1]["fraction"][0] == 0.5
+    for table, snapshot in snapshots.items():
+        assert conn.execute(f"select * from {table}").fetchall() == snapshot
+    conn.close()
+    conn = duckdb.connect(database_path)
+    # UNION of result IDs prevents duplicate histories across result tables.
+    conn.execute("insert into single_pathway_experiment_result values (10,1,7)")
+    conn.execute("insert into multi_pathway_experiment_result values (13,1,9)")
+    conn.execute("insert into realization values (103,13)")
+    conn.execute(
+        "insert into collision_event values (504,101, {'x':1,'y':2,'z':0,'t':1}), (505,103, {'x':1,'y':2,'z':0,'t':1}), (506,100, {'x':1,'y':2,'z':0,'t':0.5})"
+    )
+    conn.close()
+    conn = duckdb.connect(database_path, read_only=True)
+    db = SimpleNamespace(db=conn)
+    realizations, events, _, _ = data.load_data(db, 1, 1)
+    assert realizations["id"].to_list() == [100, 102]
+    assert events["id"].to_list() == [501, 506, 502, 503]
+    empty = data.load_data(db, 99, 1)
+    assert empty[0].is_empty() and empty[1].is_empty()
+    conn.close()
 
 
 def test_bokeh_document_modes_and_views(monkeypatch):
     from bokeh.document import Document
     from bokeh.models import Select, CheckboxGroup, GroupBox, CustomAction
-    import apitofresview.plotting.explorer as explorer
 
-    member = realization(1, event(1, "collision", 1, 0, 0), event(2, "escape", 1, 1, 5))
-    member.events[0] = Event(1, "collision", 1, 0, 3, 4, 0, z_clamped=True)
-    monkeypatch.setattr(
-        explorer, "load_cohort", lambda *args: Cohort([member], (0, 1, 2, 3, 4, 5), {})
+    frames = cohort(
+        [1], event(1, "collision", 1, 0, 0, clamped=True), event(2, "escape", 1, 1, 5)
     )
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
     doc = Document()
     build_document(None, doc, 1, 1)
     assert any(
         d.text == "1 events with negative z position have been clamped to 0"
-        for d in doc.select({"type": explorer.Div})
+        for d in doc.select({"type": plot.Div})
     )
     x_mode = next(s for s in doc.select({"type": Select}) if s.title == "X coordinate")
     for value in ("equal", "physical", "time", "schematic"):
@@ -152,17 +342,13 @@ def test_bokeh_document_modes_and_views(monkeypatch):
             toggle.active = [0]
     frame = doc.roots[0]
     sidebars = frame.children[0].children
-    fullscreen = next(
-        d for d in doc.select({"type": explorer.Div}) if d.text == "normal"
-    )
+    fullscreen = next(d for d in doc.select({"type": plot.Div}) if d.text == "normal")
     fullscreen.text = "full"
     assert not sidebars[0].children[1].visible and not sidebars[2].children[1].visible
     assert "46px" in sidebars[0].children[1].styles["max-height"]
     fullscreen.text = "normal"
     assert sidebars[0].children[1].visible and not sidebars[2].children[1].visible
-    viewport = next(
-        d for d in doc.select({"type": explorer.Div}) if d.text == "1440,900"
-    )
+    viewport = next(d for d in doc.select({"type": plot.Div}) if d.text == "1440,900")
     viewport.text = "533,900"
     sidebars[2].children[0].active = True
     assert not sidebars[0].children[1].visible
@@ -174,7 +360,7 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert len(event_plots) == 1
     assert sum(bool(p.xaxis[0].visible) for p in plots) == 1
     assert {g.title for g in doc.select({"type": GroupBox})} >= {
-        "Fates",
+        "Pathways",
         "Events",
         "X axis",
         "Layout",
@@ -185,3 +371,152 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert any(a.icon == "fullscreen" for a in doc.select({"type": CustomAction}))
     assert len(doc.roots) == 1
     assert doc.to_json() is not None
+
+
+def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
+    from bokeh.document import Document
+    from bokeh.models import ColumnDataSource, Div, GroupBox, RangeSlider, Select
+
+    frames = cohort(
+        [1, 2, 3],
+        event(1, "collision", 1, 0, 0),
+        event(2, "fragmentation", 1, 1, 2, 7),
+        event(3, "escape", 2, 2, 5),
+        event(4, "collision", 3, 1, 1),
+    )
+    frames = (
+        *frames[:2],
+        pl.DataFrame({"pathway_id": [7], "pathway": ["A < B + C"]}),
+        frames[3],
+    )
+    loads = []
+
+    def load(*args):
+        loads.append(args)
+        return frames
+
+    monkeypatch.setattr(plot, "load_data", load)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+
+    def checkbox(label):
+        return next(
+            w
+            for w in doc.select({"type": plot.CheckboxGroup})
+            if w.labels and w.labels[0] == label
+        )
+
+    def text_contains(text):
+        return any(text in d.text for d in doc.select({"type": Div}))
+
+    def plots():
+        return list(doc.select({"type": plot.figure}))
+
+    fates = next(
+        g.child.children[0]
+        for g in doc.select({"type": GroupBox})
+        if g.title == "Pathways"
+    )
+    source = next(
+        s for s in doc.select({"type": ColumnDataSource}) if s.data.get("id") == [2]
+    )
+    source.selected.indices = [0]
+    assert text_contains("Realization #1")
+    assert text_contains("A &lt; B + C")
+    details = next(d for d in doc.select({"type": Div}) if "Realization #1" in d.text)
+    assert "background:#fde68a" in details.text
+    assert any(
+        r.glyph.line_color == "#f59e0b"
+        for p in plots()
+        for r in p.renderers
+        if hasattr(r, "glyph")
+    )
+    bridge = doc.roots[0].children[1]
+    bridge.text = "1"
+    assert (
+        'id="event-1" style="display:block;width:100%;text-align:left;padding:8px;background:#fde68a'
+        in details.text
+    )
+    bridge.text = "999"
+    assert (
+        'id="event-1" style="display:block;width:100%;text-align:left;padding:8px;background:#fde68a'
+        in details.text
+    )
+    checkbox("Collision").active = [1, 2]
+    assert text_contains("Selected hidden event #1")
+    checkbox("Collision").active = [0, 1, 2]
+    assert not text_contains("Selected hidden event #1")
+    checkbox("CDF").active = [0]
+    checkbox("Regional bars").active = [0]
+    checkbox("Facet fates").active = [0]
+    assert {p.title.text for p in plots() if p.title} >= set(fates.labels)
+    fates.active = [fates.labels.index("Escaped")]
+    assert text_contains("1 selected / 3 total realizations")
+    assert not text_contains("Realization #1")
+    assert text_contains("Click an event")
+    fates.active = list(range(len(fates.labels)))
+    slider = next(iter(doc.select({"type": RangeSlider})))
+    slider.value = (2, 3)
+    assert text_contains("2 selected / 3 total realizations")
+    fates.active = [fates.labels.index("Pathway 7")]
+    assert text_contains("No realizations in this cohort")
+    slider.value = (1, 3)
+    fates.active = list(range(len(fates.labels)))
+    checkbox("Facet fates").active = []
+    mode = next(w for w in doc.select({"type": Select}) if w.title == "X coordinate")
+    checkbox("Realizations").active = []
+    checkbox("CDF").active = []
+    mode.value = "time"
+    assert (
+        checkbox("Regional bars").disabled and checkbox("Schematic / guides").disabled
+    )
+    assert checkbox("CDF").active == [0]
+    assert text_contains("Schematic and regional bars are unavailable in elapsed time.")
+    assert any(p.title.text.startswith("Fragmentation CDF") for p in plots() if p.title)
+    mode.value = "schematic"
+    assert checkbox("CDF").active == []
+    assert not checkbox("Regional bars").disabled
+    mode.value = "physical"
+    assert (
+        checkbox("Regional bars").disabled
+        and not checkbox("Schematic / guides").disabled
+    )
+    checkbox("Realizations").active = [0]
+    layout = next(w for w in doc.select({"type": Select}) if w.title == "Event layout")
+    for value in ("strip", "beeswarm", "radial"):
+        layout.value = value
+        assert checkbox("Violin envelope").disabled == (value == "radial")
+        checkbox("Violin envelope").active = [0]
+    bridge.text = "clear"
+    assert text_contains("Click an event")
+    assert len(loads) == 1
+    assert doc.to_json() is not None
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_empty_and_eventless_document(monkeypatch, empty):
+    from bokeh.document import Document
+    from bokeh.models import RangeSlider
+
+    monkeypatch.setattr(plot, "load_data", lambda *args: cohort([] if empty else [1]))
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    slider = next(iter(doc.select({"type": RangeSlider})))
+    assert slider.disabled == empty
+    assert any(
+        ("No realizations" if empty else "incomplete or ambiguous histories") in d.text
+        for d in doc.select({"type": plot.Div})
+    )
+    assert doc.to_json() is not None
+
+
+def test_unavailable_document(monkeypatch):
+    from bokeh.document import Document
+
+    def unavailable(*args):
+        raise RuntimeError("Missing <events>")
+
+    monkeypatch.setattr(plot, "load_data", unavailable)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    assert doc.roots[0].text == "Explorer data unavailable: Missing &lt;events&gt;"

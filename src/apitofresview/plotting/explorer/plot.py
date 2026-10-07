@@ -43,6 +43,7 @@ from .data import (
 
 
 COLORS = {"collision": "#2563eb", "fragmentation": "#e11d48", "escape": "#059669"}
+PATHWAY_COLORS = ("#7c3aed", "#ea580c", "#ca8a04", "#a16207", "#a21caf", "#475569")
 
 
 def _source(frame):
@@ -342,18 +343,7 @@ def _event_plot(
     return plot
 
 
-def _cdf_plot(
-    cdf,
-    n,
-    shared_x,
-    left_edge,
-    right_edge,
-    escaped,
-    unresolved,
-    spatial,
-    regional,
-    regions,
-):
+def _cdf_plot(members, events, shared_x, left_edge, right_edge, fate_colors):
     plot = figure(
         name="cdf",
         title=None,
@@ -366,29 +356,46 @@ def _cdf_plot(
         tools="pan,wheel_zoom,reset,save",
     )
     plot.yaxis.axis_label = "Fraction"
-    if n:
-        plot.step(
-            [left_edge, *cdf["position"], right_edge],
-            [0, *cdf["fraction"], cdf["fraction"][-1] if not cdf.is_empty() else 0],
-            mode="after",
-            line_width=2,
-            color="#be123c",
+    # All pathways share a step grid so their areas meet even at tied events.
+    terminals = members.join(
+        events, left_on="terminal_event_id", right_on="id", how="inner"
+    )
+    counts = terminals.group_by("position", "fate").len().sort("position", "fate")
+    positions = counts["position"].unique().sort().to_list()
+    x = [left_edge, *[p for p in positions for _ in range(2)], right_edge]
+    bottom = [0.0] * len(x)
+    for name, color in fate_colors.items():
+        pathway_counts = dict(
+            counts.filter(pl.col("fate") == name).select("position", "len").iter_rows()
         )
-        if spatial and escaped:
-            bracket_x = sum(escape_slot(regions)) / 2 if regional else right_edge
-            start = (n - escaped - unresolved) / n
-            end = 1 if not unresolved else start + escaped / n
-            plot.line(
-                [bracket_x, bracket_x], [start, end], color="#059669", line_width=3
+        if not pathway_counts:
+            continue
+        cumulative = 0
+        fractions = [0.0]
+        for position in positions:
+            fractions.append(cumulative / members.height)
+            cumulative += pathway_counts.get(position, 0)
+            fractions.append(cumulative / members.height)
+        fractions.append(cumulative / members.height)
+        top = [lo + value for lo, value in zip(bottom, fractions, strict=True)]
+        area = plot.varea(
+            x="position",
+            y1="bottom",
+            y2="top",
+            source=ColumnDataSource(
+                dict(position=x, bottom=bottom, top=top, fraction=fractions)
+            ),
+            fill_color=color,
+            fill_alpha=0.85,
+        )
+        plot.add_tools(
+            HoverTool(
+                renderers=[area],
+                mode="vline",
+                tooltips=[("Pathway", name), ("Fraction", "@fraction{0.0%}")],
             )
-            plot.add_layout(
-                Label(
-                    x=bracket_x,
-                    y=(start + end) / 2,
-                    text=f"Escaped {escaped / n:.1%}",
-                    text_color="#047857",
-                )
-            )
+        )
+        bottom = top
     return plot
 
 
@@ -440,6 +447,15 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     fate_names = realizations["fate"].unique().sort().to_list()
     fate_counts = dict(realizations.group_by("fate").len().iter_rows())
+    fate_colors = {
+        name: PATHWAY_COLORS[i % len(PATHWAY_COLORS)]
+        for i, name in enumerate(fate_names)
+    }
+    pathway_legend = "\n".join(
+        f'label:nth-child({i + 1})::before {{ content: ""; background: {fate_colors[name]}; '
+        "width: 12px; height: 12px; flex-shrink: 0; margin-right: 4px; }"
+        for i, name in enumerate(fate_names)
+    )
     count_styles = "\n".join(
         f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
         for i, name in enumerate(fate_names)
@@ -463,11 +479,12 @@ def build_document(db, doc, experiment: int, cluster: int):
             InlineStyleSheet(
                 css="""
                     .bk-input-group { white-space: normal; }
-                    label { display: flex; align-items: baseline; width: 100%; }
+                    label { display: flex; align-items: center; width: 100%; }
                     input { flex-shrink: 0; }
                     span { min-width: 0; overflow-wrap: anywhere; }
                 """
                 + count_styles
+                + pathway_legend
             )
         ],
     )
@@ -912,25 +929,37 @@ def build_document(db, doc, experiment: int, cluster: int):
                         )
                     )
                 if enabled(show_cdf) or (enabled(show_bars) and regional):
-                    cdf, bars, escaped, unresolved = aggregate(
-                        members, member_events, mapped_regions
-                    )
                     if enabled(show_cdf):
+                        # Cumulative escapes occur at the machine endpoint, not
+                        # in the padded escape slot used by the event view.
+                        cumulative_events = (
+                            member_events.with_columns(
+                                pl.when(pl.col("type") == "escape")
+                                .then(pl.lit(mapped_regions["right"][-1]))
+                                .otherwise(pl.col("position"))
+                                .alias("position")
+                            )
+                            if spatial
+                            else member_events
+                        )
                         plots.append(
                             _cdf_plot(
-                                cdf,
-                                members.height,
+                                members,
+                                cumulative_events,
                                 shared_x,
                                 left_edge,
                                 right_edge,
-                                escaped,
-                                unresolved,
-                                spatial,
-                                regional,
-                                mapped_regions,
+                                {
+                                    name: fate_colors[name]
+                                    for name in fate_names
+                                    if name in members["fate"]
+                                },
                             )
                         )
                     if enabled(show_bars) and regional:
+                        _, bars, _, _ = aggregate(
+                            members, member_events, mapped_regions
+                        )
                         plots.append(_bar_plot(bars, shared_x))
                 if enabled(fate_facets) and plots:
                     plots[0].title = f"{row_name} (N={members.height})"

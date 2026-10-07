@@ -17,6 +17,7 @@ dependencies = [
     # which cannot be frozen reliably, so we open the system browser instead.
     "pywebview>=6.2.1; sys_platform != 'linux'",
     "workingtitle",
+    "polars>=2.0.0",
 ]
 
 [project.scripts]

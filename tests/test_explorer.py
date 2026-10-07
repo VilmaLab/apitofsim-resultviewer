@@ -438,7 +438,8 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert controls[1].child.children[1].labels == ["Guides"]
     assert controls[2].child.children[0].labels == ["Schematic"]
     assert controls[2].child.children[1].title == "Views"
-    assert [g.title for g in controls[3].child.children] == ["Events", "Y-axis"]
+    assert controls[3].child.children[0].labels == ["Group fragmentations"]
+    assert [g.title for g in controls[3].child.children[1:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
 
@@ -515,9 +516,9 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
         'id="event-1" style="display:block;width:100%;text-align:left;padding:8px;background:#fde68a'
         in details.text
     )
-    checkbox("Collision").active = [1, 2]
+    checkbox("Collision").active = []
     assert text_contains("Selected hidden event #1")
-    checkbox("Collision").active = [0, 1, 2]
+    checkbox("Collision").active = [0]
     assert not text_contains("Selected hidden event #1")
     checkbox("Cumulative").active = [0]
     checkbox("Bar chart").active = [0]
@@ -589,6 +590,7 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert not text_contains("Physical mode shows boundary guides")
     checkbox("Realizations").active = [0]
     layout = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")
+    checkbox("Collision").active = [0]
     for value in ("strip", "beeswarm", "radial"):
         layout.value = value
         assert checkbox("Envelope").visible == (value == "beeswarm")
@@ -701,11 +703,9 @@ def test_cumulative_pathway_areas(monkeypatch, mode):
         for g in doc.select({"type": GroupBox})
         if g.title == "Pathways"
     )
-    colors = {
-        name: plot.PATHWAY_COLORS[i % len(plot.PATHWAY_COLORS)]
-        for i, name in enumerate(fates.labels)
-    }
-    assert set(colors.values()).isdisjoint(plot.COLORS.values())
+    colors = plot._pathway_colors(fates.labels, "Parent → Parent")
+    assert colors["Parent → Parent"] == plot.COLORS["escape"]
+    assert plot.COLORS["fragmentation"] == plot.Category10[10][3]
     for color in colors.values():
         assert f"background: {color}" in fates.stylesheets[0].css
 
@@ -772,3 +772,156 @@ def test_cumulative_pathway_areas(monkeypatch, mode):
     fates.active = []
     assert not any(p.name == "cdf" for p in doc.select({"type": plot.figure}))
     assert doc.to_json() is not None
+
+
+def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
+    from bokeh.document import Document
+    from bokeh.models import CheckboxGroup, GroupBox, Select
+
+    members, events, _, regions = cohort(
+        [1, 2, 3],
+        event(1, "collision", 1, 0, 0),
+        event(2, "fragmentation", 1, 1, 2, 7),
+        event(3, "collision", 2, 0, 0),
+        event(4, "fragmentation", 2, 1, 3, 8),
+        event(5, "collision", 3, 0, 0),
+        event(6, "escape", 3, 2, 5),
+    )
+    pathways = pl.DataFrame(
+        {"pathway_id": [7, 8], "pathway": ["Parent → A + B", "Parent → C + D"]}
+    )
+    members = data.classify(
+        members.select("id", "experiment_result_id"), events, pathways, "Parent"
+    )
+    monkeypatch.setattr(
+        plot, "load_data", lambda *args: (members, events, pathways, regions)
+    )
+    doc = Document()
+    build_document(None, doc, 1, 1)
+
+    def checkbox(label):
+        return next(
+            w for w in doc.select({"type": CheckboxGroup}) if w.labels == [label]
+        )
+
+    pathway_group = next(
+        g for g in doc.select({"type": GroupBox}) if g.title == "Pathways"
+    )
+    fates = pathway_group.child.children[0]
+    options = next(
+        g for g in doc.select({"type": GroupBox}) if g.title == "Events"
+    ).child
+    grouping = checkbox("Group fragmentations")
+    facets = checkbox("Facet pathways")
+    colors = plot._pathway_colors(fates.labels, "Parent → Parent")
+
+    def event_renderers():
+        chart = next(p for p in doc.select({"type": plot.figure}) if p.name == "events")
+        return {
+            tuple(r.data_source.data["id"]): r
+            for r in chart.renderers
+            if "id" in r.data_source.data
+        }
+
+    assert grouping.active == [0] and not grouping.disabled
+    assert [w.labels[0] for w in options.children] == [
+        "Collision",
+        "Fragmentation",
+        "Escape",
+    ]
+    assert event_renderers()[(2, 4)].glyph.fill_color == plot.Category10[10][3]
+    assert event_renderers()[(6,)].glyph.fill_color == plot.COLORS["escape"]
+    checkbox("Cumulative").active = [0]
+    cumulative = next(p for p in doc.select({"type": plot.figure}) if p.name == "cdf")
+    assert [r.glyph.fill_color for r in cumulative.renderers] == [
+        colors[name] for name in fates.labels
+    ]
+
+    grouping.active = []
+    assert [w.labels[0] for w in options.children] == [
+        "Collision",
+        "Parent → A + B",
+        "Parent → C + D",
+        "Parent → Parent",
+    ]
+    for ids, name in [
+        ((2,), "Parent → A + B"),
+        ((4,), "Parent → C + D"),
+        ((6,), "Parent → Parent"),
+    ]:
+        assert event_renderers()[ids].glyph.fill_color == colors[name]
+        assert f"color: {colors[name]}" in checkbox(name).stylesheets[0].css
+    checkbox("Parent → A + B").active = []
+    assert (2,) not in event_renderers() and (4,) in event_renderers()
+    cumulative = next(p for p in doc.select({"type": plot.figure}) if p.name == "cdf")
+    assert len(cumulative.renderers) == 3
+
+    fates.active = [fates.labels.index("Parent → C + D")]
+    assert checkbox("Parent → A + B").disabled and not checkbox("Parent → A + B").active
+    assert checkbox("Parent → Parent").disabled and checkbox("Parent → Parent").active
+    assert not checkbox("Parent → C + D").disabled and checkbox("Parent → C + D").active
+    assert set(event_renderers()) == {(3,), (4,)}
+    fates.active = list(range(len(fates.labels)))
+    assert not checkbox("Parent → A + B").disabled
+    assert not checkbox("Parent → A + B").active
+    assert (
+        checkbox("Parent → Parent").active and not checkbox("Parent → Parent").disabled
+    )
+    assert (2,) not in event_renderers() and (6,) in event_renderers()
+    fates.active = [fates.labels.index("Parent → C + D")]
+    facets.active = [0]
+    assert grouping.active == [0] and grouping.disabled
+    assert [w.labels[0] for w in options.children] == [
+        "Collision",
+        "Fragmentation",
+        "Escape",
+    ]
+    assert checkbox("Escape").disabled and checkbox("Escape").active
+    assert checkbox("Fragmentation").active
+    facets.active = []
+    assert grouping.active == [0] and not grouping.disabled
+    fates.active = [fates.labels.index("Parent → Parent")]
+    assert checkbox("Fragmentation").disabled and checkbox("Fragmentation").active
+    assert not checkbox("Escape").disabled and checkbox("Escape").active
+    checkbox("Escape").active = [0]
+    assert (6,) in event_renderers()
+    fates.active = [fates.labels.index("Parent → C + D")]
+    assert checkbox("Escape").disabled and checkbox("Escape").active
+
+    # Pathway colours also survive a marker-layout change and regrouping.
+    fates.active = list(range(len(fates.labels)))
+    checkbox("Fragmentation").active = [0]
+    grouping.active = []
+    mode = next(s for s in doc.select({"type": Select}) if s.title == "Y coordinate")
+    mode.value = "beeswarm"
+    assert event_renderers()[(2,)].glyph.marker == "circle"
+    assert event_renderers()[(2,)].glyph.fill_color == colors["Parent → A + B"]
+    assert 'content: "●"' in checkbox("Parent → A + B").stylesheets[0].css
+    fates.active = []
+    assert all(w.disabled and w.active for w in options.children)
+    assert doc.to_json() is not None
+
+
+def test_categorical_pathway_palette():
+    names = [f"Pathway {i:02}" for i in range(16)]
+    colors = plot._pathway_colors(
+        ["Incomplete", *reversed(names), "Survival"], "Survival"
+    )
+    assert colors[names[0]] == plot.COLORS["fragmentation"] == "#d62728"
+    assert colors["Survival"] == plot.COLORS["escape"] == "#2ca02c"
+    assert plot.COLORS["collision"] == "#1f77b4"
+    assert [colors[name] for name in names[:8]] == [
+        "#d62728",
+        "#ff7f0e",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
+    pathway_colors = {colors[name] for name in names}
+    assert len(pathway_colors) == len(names)
+    assert pathway_colors <= set(plot.Category20[20])
+    assert pathway_colors.isdisjoint({"#1f77b4", "#aec7e8", "#2ca02c", "#98df8a"})
+    assert plot._pathway_colors(names[:2], "Survival")[names[1]] == colors[names[1]]

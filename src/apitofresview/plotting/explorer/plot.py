@@ -24,6 +24,7 @@ from bokeh.models import (
     Span,
     Toggle,
 )
+from bokeh.palettes import Category10, Category20
 from bokeh.plotting import figure
 
 from .data import (
@@ -42,8 +43,32 @@ from .data import (
 )
 
 
-COLORS = {"collision": "#2563eb", "fragmentation": "#e11d48", "escape": "#059669"}
-PATHWAY_COLORS = ("#7c3aed", "#ea580c", "#ca8a04", "#a16207", "#a21caf", "#475569")
+COLORS = {
+    "collision": Category10[10][0],
+    "fragmentation": Category10[10][3],
+    "escape": Category10[10][2],
+}
+PATHWAY_COLORS = (
+    COLORS["fragmentation"],
+    *(color for color in Category10[10] if color not in COLORS.values()),
+    # Extend with lighter categorical colours, reserving both blues and greens.
+    *(color for i, color in enumerate(Category20[20][1::2]) if i not in (0, 2)),
+)
+
+
+def _pathway_colors(names, escaped):
+    unresolved = {"Ambiguous", "Incomplete"}
+    fragmented = sorted(
+        name for name in names if name != escaped and name not in unresolved
+    )
+    return {
+        **{
+            name: PATHWAY_COLORS[i % len(PATHWAY_COLORS)]
+            for i, name in enumerate(fragmented)
+        },
+        **{name: Category10[10][7] for name in names if name in unresolved},
+        escaped: COLORS["escape"],
+    }
 
 
 def _source(frame):
@@ -219,6 +244,7 @@ def _event_plot(
     selected_id,
     event_id,
     on_selected,
+    event_colors,
 ):
     plot = figure(
         name="events",
@@ -253,8 +279,8 @@ def _event_plot(
                 line_alpha=0.25,
                 color="#64748b",
             )
-    for kind in EVENT_TYPES:
-        subset = events.filter(pl.col("type") == kind)
+    for kind, color in event_colors.items():
+        subset = events.filter(pl.col("event_group") == kind)
         if subset.is_empty():
             continue
         source = _source(
@@ -273,7 +299,7 @@ def _event_plot(
             source=source,
             marker="circle" if layout == "beeswarm" else "x",
             size=10,
-            color=COLORS[kind],
+            color=color,
             line_width=0 if layout == "beeswarm" else 1.5,
         )
         swarm_glyphs.append(glyph)
@@ -421,7 +447,9 @@ def _bar_plot(bars, shared_x):
             right=hi,
             bottom=0,
             top=value,
-            fill_color="#059669" if name == "Escaped" else "#6366f1",
+            fill_color=COLORS["escape"]
+            if name == "Escaped"
+            else COLORS["fragmentation"],
             fill_alpha=0.65,
         )
         plot.add_layout(
@@ -447,10 +475,31 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     fate_names = realizations["fate"].unique().sort().to_list()
     fate_counts = dict(realizations.group_by("fate").len().iter_rows())
-    fate_colors = {
-        name: PATHWAY_COLORS[i % len(PATHWAY_COLORS)]
-        for i, name in enumerate(fate_names)
-    }
+    escaped_fates = (
+        realizations.join(
+            events.filter(pl.col("type") == "escape"),
+            left_on="terminal_event_id",
+            right_on="id",
+            how="inner",
+        )["fate"]
+        .unique()
+        .to_list()
+    )
+    escape_name = escaped_fates[0] if escaped_fates else "Escape"
+    events = (
+        events.join(pathways, on="pathway_id", how="left", maintain_order="left")
+        .rename({"pathway": "event_pathway"})
+        .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
+    )
+    fragmentation_names = (
+        events.filter(pl.col("type") == "fragmentation")["event_pathway"]
+        .unique()
+        .sort()
+        .to_list()
+    )
+    fate_colors = _pathway_colors(
+        sorted(set(fate_names) | set(fragmentation_names)), escape_name
+    )
     pathway_legend = "\n".join(
         f'label:nth-child({i + 1})::before {{ content: ""; background: {fate_colors[name]}; '
         "width: 12px; height: 12px; flex-shrink: 0; margin-right: 4px; }"
@@ -464,6 +513,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         "selected": None,
         "event": None,
         "updating": False,
+        "grouped": True,
         "auto_cdf": False,
         "syncing_sidebar": False,
         "sidebar": {False: [True, False], True: [False, False]},
@@ -496,11 +546,15 @@ def build_document(db, doc, experiment: int, cluster: int):
         return bool(widget.active)
 
     fate_facets = checkbox("Facet pathways")
-    event_types = CheckboxGroup(
-        labels=[v.title() for v in EVENT_TYPES], active=[0, 1, 2]
-    )
-    event_legend = InlineStyleSheet()
-    event_types.stylesheets = [event_legend]
+    group_fragmentations = checkbox("Group fragmentations", True)
+    event_options = {kind: checkbox(kind.title(), True) for kind in EVENT_TYPES} | {
+        name: checkbox(name, True) for name in fragmentation_names
+    }
+    for kind, widget in event_options.items():
+        widget.name = f"event:{kind}"
+        widget.sizing_mode = "stretch_width"
+        widget.stylesheets = [InlineStyleSheet()]
+    event_controls = column(spacing=4, width_policy="max")
     mode = Select(
         title="X coordinate",
         value="schematic",
@@ -574,7 +628,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         group(
             "Realizations",
             column(
-                group("Events", column(event_types, spacing=4)),
+                group_fragmentations,
+                group("Events", event_controls),
                 group("Y-axis", column(layout, envelope, spacing=4)),
                 spacing=4,
             ),
@@ -808,7 +863,64 @@ def build_document(db, doc, experiment: int, cluster: int):
                 )
                 if message
             )
-            active_types = {EVENT_TYPES[i] for i in event_types.active}
+            group_fragmentations.disabled = enabled(fate_facets)
+            if group_fragmentations.disabled:
+                group_fragmentations.active = [0]
+            grouped = enabled(group_fragmentations)
+            if grouped != state["grouped"]:
+                if grouped:
+                    event_options["fragmentation"].active = (
+                        [0]
+                        if any(
+                            enabled(event_options[name]) for name in fragmentation_names
+                        )
+                        else []
+                    )
+                else:
+                    for name in fragmentation_names:
+                        event_options[name].active = (
+                            [0] if enabled(event_options["fragmentation"]) else []
+                        )
+                state["grouped"] = grouped
+            selected_fates = {fate_names[i] for i in fate.active}
+            available_events = events_for(
+                events, realizations.filter(pl.col("fate").is_in(selected_fates))
+            )
+            kinds = (
+                ["collision", "fragmentation", "escape"]
+                if grouped
+                else ["collision", *fragmentation_names, "escape"]
+            )
+            event_colors = {
+                kind: COLORS[kind] if kind in EVENT_TYPES else fate_colors[kind]
+                for kind in kinds
+            }
+            for kind, widget in event_options.items():
+                if kind == "escape":
+                    available = escape_name in selected_fates
+                elif kind in EVENT_TYPES:
+                    available = not available_events.filter(
+                        pl.col("type") == kind
+                    ).is_empty()
+                else:
+                    available = (
+                        kind not in fate_names or kind in selected_fates
+                    ) and kind in available_events["event_pathway"]
+                widget.disabled = not available
+            event_options["escape"].labels = ["Escape" if grouped else escape_name]
+            event_controls.children = [event_options[kind] for kind in kinds]
+            active_groups = {
+                kind
+                for kind in kinds
+                if enabled(event_options[kind]) and not event_options[kind].disabled
+            }
+            chosen_events = chosen_events.with_columns(
+                pl.when(pl.col("type") == "fragmentation")
+                .then(pl.lit("fragmentation") if grouped else pl.col("event_pathway"))
+                .otherwise(pl.col("type"))
+                .alias("event_group")
+            )
+            selected_events = events_for(chosen_events, selected)
             mapped_regions = coordinate_regions(regions, mode.value)
             positioned = position_events(chosen_events, mapped_regions, mode.value)
             slot = escape_slot(mapped_regions)
@@ -819,11 +931,14 @@ def build_document(db, doc, experiment: int, cluster: int):
             guides.visible = mode.value == "physical"
             envelope.visible = layout.value == "beeswarm"
             marker = "●" if layout.value == "beeswarm" else "×"
-            event_legend.css = "\n".join(
-                f'label:nth-child({i + 1})::before {{ content: "{marker}"; color: {COLORS[kind]}; '
-                "display: inline-block; width: 12px; margin-right: 4px; text-align: center; font-size: 16px; }"
-                for i, kind in enumerate(EVENT_TYPES)
-            )
+            for kind, color in event_colors.items():
+                event_options[kind].stylesheets[0].css = (
+                    f'label::before {{ content: "{marker}"; color: {color}; '
+                    "display: inline-block; width: 12px; margin-right: 4px; text-align: center; font-size: 16px; }"
+                    ".bk-input-group { white-space: normal; }"
+                    "label { display: flex; align-items: center; width: 100%; }"
+                    "input { flex-shrink: 0; } span { overflow-wrap: anywhere; min-width: 0; }"
+                )
             if regional and state["auto_cdf"] and enabled(show_bars):
                 show_cdf.active = []
                 state["auto_cdf"] = False
@@ -911,7 +1026,9 @@ def build_document(db, doc, experiment: int, cluster: int):
                 plots = []
                 if enabled(show_events):
                     visible = layout_events(
-                        member_events.filter(pl.col("type").is_in(active_types)),
+                        member_events.filter(
+                            pl.col("event_group").is_in(active_groups)
+                        ),
                         layout.value,
                     )
                     plots.append(
@@ -926,6 +1043,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                             state["selected"],
                             state["event"],
                             selection_callback,
+                            event_colors,
                         )
                     )
                 if enabled(show_cdf) or (enabled(show_bars) and regional):
@@ -1009,7 +1127,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                 if state["event"] is None
                 else selected_events.filter(
                     (pl.col("id") == state["event"])
-                    & ~pl.col("type").is_in(active_types)
+                    & ~pl.col("event_group").is_in(active_groups)
                 )
             )
             if not hidden.is_empty():
@@ -1036,10 +1154,12 @@ def build_document(db, doc, experiment: int, cluster: int):
             state["auto_cdf"] = False
         render()
 
+    for widget in event_options.values():
+        widget.on_change("active", control_changed)
     for widget, property_name in [
         (fate, "active"),
         (fate_facets, "active"),
-        (event_types, "active"),
+        (group_fragmentations, "active"),
         (mode, "value"),
         (layout, "value"),
         (envelope, "active"),

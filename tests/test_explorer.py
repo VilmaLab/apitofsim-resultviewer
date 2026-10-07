@@ -1,6 +1,7 @@
 """Numerical and storage contracts of the realization explorer."""
 
 import duckdb
+import pytest
 
 from apitofresview.plotting.explorer import (
     Cohort,
@@ -60,7 +61,8 @@ def test_fates_coordinates_and_aggregate():
     assert a.events[0].radial == 5
 
 
-def test_adapter_resolves_results_and_preserves_ids(monkeypatch):
+@pytest.mark.parametrize("negative_z", [False, True])
+def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z):
     conn = duckdb.connect(":memory:")
     conn.execute(
         "create table multi_pathway_experiment_result(id int, experiment_run_id int, cluster_id int)"
@@ -90,9 +92,16 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch):
         "insert into fragmentation_event values (502,100, {'x':1,'y':2,'z':2,'t':1.5},7)"
     )
     conn.execute("insert into escape_event values (503,102, {'x':1,'y':2,'z':5,'t':2})")
+    if negative_z:
+        conn.execute(
+            "update collision_event set postime = struct_update(postime, z := -0.000001)"
+        )
+        conn.execute(
+            "update fragmentation_event set postime = struct_update(postime, z := -0.000002)"
+        )
     import apitofsim.plotting.events as geometry
 
-    monkeypatch.setattr(geometry, "get_geometery", lambda *args: None)
+    monkeypatch.setattr(geometry, "get_geometry", lambda *args: None)
     monkeypatch.setattr(
         geometry, "lengths_to_cumulative_lengths", lambda *args: (0, 1, 2, 3, 4, 5)
     )
@@ -103,6 +112,16 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch):
     assert [e.id for e in cohort.realizations[0].events] == [501, 502]
     assert cohort.realizations[0].events[1].pathway_id == 7
     assert cohort.pathways == {7: "A + B"}
+    assert sum(e.z_clamped for r in cohort.realizations for e in r.events) == (
+        2 if negative_z else 0
+    )
+    if negative_z:
+        assert [e.z for e in cohort.realizations[0].events] == [0, 0]
+        coordinates = Coordinates(cohort.boundaries, "schematic")
+        assert aggregate(cohort.realizations, coordinates)[2][0] == 0.5
+        assert (
+            conn.execute("select postime.z from fragmentation_event").fetchone()[0] < 0
+        )
 
 
 def test_bokeh_document_modes_and_views(monkeypatch):
@@ -111,11 +130,16 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     import apitofresview.plotting.explorer as explorer
 
     member = realization(1, event(1, "collision", 1, 0, 0), event(2, "escape", 1, 1, 5))
+    member.events[0] = Event(1, "collision", 1, 0, 3, 4, 0, z_clamped=True)
     monkeypatch.setattr(
         explorer, "load_cohort", lambda *args: Cohort([member], (0, 1, 2, 3, 4, 5), {})
     )
     doc = Document()
     build_document(None, doc, 1, 1)
+    assert any(
+        d.text == "1 events with negative z position have been clamped to 0"
+        for d in doc.select({"type": explorer.Div})
+    )
     x_mode = next(s for s in doc.select({"type": Select}) if s.title == "X coordinate")
     for value in ("equal", "physical", "time", "schematic"):
         x_mode.value = value

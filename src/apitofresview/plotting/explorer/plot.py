@@ -139,7 +139,7 @@ def _schematic_plot(regions, shared_x, available_width):
 
 def _physical_guides(plot, regions):
     boundaries = [regions["left"][0], *regions["right"]]
-    for index, boundary in enumerate(boundaries):
+    for boundary in boundaries:
         plot.add_layout(
             Span(
                 location=boundary,
@@ -148,17 +148,29 @@ def _physical_guides(plot, regions):
                 line_dash="dotted",
             )
         )
-        plot.add_layout(
-            Label(
-                x=boundary,
-                y=0,
-                y_units="screen",
-                text="Start" if index == 0 else REGIONS[index - 1] + " end",
-                text_font_size="8px",
-                text_color="#475569",
-                angle=1.57,
+    # Invisible hover targets use their own range so they don't affect the events.
+    plot.extra_y_ranges["guides"] = Range1d(0, 1)
+    targets = plot.scatter(
+        x="boundary",
+        y=0.5,
+        y_range_name="guides",
+        source=ColumnDataSource(
+            dict(
+                boundary=boundaries,
+                name=["Start", *[name + " end" for name in REGIONS]],
             )
+        ),
+        fill_alpha=0,
+        line_alpha=0,
+    )
+    plot.add_tools(
+        HoverTool(
+            renderers=[targets],
+            mode="vline",
+            point_policy="follow_mouse",
+            tooltips=[("Boundary", "@name")],
         )
+    )
 
 
 def _highlight(plot, events, selected_id, event_id):
@@ -348,7 +360,7 @@ def _cdf_plot(
     regions,
 ):
     plot = figure(
-        title=f"Fragmentation CDF · {title} (N={n})",
+        title=f"Cumulative fragmentation · {title} (N={n})",
         height=175,
         min_height=150,
         x_range=shared_x,
@@ -357,7 +369,7 @@ def _cdf_plot(
         sizing_mode="stretch_width",
         tools="pan,wheel_zoom,reset,save",
     )
-    plot.yaxis.axis_label = "Fraction of all realizations"
+    plot.yaxis.axis_label = "Fraction"
     if n:
         plot.step(
             [left_edge, *cdf["position"], right_edge],
@@ -387,7 +399,7 @@ def _cdf_plot(
 def _bar_plot(bars, title, n, shared_x):
     top = bars["fraction"].max() or 0
     plot = figure(
-        title=f"Regional outcomes · {title} (N={n})",
+        title=f"Bar chart · {title} (N={n})",
         height=155,
         min_height=130,
         x_range=shared_x,
@@ -396,7 +408,7 @@ def _bar_plot(bars, title, n, shared_x):
         sizing_mode="stretch_width",
         tools="pan,wheel_zoom,reset,save",
     )
-    plot.yaxis.axis_label = "Fraction of all realizations"
+    plot.yaxis.axis_label = "Fraction"
     for name, lo, hi, value in bars.select(
         "name", "left", "right", "fraction"
     ).iter_rows():
@@ -487,11 +499,10 @@ def build_document(db, doc, experiment: int, cluster: int):
         ],
     )
     envelope = checkbox("Envelope")
-    schematic = checkbox("Schematic / guides", True)
-    restrictions = Div()
+    schematic = checkbox("Schematic", True)
     show_events = checkbox("Realizations", True)
-    show_cdf = checkbox("CDF")
-    show_bars = checkbox("Regional bars")
+    show_cdf = checkbox("Cumulative")
+    show_bars = checkbox("Bar chart")
     total = realizations.height
     selector = RangeSlider(
         title="Realization IDs (inclusive index range)",
@@ -526,9 +537,9 @@ def build_document(db, doc, experiment: int, cluster: int):
     left_controls = column(
         group("Pathways", column(fate, fate_facets, spacing=4)),
         group("Events", column(event_types, spacing=4)),
-        group("X axis", column(mode, schematic, restrictions, spacing=4)),
+        group("X axis", column(mode, schematic, spacing=4)),
         group("Y-axis", column(layout, envelope, spacing=4)),
-        group("Views", column(row(show_events, show_cdf), show_bars, spacing=4)),
+        group("Views", column(show_events, show_cdf, show_bars, spacing=4)),
         spacing=4,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
@@ -764,18 +775,9 @@ def build_document(db, doc, experiment: int, cluster: int):
             slot = escape_slot(mapped_regions)
             spatial = mode.value != "time"
             regional = mode.value in ("schematic", "equal")
-            if spatial:
-                restrictions.text = (
-                    ""
-                    if regional
-                    else "Regional bars require equal chambers or equal zones. Physical mode shows boundary guides."
-                )
-            else:
-                restrictions.text = (
-                    "Schematic and regional bars are unavailable in elapsed time."
-                )
             show_bars.disabled = not regional
-            schematic.disabled = not spatial
+            schematic.visible = spatial
+            schematic.labels = ["Schematic" if regional else "Guides"]
             envelope.visible = layout.value == "beeswarm"
             if regional and state["auto_cdf"] and enabled(show_bars):
                 show_cdf.active = []

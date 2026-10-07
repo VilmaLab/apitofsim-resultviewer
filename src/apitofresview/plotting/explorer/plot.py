@@ -246,6 +246,7 @@ def _event_plot(
     event_id,
     on_selected,
     event_colors,
+    realization_bounds=(1, 1),
 ):
     plot = figure(
         name="events",
@@ -258,9 +259,18 @@ def _event_plot(
         output_backend="webgl",
         tools="pan,wheel_zoom,box_zoom,reset,save,tap",
     )
-    plot.yaxis.axis_label = "Radial distance (mm)" if layout == "radial" else None
-    plot.yaxis.visible = layout == "radial"
+    plot.yaxis.axis_label = {
+        "radial": "Radial distance (mm)",
+        "realization": "Realization #",
+    }.get(layout)
+    plot.yaxis.visible = layout in ("radial", "realization")
     plot.ygrid.visible = layout == "radial"
+    if layout == "realization":
+        first, last = realization_bounds
+        plot.y_range = Range1d(first - 0.5, last + 0.5)
+        plot.yaxis.ticker = FixedTicker(ticks=sorted({first, last}))
+        plot.yaxis.major_tick_line_color = None
+        plot.yaxis.minor_tick_line_color = None
     if physical_guides:
         _physical_guides(plot, regions)
     swarm_glyphs = []
@@ -572,8 +582,9 @@ def build_document(db, doc, experiment: int, cluster: int):
     )
     layout = Select(
         title="Y coordinate",
-        value="radial",
+        value="realization",
         options=[
+            ("realization", "Realization #"),
             ("radial", "Radial distance (mm)"),
             ("strip", "Jittered strip"),
             ("beeswarm", "Beeswarm"),
@@ -838,7 +849,7 @@ def build_document(db, doc, experiment: int, cluster: int):
             return
         state["updating"] = True
         try:
-            chosen = selected_cohort()
+            chosen = selected_cohort().with_row_index("realization_number", offset=1)
             chosen_ids = chosen["id"]
             if state["selected"] not in chosen_ids:
                 state["selected"] = state["event"] = None
@@ -848,6 +859,14 @@ def build_document(db, doc, experiment: int, cluster: int):
                 else chosen.filter(pl.col("id") == state["selected"])
             )
             chosen_events = events_for(events, chosen)
+            chosen_events = chosen_events.join(
+                chosen.select(
+                    pl.col("id").alias("realization_id"), "realization_number"
+                ),
+                on="realization_id",
+                how="left",
+                maintain_order="left",
+            )
             selected_events = events_for(chosen_events, selected)
             details.text = _details(selected, selected_events, state["event"], pathways)
             counts.text = (
@@ -1054,6 +1073,10 @@ def build_document(db, doc, experiment: int, cluster: int):
                             state["event"],
                             selection_callback,
                             event_colors,
+                            (
+                                members["realization_number"].min() or 1,
+                                members["realization_number"].max() or 1,
+                            ),
                         )
                     )
                 if enabled(show_cdf) or (enabled(show_bars) and regional):

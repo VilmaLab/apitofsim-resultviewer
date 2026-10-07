@@ -4,6 +4,9 @@ Time coordinates use the recorder's raw ``postime.t``; there is no separate
 realization start timestamp in the database.
 """
 
+from collections import deque
+from math import sqrt
+
 import polars as pl
 
 from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_lengths
@@ -174,8 +177,8 @@ def events_for(events, realizations):
 def coordinate_regions(regions, mode):
     if mode == "physical":
         return regions.with_columns(
-            pl.col("physical_left").alias("left"),
-            pl.col("physical_right").alias("right"),
+            (pl.col("physical_left") * 1000).alias("left"),
+            (pl.col("physical_right") * 1000).alias("right"),
         )
     widths = SCHEMATIC_WEIGHTS if mode == "schematic" else (1,) * regions.height
     return (
@@ -195,7 +198,7 @@ def escape_slot(regions):
 
 def position_events(events, regions, mode):
     if mode in ("time", "physical"):
-        position = pl.col("t" if mode == "time" else "z")
+        position = pl.col("t") if mode == "time" else pl.col("z") * 1000
     else:
         # Mapping uses the first inclusive upper boundary, with extrapolation
         # past the final region, matching the original spatial display.
@@ -221,57 +224,98 @@ def position_events(events, regions, mode):
 
 def layout_events(events, mode):
     if mode == "radial":
-        return events.with_columns(pl.col("radial").alias("plot_y"))
+        return events.with_columns((pl.col("radial") * 1000).alias("plot_y"))
     if mode == "strip":
         return events.with_columns(
             (0.25 * (pl.col("id") * 12.9898).sin()).alias("plot_y")
         )
-    # Stable greedy packing is sequential; keep its result aligned with the frame.
-    span = (events["position"].max() or 0) - (events["position"].min() or 0)
-    radius = max(span / 160, 1e-9)
-    packed = {}
-    result = [0.0] * events.height
+    return events.with_columns(pl.lit(0.0).alias("plot_y"))
+
+
+def pack_beeswarm(events, start, end, width, height, diameter=10):
+    """Pack tangent circles in screen coordinates, shrinking to fit vertically."""
+    scale = width / max(end - start, 1e-12)
     ordered = events.with_row_index().sort("position", "id")
-    for index, event_id, x in ordered.select("index", "id", "position").iter_rows():
-        nearby = [(px, py) for px, py in packed.values() if abs(px - x) < 2 * radius]
-        level = next(
-            (
-                v
-                for v in (0, 1, -1, 2, -2, 3, -3)
-                if all(
-                    (x - px) ** 2 / radius**2 + (v - py) ** 2 >= 1 for px, py in nearby
+    points = [
+        (index, (x - start) * scale)
+        for index, x in ordered.select("index", "position").iter_rows()
+    ]
+    result = [0.0] * events.height
+    lower, upper = 0.0, diameter
+    best = None
+    for _ in range(16):
+        nearby = deque()
+        for index, x in points:
+            if x < -upper or x > width + upper:
+                result[index] = 0.0
+                continue
+            while nearby and x - nearby[0][0] >= diameter:
+                nearby.popleft()
+            intervals = sorted(
+                (
+                    y - sqrt(max(0, diameter**2 - (x - px) ** 2)),
+                    y + sqrt(max(0, diameter**2 - (x - px) ** 2)),
                 )
-            ),
-            len(nearby) + 1,
-        )
-        result[index] = float(level) * 0.18
-        packed[event_id] = (x, level)
-    return events.with_columns(pl.Series("plot_y", result, dtype=pl.Float64))
+                for px, y in nearby
+            )
+            # The connected forbidden interval containing zero has the nearest
+            # available tangent position at one of its two endpoints.
+            merged = []
+            for lo, hi in intervals:
+                if merged and lo < merged[-1][1] - 1e-9:
+                    merged[-1][1] = max(merged[-1][1], hi)
+                else:
+                    merged.append([lo, hi])
+            y = 0.0
+            for lo, hi in merged:
+                if lo + 1e-9 < 0 < hi - 1e-9:
+                    y = hi if hi <= -lo else lo
+                    break
+            result[index] = y
+            nearby.append((x, y))
+        extent = max((abs(y) for y in result), default=0) * 2 + diameter
+        if extent <= height:
+            best = (result.copy(), diameter)
+            lower = diameter
+        else:
+            upper = diameter
+        if upper - lower <= max(upper * 0.01, 1e-6):
+            break
+        diameter = (lower + upper) / 2 if lower else diameter * height / extent * 0.95
+    result, diameter = best
+    return events.with_columns(pl.Series("plot_y", result, dtype=pl.Float64)), diameter
 
 
-def violin(events):
-    continuous = events.filter(pl.col("type") != "escape").select("position")
-    lo, hi = continuous["position"].min(), continuous["position"].max()
-    if continuous.height < 2 or lo == hi:
+def beeswarm_envelope(events, x_padding, y_padding):
+    """Outline the packed circles using their radii in each coordinate."""
+    if events.is_empty():
         return pl.DataFrame(schema={"position": pl.Float64, "plot_y": pl.Float64})
-    bandwidth = max((hi - lo) / 18, 1e-12)
-    grid = pl.DataFrame({"position": [lo + (hi - lo) * i / 79 for i in range(80)]})
-    density = (
-        grid.join(continuous.rename({"position": "sample"}), how="cross")
-        .group_by("position")
-        .agg(
-            (-0.5 * ((pl.col("position") - pl.col("sample")) / bandwidth).pow(2))
-            .exp()
-            .sum()
-            .alias("density")
-        )
-        .sort("position")
-        .with_columns(
-            (0.4 * pl.col("density") / pl.col("density").max()).alias("plot_y")
-        )
-        .select("position", "plot_y")
+    points = sorted(events.select("position", "plot_y").iter_rows())
+    samples = sorted(
+        {
+            x + offset * x_padding
+            for x, _ in points
+            for offset in (-1, -sqrt(3) / 2, -0.5, 0, 0.5, sqrt(3) / 2, 1)
+        }
     )
-    return pl.concat([density, density.reverse().with_columns(-pl.col("plot_y"))])
+    nearby = deque()
+    cursor = 0
+    upper, lower = [], []
+    for x in samples:
+        while cursor < len(points) and points[cursor][0] <= x + x_padding:
+            nearby.append(points[cursor])
+            cursor += 1
+        while nearby and nearby[0][0] < x - x_padding:
+            nearby.popleft()
+        edges = [
+            (y, y_padding * sqrt(max(0, 1 - ((x - px) / x_padding) ** 2)))
+            for px, y in nearby
+        ]
+        upper.append(max((y + radius for y, radius in edges), default=0))
+        lower.append(min((y - radius for y, radius in edges), default=0))
+    return pl.DataFrame(
+        {"position": samples + samples[::-1], "plot_y": upper + lower[::-1]}
+    )
 
 
 def aggregate(realizations, events, regions):

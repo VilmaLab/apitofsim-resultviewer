@@ -1,6 +1,6 @@
 """Numerical, storage and interaction behavior of the realization Explorer."""
 
-from math import exp, sin
+from math import sin
 from types import SimpleNamespace
 
 import duckdb
@@ -148,7 +148,7 @@ def test_terminal_histories(history, fate, terminal):
 @pytest.mark.parametrize(
     "mode,expected",
     [
-        ("physical", [0, 1, 2, 5, 6, 5]),
+        ("physical", [0, 1000, 2000, 5000, 6000, 5000]),
         ("equal", [0, 1, 2, 5, 6, 5.325]),
         ("schematic", [0, 2, 3, 9, 11, 9.65]),
         ("time", [0, 1, 2, 3, 4, 5]),
@@ -182,7 +182,7 @@ def test_zero_width_regions():
     assert positioned["position"][0] == 0
 
 
-def test_layouts_and_violin():
+def test_layouts_and_envelope():
     _, events, _, regions = cohort(
         [1],
         event(3, "collision", 1, 0, 0),
@@ -194,33 +194,61 @@ def test_layouts_and_violin():
     events = data.position_events(
         events, data.coordinate_regions(regions, "physical"), "physical"
     )
-    assert data.layout_events(events, "radial")["plot_y"].to_list() == [5] * 5
+    assert data.layout_events(events, "radial")["plot_y"].to_list() == [5000] * 5
     assert data.layout_events(events, "strip")["plot_y"].to_list() == pytest.approx(
         [0.25 * sin(i * 12.9898) for i in events["id"]]
     )
-    assert data.layout_events(events, "beeswarm")["plot_y"].to_list() == pytest.approx(
-        [-0.18, 0, 0.18, 0, 0]
-    )
+
+    def pack(frame):
+        return data.pack_beeswarm(frame, 0, 5000, 600, 380)[0]
+
+    packed = pack(events)
+    assert packed["plot_y"].to_list() == pytest.approx([-10, 0, 10, 0, 0])
     assert_frame_equal(
-        data.layout_events(events, "beeswarm").select("id", "plot_y").sort("id"),
-        data.layout_events(events.reverse(), "beeswarm")
-        .select("id", "plot_y")
-        .sort("id"),
+        packed.select("id", "plot_y").sort("id"),
+        pack(events.reverse()).select("id", "plot_y").sort("id"),
     )
-    envelope = data.violin(events)
-    assert envelope.height == 160
-    grid = [2 * i / 79 for i in range(80)]
-    density = [
-        sum(exp(-0.5 * ((x - v) / (2 / 18)) ** 2) for v in [0, 0, 0, 2]) for x in grid
-    ]
-    upper = [0.4 * d / max(density) for d in density]
-    assert envelope["position"].to_list() == pytest.approx(grid + grid[::-1])
-    assert envelope["plot_y"].to_list() == pytest.approx(
-        upper + [-v for v in upper[::-1]]
+    envelope = data.beeswarm_envelope(packed, 5 * 5000 / 600, 5)
+    assert envelope["plot_y"].max() == 15
+    assert envelope["plot_y"].min() == -15
+    assert envelope["position"].min() < 0
+    assert envelope["position"].max() > 5000
+    assert_frame_equal(
+        envelope, data.beeswarm_envelope(packed.reverse(), 5 * 5000 / 600, 5)
     )
     for subset in (events.head(0), events.head(1), events.head(3)):
-        assert data.violin(subset).is_empty()
-        assert data.layout_events(subset, "beeswarm").height == subset.height
+        packed = pack(subset)
+        outline = data.beeswarm_envelope(packed, 1, 5)
+        assert outline.is_empty() == subset.is_empty()
+        assert packed.height == subset.height
+        if not subset.is_empty():
+            assert outline["plot_y"].max() > packed["plot_y"].max()
+            assert outline["plot_y"].min() < packed["plot_y"].min()
+
+
+@pytest.mark.parametrize("width,height", [(600, 380), (300, 200), (900, 600)])
+def test_beeswarm_circles_touch_without_overlaps(width, height):
+    from math import hypot
+
+    # A dense stack exercises more than the old seven levels; nearby columns
+    # exercise diagonal tangencies and resizing.
+    points = pl.DataFrame(
+        {"id": range(80), "position": [i // 20 * 0.005 for i in range(80)]}
+    )
+    packed, diameter = data.pack_beeswarm(points, 0, 1, width, height)
+    centers = list(zip(packed["position"] * width, packed["plot_y"], strict=True))
+    for index, (x, y) in enumerate(centers):
+        distances = [hypot(x - px, y - py) for px, py in centers[:index]]
+        if distances:
+            assert min(distances) >= diameter - 1e-7
+            if abs(y) > 1e-7:
+                assert min(distances) == pytest.approx(diameter)
+    assert max(abs(y) for _, y in centers) + diameter / 2 <= height / 2
+    identical = points.with_columns(pl.lit(0.0).alias("position"))
+    stacked, size = data.pack_beeswarm(identical, 0, 1, width, height)
+    assert [
+        b - a for a, b in zip(sorted(stacked["plot_y"]), sorted(stacked["plot_y"])[1:])
+    ] == pytest.approx([size] * 79)
 
 
 @pytest.mark.parametrize("negative_z", [False, True])
@@ -369,7 +397,7 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         "Pathways",
         "Events",
         "X axis",
-        "Layout",
+        "Y-axis",
         "Views",
         "Selected realization",
     }
@@ -491,11 +519,44 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
         and not checkbox("Schematic / guides").disabled
     )
     checkbox("Realizations").active = [0]
-    layout = next(w for w in doc.select({"type": Select}) if w.title == "Event layout")
+    layout = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")
     for value in ("strip", "beeswarm", "radial"):
         layout.value = value
-        assert checkbox("Violin envelope").disabled == (value == "radial")
-        checkbox("Violin envelope").active = [0]
+        assert checkbox("Envelope").visible == (value == "beeswarm")
+        checkbox("Envelope").active = [0]
+        event_plot = next(p for p in plots() if p.title.text == "Realizations")
+        assert event_plot.yaxis[0].visible == (value == "radial")
+        assert event_plot.yaxis[0].axis_label == (
+            "Radial distance (mm)" if value == "radial" else None
+        )
+        assert (
+            next(p for p in plots() if p.xaxis[0].visible).xaxis[0].axis_label
+            == "Axial distance (mm)"
+        )
+        markers = [r.glyph for r in event_plot.renderers if "id" in r.data_source.data]
+        assert all(
+            g.marker == ("circle" if value == "beeswarm" else "x") for g in markers
+        )
+        if value == "beeswarm":
+            glyph = next(r for r in event_plot.renderers if "id" in r.data_source.data)
+            event_plot.set_from_json("inner_width", 320)
+            event_plot.set_from_json("inner_height", 240)
+            assert event_plot.y_range.end - event_plot.y_range.start == 240
+            assert glyph.glyph.size <= 10
+            assert event_plot.y_range.reset_start == event_plot.y_range.start
+            assert event_plot.y_range.reset_end == event_plot.y_range.end
+        patches = [
+            r for r in event_plot.renderers if r.glyph.__class__.__name__ == "Patch"
+        ]
+        assert bool(patches) == (value == "beeswarm")
+        if value == "radial":
+            source = next(
+                r.data_source
+                for r in event_plot.renderers
+                if "id" in r.data_source.data
+            )
+            assert source.data["y"] == [5000, 5000]
+            assert source.data["axial_distance"] == [0, 1000]
     bridge.text = "clear"
     assert text_contains("Click an event")
     assert len(loads) == 1

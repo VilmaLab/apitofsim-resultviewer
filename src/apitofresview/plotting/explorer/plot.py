@@ -4,6 +4,7 @@ from html import escape
 
 import polars as pl
 from bokeh.events import DocumentReady
+from bokeh.core.property.descriptors import UnsetValueError
 from bokeh.layouts import column, row
 from bokeh.models import (
     CheckboxGroup,
@@ -33,8 +34,9 @@ from .data import (
     layout_events,
     load_data,
     position_events,
+    pack_beeswarm,
     select_realizations,
-    violin,
+    beeswarm_envelope,
 )
 
 
@@ -54,8 +56,9 @@ def _details(realization, events, selected_event, pathways):
     for event in history.iter_rows(named=True):
         fields = (
             f"Event #{event['id']} · {event['type']} · t={event['t']:.6g} s · "
-            f"x={event['x']:.6g} m · y={event['y']:.6g} m · z={event['z']:.6g} m · "
-            f"r={event['radial']:.6g} m"
+            f"x={event['x'] * 1000:.6g} mm · y={event['y'] * 1000:.6g} mm · "
+            f"Axial distance={event['z'] * 1000:.6g} mm · "
+            f"Radial distance={event['radial'] * 1000:.6g} mm"
         )
         if event["pathway_id"] is not None:
             fields += f" · {event['pathway'] or 'Unknown pathway'}"
@@ -192,7 +195,7 @@ def _event_plot(
     layout,
     regions,
     physical_guides,
-    show_violin,
+    show_envelope,
     selected_id,
     event_id,
     on_selected,
@@ -207,18 +210,24 @@ def _event_plot(
         output_backend="webgl",
         tools="pan,wheel_zoom,box_zoom,reset,save,tap",
     )
-    plot.yaxis.axis_label = (
-        "Radial distance (m)" if layout == "radial" else "Event layout"
-    )
+    plot.yaxis.axis_label = "Radial distance (mm)" if layout == "radial" else None
+    plot.yaxis.visible = layout == "radial"
+    plot.ygrid.visible = layout == "radial"
     if physical_guides:
         _physical_guides(plot, regions)
-    if show_violin:
-        envelope = violin(events)
-        if not envelope.is_empty():
+    swarm_glyphs = []
+    envelope_source = None
+    if layout == "beeswarm":
+        plot.y_range = Range1d(-height / 2, height / 2)
+        for tool in plot.tools:
+            if hasattr(tool, "dimensions"):
+                tool.dimensions = "width"
+        if show_envelope:
+            envelope_source = ColumnDataSource(dict(position=[], plot_y=[]))
             plot.patch(
                 "position",
                 "plot_y",
-                source=_source(envelope),
+                source=envelope_source,
                 fill_alpha=0.13,
                 line_alpha=0.25,
                 color="#64748b",
@@ -234,19 +243,20 @@ def _event_plot(
                 "id",
                 pl.col("realization_id").alias("realization"),
                 pl.col("t").alias("time"),
-                "z",
+                (pl.col("z") * 1000).alias("axial_distance"),
             )
         )
         glyph = plot.scatter(
             "x",
             "y",
             source=source,
-            marker="x",
+            marker="circle" if layout == "beeswarm" else "x",
             size=10,
             color=COLORS[kind],
             legend_label=kind.title(),
-            line_width=1.5,
+            line_width=0 if layout == "beeswarm" else 1.5,
         )
+        swarm_glyphs.append(glyph)
         plot.add_tools(
             HoverTool(
                 renderers=[glyph],
@@ -254,12 +264,61 @@ def _event_plot(
                     ("Event", "@id"),
                     ("Realization", "@realization"),
                     ("t (s)", "@time"),
-                    ("z (m)", "@z"),
+                    ("Axial distance (mm)", "@axial_distance"),
                 ],
             )
         )
         source.selected.on_change("indices", on_selected(source))
-    if selected_id is not None:
+    if layout == "beeswarm":
+        last_dimensions = None
+        highlights = []
+
+        def repack(attr, old, new):
+            nonlocal last_dimensions
+            try:
+                width = plot.inner_width or 600
+            except UnsetValueError:
+                width = 600
+            try:
+                inner_height = plot.inner_height or height - 60
+            except UnsetValueError:
+                inner_height = height - 60
+            dimensions = (shared_x.start, shared_x.end, width, inner_height)
+            if dimensions == last_dimensions:
+                return
+            last_dimensions = dimensions
+            packed, diameter = pack_beeswarm(events, *dimensions)
+            plot.y_range.start, plot.y_range.end = -inner_height / 2, inner_height / 2
+            plot.y_range.reset_start = plot.y_range.start
+            plot.y_range.reset_end = plot.y_range.end
+            positions = dict(packed.select("id", "plot_y").iter_rows())
+            for glyph in swarm_glyphs:
+                glyph.data_source.data = {
+                    **glyph.data_source.data,
+                    "y": [positions[i] for i in glyph.data_source.data["id"]],
+                }
+                glyph.glyph.size = diameter
+            if envelope_source is not None:
+                outline = beeswarm_envelope(
+                    packed,
+                    diameter / 2 * (shared_x.end - shared_x.start) / width,
+                    diameter / 2,
+                )
+                envelope_source.data = outline.to_dict(as_series=False)
+            for renderer in highlights:
+                plot.renderers.remove(renderer)
+            highlights.clear()
+            if selected_id is not None:
+                previous = len(plot.renderers)
+                _highlight(plot, packed, selected_id, event_id)
+                highlights.extend(plot.renderers[previous:])
+
+        for property_name in ("inner_width", "inner_height"):
+            plot.on_change(property_name, repack)
+        for property_name in ("start", "end"):
+            shared_x.on_change(property_name, repack)
+        repack(None, None, None)
+    elif selected_id is not None:
         _highlight(plot, events, selected_id, event_id)
     if plot.legend:
         plot.legend.click_policy = "hide"
@@ -404,22 +463,22 @@ def build_document(db, doc, experiment: int, cluster: int):
         title="X coordinate",
         value="schematic",
         options=[
-            ("schematic", "Schematic distance"),
+            ("schematic", "Schematic"),
             ("equal", "Equal regions"),
-            ("physical", "Physical distance (m)"),
+            ("physical", "Axial distance (mm)"),
             ("time", "Elapsed time (s)"),
         ],
     )
     layout = Select(
-        title="Event layout",
+        title="Y coordinate",
         value="radial",
         options=[
-            ("radial", "Radial distance"),
+            ("radial", "Radial distance (mm)"),
             ("strip", "Jittered strip"),
             ("beeswarm", "Beeswarm"),
         ],
     )
-    violin = checkbox("Violin envelope")
+    envelope = checkbox("Envelope")
     schematic = checkbox("Schematic / guides", True)
     restrictions = Div()
     show_events = checkbox("Realizations", True)
@@ -460,7 +519,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         group("Pathways", column(fate, fate_facets, spacing=4)),
         group("Events", column(event_types, spacing=4)),
         group("X axis", column(mode, schematic, restrictions, spacing=4)),
-        group("Layout", column(layout, violin, spacing=4)),
+        group("Y-axis", column(layout, envelope, spacing=4)),
         group("Views", column(row(show_events, show_cdf), show_bars, spacing=4)),
         spacing=4,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
@@ -709,7 +768,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                 )
             show_bars.disabled = not regional
             schematic.disabled = not spatial
-            violin.disabled = layout.value == "radial"
+            envelope.visible = layout.value == "beeswarm"
             if regional and state["auto_cdf"] and enabled(show_bars):
                 show_cdf.active = []
                 state["auto_cdf"] = False
@@ -769,7 +828,11 @@ def build_document(db, doc, experiment: int, cluster: int):
                 if fullscreen_state.text == "full"
                 else 440
             )
-            shared_x = Range1d(left_edge, right_edge + (right_edge - left_edge) * 0.015)
+            margin = (right_edge - left_edge) * 0.015
+            shared_x = Range1d(
+                left_edge - margin if layout.value == "beeswarm" else left_edge,
+                right_edge + margin,
+            )
             panels = []
             axis_figures = []
             if enabled(schematic) and spatial and regional and not chosen.is_empty():
@@ -806,7 +869,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                             layout.value,
                             mapped_regions,
                             enabled(schematic) and mode.value == "physical",
-                            enabled(violin) and layout.value != "radial",
+                            enabled(envelope) and layout.value == "beeswarm",
                             state["selected"],
                             state["event"],
                             selection_callback,
@@ -846,9 +909,11 @@ def build_document(db, doc, experiment: int, cluster: int):
                 axis_figures[-1].xaxis.axis_label = (
                     "Elapsed time (s)"
                     if not spatial
-                    else "Axial distance (m)"
+                    else "Axial distance (mm)"
                     if mode.value == "physical"
-                    else "Machine position"
+                    else "Axial distance (schematic)"
+                    if mode.value == "schematic"
+                    else "Axial distance (equal regions)"
                 )
             if chosen.is_empty():
                 panels.insert(
@@ -872,7 +937,8 @@ def build_document(db, doc, experiment: int, cluster: int):
                     Div(
                         text=(
                             f"<b>Selected hidden event #{highlighted['id']}</b> · "
-                            f"{highlighted['type']} · t={highlighted['t']:.6g} s · z={highlighted['z']:.6g} m"
+                            f"{highlighted['type']} · t={highlighted['t']:.6g} s · "
+                            f"Axial distance={highlighted['z'] * 1000:.6g} mm"
                         )
                     ),
                 )
@@ -894,7 +960,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         (event_types, "active"),
         (mode, "value"),
         (layout, "value"),
-        (violin, "active"),
+        (envelope, "active"),
         (schematic, "active"),
         (show_events, "active"),
         (show_bars, "active"),

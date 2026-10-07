@@ -223,6 +223,8 @@ def position_events(events, regions, mode):
 
 
 def layout_events(events, mode):
+    if mode == "realization":
+        return events.with_columns(pl.col("realization_number").alias("plot_y"))
     if mode == "radial":
         return events.with_columns((pl.col("radial") * 1000).alias("plot_y"))
     if mode == "strip":

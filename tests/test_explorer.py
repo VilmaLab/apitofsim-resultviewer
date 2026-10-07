@@ -182,6 +182,54 @@ def test_zero_width_regions():
     assert positioned["position"][0] == 0
 
 
+def test_realization_coordinate(monkeypatch):
+    from bokeh.document import Document
+    from bokeh.models import RangeSlider, Select
+
+    frames = cohort(
+        [100, 102, 105, 110],
+        event(1, "collision", 100, 0, 0),
+        event(2, "collision", 102, 0, 0),
+        event(3, "collision", 102, 1, 1),
+        event(4, "escape", 105, 1, 5),
+    )
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    mode = next(s for s in doc.select({"type": Select}) if s.title == "Y coordinate")
+    assert mode.value == "realization"
+    assert mode.options[0] == ("realization", "Realization #")
+
+    def check(expected, endpoints):
+        events = next(
+            p for p in doc.select({"type": plot.figure}) if p.name == "events"
+        )
+        points = {
+            id: y
+            for renderer in events.renderers
+            if hasattr(renderer, "data_source") and "id" in renderer.data_source.data
+            for id, y in zip(
+                renderer.data_source.data["id"], renderer.data_source.data["y"]
+            )
+        }
+        assert points == expected
+        axis = events.yaxis[0]
+        assert axis.axis_label == "Realization #"
+        assert axis.ticker.ticks == endpoints
+        assert axis.major_tick_line_color is None
+        assert axis.minor_tick_line_color is None
+        assert not events.ygrid[0].visible
+
+    check({1: 1, 2: 2, 3: 2, 4: 3}, [1, 4])
+    next(iter(doc.select({"type": RangeSlider}))).value = (2, 4)
+    check({2: 1, 3: 1, 4: 2}, [1, 3])
+    fate = next(
+        w for w in doc.select({"type": plot.CheckboxGroup}) if "Incomplete" in w.labels
+    )
+    fate.active = [fate.labels.index("Parent → Parent")]
+    check({4: 1}, [1])
+
+
 def test_layouts_and_envelope():
     _, events, _, regions = cohort(
         [1],

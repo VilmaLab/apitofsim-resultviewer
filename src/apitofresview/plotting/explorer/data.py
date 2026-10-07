@@ -16,11 +16,11 @@ EVENT_TYPES = ("collision", "fragmentation", "escape")
 REGIONS = (
     "First chamber",
     "Skimmer",
-    "Skimmer to quadrupole",
+    "Second chamber (before quadrupole)",
     "Quadrupole",
-    "Second chamber",
+    "Second chamber (after quadrupole)",
 )
-SCHEMATIC_WEIGHTS = (2, 1, 1, 3, 2)
+SCHEMATIC_WEIGHTS = (3, 3, 1, 1, 1)
 
 
 def make_regions(boundaries):

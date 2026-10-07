@@ -273,7 +273,6 @@ def _event_plot(
             marker="circle" if layout == "beeswarm" else "x",
             size=10,
             color=COLORS[kind],
-            legend_label=kind.title(),
             line_width=0 if layout == "beeswarm" else 1.5,
         )
         swarm_glyphs.append(glyph)
@@ -340,9 +339,6 @@ def _event_plot(
         repack(None, None, None)
     elif selected_id is not None:
         _highlight(plot, events, selected_id, event_id)
-    if plot.legend:
-        plot.legend.click_policy = "hide"
-        plot.legend.location = "top_left"
     return plot
 
 
@@ -443,6 +439,11 @@ def build_document(db, doc, experiment: int, cluster: int):
         return
 
     fate_names = realizations["fate"].unique().sort().to_list()
+    fate_counts = dict(realizations.group_by("fate").len().iter_rows())
+    count_styles = "\n".join(
+        f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
+        for i, name in enumerate(fate_names)
+    )
     state = {
         "selected": None,
         "event": None,
@@ -466,6 +467,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                     input { flex-shrink: 0; }
                     span { min-width: 0; overflow-wrap: anywhere; }
                 """
+                + count_styles
             )
         ],
     )
@@ -480,6 +482,8 @@ def build_document(db, doc, experiment: int, cluster: int):
     event_types = CheckboxGroup(
         labels=[v.title() for v in EVENT_TYPES], active=[0, 1, 2]
     )
+    event_legend = InlineStyleSheet()
+    event_types.stylesheets = [event_legend]
     mode = Select(
         title="X coordinate",
         value="schematic",
@@ -501,9 +505,11 @@ def build_document(db, doc, experiment: int, cluster: int):
     )
     envelope = checkbox("Envelope")
     schematic = checkbox("Schematic", True)
+    guides = checkbox("Guides", True)
     show_events = checkbox("Realizations", True)
     show_cdf = checkbox("Cumulative")
     show_bars = checkbox("Bar chart")
+    show_pager = checkbox("Realizations pager")
     total = realizations.height
     selector = RangeSlider(
         title="Realization IDs (inclusive index range)",
@@ -514,6 +520,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         disabled=total == 0,
         sizing_mode="stretch_width",
         height=50,
+        visible=False,
     )
     details = Div(
         text=_details(realizations.head(0), events.head(0), None, pathways),
@@ -537,10 +544,24 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     left_controls = column(
         group("Pathways", column(fate, fate_facets, spacing=4)),
-        group("Events", column(event_types, spacing=4)),
-        group("X axis", column(mode, schematic, spacing=4)),
-        group("Y-axis", column(layout, envelope, spacing=4)),
-        group("Views", column(show_events, show_cdf, show_bars, spacing=4)),
+        group("X-axis", column(mode, guides, spacing=4)),
+        group(
+            "Elements",
+            column(
+                schematic,
+                group("Views", column(show_events, show_cdf, show_bars, spacing=4)),
+                show_pager,
+                spacing=4,
+            ),
+        ),
+        group(
+            "Realizations",
+            column(
+                group("Events", column(event_types, spacing=4)),
+                group("Y-axis", column(layout, envelope, spacing=4)),
+                spacing=4,
+            ),
+        ),
         spacing=4,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
@@ -777,9 +798,15 @@ def build_document(db, doc, experiment: int, cluster: int):
             spatial = mode.value != "time"
             regional = mode.value in ("schematic", "equal")
             show_bars.disabled = not regional
-            schematic.visible = spatial
-            schematic.labels = ["Schematic" if regional else "Guides"]
+            schematic.disabled = not regional
+            guides.visible = mode.value == "physical"
             envelope.visible = layout.value == "beeswarm"
+            marker = "●" if layout.value == "beeswarm" else "×"
+            event_legend.css = "\n".join(
+                f'label:nth-child({i + 1})::before {{ content: "{marker}"; color: {COLORS[kind]}; '
+                "display: inline-block; width: 12px; margin-right: 4px; text-align: center; font-size: 16px; }"
+                for i, kind in enumerate(EVENT_TYPES)
+            )
             if regional and state["auto_cdf"] and enabled(show_bars):
                 show_cdf.active = []
                 state["auto_cdf"] = False
@@ -877,7 +904,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                             plot_height,
                             layout.value,
                             mapped_regions,
-                            enabled(schematic) and mode.value == "physical",
+                            enabled(guides) and mode.value == "physical",
                             enabled(envelope) and layout.value == "beeswarm",
                             state["selected"],
                             state["event"],
@@ -988,10 +1015,15 @@ def build_document(db, doc, experiment: int, cluster: int):
         (layout, "value"),
         (envelope, "active"),
         (schematic, "active"),
+        (guides, "active"),
         (show_events, "active"),
         (show_bars, "active"),
         (selector, "value"),
     ]:
         widget.on_change(property_name, control_changed)
     show_cdf.on_change("active", cdf_changed)
+    show_pager.on_change(
+        "active",
+        lambda attr, old, new: setattr(selector, "visible", enabled(show_pager)),
+    )
     render()

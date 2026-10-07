@@ -418,14 +418,28 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert {g.title for g in doc.select({"type": GroupBox})} >= {
         "Pathways",
         "Events",
-        "X axis",
+        "X-axis",
         "Y-axis",
         "Views",
+        "Elements",
+        "Realizations",
         "Selected realization",
     }
     assert all(p.toolbar.logo is None for p in plots)
     assert any(a.icon == "fullscreen" for a in doc.select({"type": CustomAction}))
     assert len(doc.roots) == 1
+    controls = sidebars[0].children[1].children
+    assert [g.title for g in controls] == [
+        "Pathways",
+        "X-axis",
+        "Elements",
+        "Realizations",
+    ]
+    assert controls[1].child.children[1].labels == ["Guides"]
+    assert controls[2].child.children[0].labels == ["Schematic"]
+    assert controls[2].child.children[1].title == "Views"
+    assert [g.title for g in controls[3].child.children] == ["Events", "Y-axis"]
+    assert not event_plots[0].legend
     assert doc.to_json() is not None
 
 
@@ -536,7 +550,14 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert text_contains("Click an event")
     fates.active = list(range(len(fates.labels)))
     slider = next(iter(doc.select({"type": RangeSlider})))
+    pager = checkbox("Realizations pager")
+    assert not pager.active and not slider.visible
+    pager.active = [0]
+    assert slider.visible
     slider.value = (2, 3)
+    assert text_contains("2 selected / 3 total realizations")
+    pager.active = []
+    assert not slider.visible and slider.value == (2, 3)
     assert text_contains("2 selected / 3 total realizations")
     fates.active = [fates.labels.index("Parent → A + B")]
     assert text_contains("No realizations in this cohort")
@@ -547,18 +568,24 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     checkbox("Realizations").active = []
     checkbox("Cumulative").active = []
     schematic = checkbox("Schematic")
+    guides = checkbox("Guides")
     mode.value = "time"
-    assert checkbox("Bar chart").disabled and not schematic.visible
+    assert checkbox("Bar chart").disabled and schematic.visible and schematic.disabled
+    assert not guides.visible
     assert checkbox("Cumulative").active == [0]
     assert not text_contains("unavailable in elapsed time")
     assert any(p.name == "cdf" for p in plots())
     assert not any(p.title and p.title.text for p in plots())
     mode.value = "schematic"
-    assert schematic.visible and schematic.labels == ["Schematic"]
+    assert schematic.visible and not schematic.disabled
+    assert not guides.visible
     assert checkbox("Cumulative").active == []
     assert not checkbox("Bar chart").disabled
     mode.value = "physical"
     assert checkbox("Bar chart").disabled and checkbox("Guides").visible
+    assert schematic.visible and schematic.disabled
+    schematic.active = []
+    assert guides.active == [0]
     assert not text_contains("Physical mode shows boundary guides")
     checkbox("Realizations").active = [0]
     layout = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")

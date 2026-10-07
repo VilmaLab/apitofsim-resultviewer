@@ -58,9 +58,7 @@ def _details(realization, events, selected_event, pathways):
             f"r={event['radial']:.6g} m"
         )
         if event["pathway_id"] is not None:
-            fields += (
-                f" · pathway #{event['pathway_id']} ({event['pathway'] or 'unknown'})"
-            )
+            fields += f" · {event['pathway'] or 'Unknown pathway'}"
         rows.append(
             f'<button class="explorer-event" data-event="{event["id"]}" id="event-{event["id"]}" '
             f'style="display:block;width:100%;text-align:left;padding:8px;'
@@ -69,7 +67,7 @@ def _details(realization, events, selected_event, pathways):
         )
     return (
         f"<h3>Realization #{member['id']}</h3><p>Result #{member['experiment_result_id']}<br>"
-        f"Fate: {escape(member['fate'])}</p><button id='clear-selection'>Clear selection</button>"
+        f"Pathway: {escape(member['fate'])}</p><button id='clear-selection'>Clear selection</button>"
         + "".join(rows)
     )
 
@@ -365,8 +363,6 @@ def build_document(db, doc, experiment: int, cluster: int):
         return
 
     fate_names = realizations["fate"].unique().sort().to_list()
-    if not fate_names:
-        fate_names = ["Escaped"]
     state = {
         "selected": None,
         "event": None,
@@ -378,7 +374,21 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     counts = Div(styles={"white-space": "nowrap"})
     quality = Div()
-    fate = CheckboxGroup(labels=fate_names, active=list(range(len(fate_names))))
+    fate = CheckboxGroup(
+        labels=fate_names,
+        active=list(range(len(fate_names))),
+        sizing_mode="stretch_width",
+        stylesheets=[
+            InlineStyleSheet(
+                css="""
+                    .bk-input-group { white-space: normal; }
+                    label { display: flex; align-items: baseline; width: 100%; }
+                    input { flex-shrink: 0; }
+                    span { min-width: 0; overflow-wrap: anywhere; }
+                """
+            )
+        ],
+    )
 
     def checkbox(label, checked=False):
         return CheckboxGroup(labels=[label], active=[0] if checked else [])
@@ -386,7 +396,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     def enabled(widget):
         return bool(widget.active)
 
-    fate_facets = checkbox("Facet fates")
+    fate_facets = checkbox("Facet pathways")
     event_types = CheckboxGroup(
         labels=[v.title() for v in EVENT_TYPES], active=[0, 1, 2]
     )
@@ -719,7 +729,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                     if name in {fate_names[i] for i in fate.active}
                 ]
                 if enabled(fate_facets)
-                else [(chosen, "All selected fates")]
+                else [(chosen, "All selected pathways")]
             )
             max_position = positioned["position"].max()
             if spatial:
@@ -844,7 +854,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                 panels.insert(
                     0,
                     Div(
-                        text="<p>No realizations in this cohort. Adjust the range or fate filters.</p>"
+                        text="<p>No realizations in this cohort. Adjust the range or pathway filters.</p>"
                     ),
                 )
             hidden = (

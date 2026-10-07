@@ -39,10 +39,11 @@ def cohort(ids, *events, boundaries=BOUNDARIES):
         {"id": ids, "experiment_result_id": [10] * len(ids)},
         schema={"id": pl.Int64, "experiment_result_id": pl.Int64},
     )
+    pathways = pl.DataFrame({"pathway_id": [7], "pathway": ["Parent → A + B"]})
     return (
-        data.classify(realizations, events),
+        data.classify(realizations, events, pathways, "Parent"),
         events,
-        pl.DataFrame(schema={"pathway_id": pl.Int64, "pathway": pl.String}),
+        pathways,
         regions,
     )
 
@@ -59,9 +60,9 @@ def test_fates_coordinates_and_aggregate():
         event(7, "escape", 5, 3, 5),
     )
     assert realizations["fate"].to_list() == [
-        "Pathway 7",
-        "Pathway 7",
-        "Escaped",
+        "Parent → A + B",
+        "Parent → A + B",
+        "Parent → Parent",
         "Incomplete",
         "Ambiguous",
     ]
@@ -106,7 +107,7 @@ def test_fates_coordinates_and_aggregate():
         ([event(1, "collision", 1, 1, 1)], "Incomplete", None),
         ([event(1, "fragmentation", 1, 1, 1)], "Incomplete", None),
         ([event(1, "fragmentation", 1, 1, 6, 7)], "Incomplete", None),
-        ([event(1, "escape", 1, 1, 6)], "Escaped", 1),
+        ([event(1, "escape", 1, 1, 6)], "Parent → Parent", 1),
         (
             [event(1, "escape", 1, 1, 5), event(2, "collision", 1, 2, 4)],
             "Incomplete",
@@ -127,7 +128,7 @@ def test_fates_coordinates_and_aggregate():
         ),
         (
             [event(2, "fragmentation", 1, 1, 5, 7), event(1, "collision", 1, 1, 5)],
-            "Pathway 7",
+            "Parent → A + B",
             2,
         ),
         (
@@ -242,7 +243,9 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
         conn.execute(
             f"create table {kind}_event(id int, realization_id int, postime struct(x float,y float,z float,t float){suffix})"
         )
-    conn.execute("insert into cluster values (2,'A'),(3,'B')")
+    conn.execute(
+        "insert into cluster values (1,'5A_5SA_negative'),(2,'4A_5SA_negative'),(3,'1A_neutral')"
+    )
     conn.execute("insert into pathway values (7,1,2,3)")
     conn.execute("insert into multi_pathway_experiment_result values (10,1,1),(11,2,1)")
     conn.execute("insert into single_pathway_experiment_result values (12,1,7)")
@@ -281,12 +284,15 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
     db = SimpleNamespace(db=conn)
     realizations, events, pathways, regions = data.load_data(db, 1, 1)
     assert realizations["id"].to_list() == [100, 102]
-    assert realizations["fate"].to_list() == ["Pathway 7", "Escaped"]
+    assert realizations["fate"].to_list() == [
+        "5A_5SA_negative → 4A_5SA_negative + 1A_neutral",
+        "5A_5SA_negative → 5A_5SA_negative",
+    ]
     assert events["id"].to_list() == [501, 502, 503]
     assert events.filter(pl.col("id") == 502)["pathway_id"][0] == 7
     assert pathways.to_dict(as_series=False) == {
         "pathway_id": [7],
-        "pathway": ["A + B"],
+        "pathway": ["5A_5SA_negative → 4A_5SA_negative + 1A_neutral"],
     }
     assert events["z_clamped"].sum() == (2 if negative_z else 0)
     if negative_z:
@@ -386,7 +392,7 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     )
     frames = (
         *frames[:2],
-        pl.DataFrame({"pathway_id": [7], "pathway": ["A < B + C"]}),
+        pl.DataFrame({"pathway_id": [7], "pathway": ["Parent → A < B + C"]}),
         frames[3],
     )
     loads = []
@@ -417,12 +423,15 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
         for g in doc.select({"type": GroupBox})
         if g.title == "Pathways"
     )
+    assert set(fates.labels) == {"Parent → A + B", "Parent → Parent", "Incomplete"}
     source = next(
         s for s in doc.select({"type": ColumnDataSource}) if s.data.get("id") == [2]
     )
     source.selected.indices = [0]
     assert text_contains("Realization #1")
-    assert text_contains("A &lt; B + C")
+    assert text_contains("Pathway: Parent → A + B")
+    assert text_contains("Parent → A &lt; B + C")
+    assert not text_contains("pathway #7")
     details = next(d for d in doc.select({"type": Div}) if "Realization #1" in d.text)
     assert "background:#fde68a" in details.text
     assert any(
@@ -448,9 +457,9 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert not text_contains("Selected hidden event #1")
     checkbox("CDF").active = [0]
     checkbox("Regional bars").active = [0]
-    checkbox("Facet fates").active = [0]
+    checkbox("Facet pathways").active = [0]
     assert {p.title.text for p in plots() if p.title} >= set(fates.labels)
-    fates.active = [fates.labels.index("Escaped")]
+    fates.active = [fates.labels.index("Parent → Parent")]
     assert text_contains("1 selected / 3 total realizations")
     assert not text_contains("Realization #1")
     assert text_contains("Click an event")
@@ -458,11 +467,11 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     slider = next(iter(doc.select({"type": RangeSlider})))
     slider.value = (2, 3)
     assert text_contains("2 selected / 3 total realizations")
-    fates.active = [fates.labels.index("Pathway 7")]
+    fates.active = [fates.labels.index("Parent → A + B")]
     assert text_contains("No realizations in this cohort")
     slider.value = (1, 3)
     fates.active = list(range(len(fates.labels)))
-    checkbox("Facet fates").active = []
+    checkbox("Facet pathways").active = []
     mode = next(w for w in doc.select({"type": Select}) if w.title == "X coordinate")
     checkbox("Realizations").active = []
     checkbox("CDF").active = []

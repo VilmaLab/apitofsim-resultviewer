@@ -438,8 +438,9 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert controls[1].child.children[1].labels == ["Guides"]
     assert controls[2].child.children[0].labels == ["Schematic"]
     assert controls[2].child.children[1].title == "Views"
-    assert controls[3].child.children[0].labels == ["Group fragmentations"]
-    assert [g.title for g in controls[3].child.children[1:]] == ["Events", "Y-axis"]
+    assert controls[3].child.children[0].labels == ["Use x markers"]
+    assert controls[3].child.children[1].labels == ["Group fragmentations"]
+    assert [g.title for g in controls[3].child.children[2:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
 

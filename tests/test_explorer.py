@@ -68,16 +68,16 @@ def test_fates_coordinates_and_aggregate():
     ]
     assert realizations["terminal_event_id"].to_list() == [2, 3, 4, None, None]
     mapping = data.coordinate_regions(regions, "schematic")
-    assert mapping["left"].to_list() == [0, 2, 3, 4, 7]
-    assert mapping["right"].to_list() == [2, 3, 4, 7, 9]
+    assert mapping["left"].to_list() == [0, 3, 6, 7, 8]
+    assert mapping["right"].to_list() == [3, 6, 7, 8, 9]
     positioned = data.position_events(events, mapping, "schematic")
-    assert positioned.filter(pl.col("id") == 2)["position"][0] == 3
+    assert positioned.filter(pl.col("id") == 2)["position"][0] == 6
     assert (
         positioned.filter(pl.col("id") == 4)["position"][0]
         == sum(data.escape_slot(mapping)) / 2
     )
     cdf, bars, escaped, unresolved = data.aggregate(realizations, positioned, mapping)
-    assert cdf.to_dict(as_series=False) == {"position": [3, 3], "fraction": [0, 0.4]}
+    assert cdf.to_dict(as_series=False) == {"position": [6, 6], "fraction": [0, 0.4]}
     assert bars["fraction"].to_list() == [0, 0, 0.4, 0, 0, 0.2]
     assert (escaped, unresolved) == (1, 2)
     cdf, bars, escaped, unresolved = data.aggregate(
@@ -150,7 +150,7 @@ def test_terminal_histories(history, fate, terminal):
     [
         ("physical", [0, 1000, 2000, 5000, 6000, 5000]),
         ("equal", [0, 1, 2, 5, 6, 5.325]),
-        ("schematic", [0, 2, 3, 9, 11, 9.65]),
+        ("schematic", [0, 3, 6, 9, 10, 9.325]),
         ("time", [0, 1, 2, 3, 4, 5]),
     ],
 )
@@ -365,8 +365,29 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         for d in doc.select({"type": plot.Div})
     )
     x_mode = next(s for s in doc.select({"type": Select}) if s.title == "X coordinate")
+    assert x_mode.options[:2] == [
+        ("schematic", "Equal chambers"),
+        ("equal", "Equal zones"),
+    ]
+    from bokeh.plotting import figure
+
     for value in ("equal", "physical", "time", "schematic"):
         x_mode.value = value
+        if value in ("equal", "schematic"):
+            regions = data.coordinate_regions(frames[3], value)
+            widths = regions["right"] - regions["left"]
+            if value == "schematic":
+                assert widths[0] == widths[1] == widths[2:].sum()
+            centers = ((regions["left"] + regions["right"]) / 2).to_list()
+            for p in doc.select({"type": type(figure())}):
+                if p.xaxis[0].visible:
+                    assert p.xaxis[0].axis_label == "Zone"
+                    assert p.xaxis[0].ticker.ticks == centers
+                    assert p.xaxis[0].major_label_overrides == dict(
+                        zip(centers, ["1", "2", "3", "4", "5"], strict=True)
+                    )
+                    assert p.xgrid[0].ticker.ticks == regions["right"].to_list()
+                    assert p.xgrid[0].grid_line_alpha == 0.3
     for toggle in doc.select({"type": CheckboxGroup}):
         if toggle.labels and toggle.labels[0] in (
             "CDF",

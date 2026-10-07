@@ -1,6 +1,7 @@
 """Bokeh presentation and interaction for the realization Explorer."""
 
 from html import escape
+from textwrap import fill
 
 import polars as pl
 from bokeh.events import DocumentReady
@@ -12,6 +13,7 @@ from bokeh.models import (
     CustomAction,
     CustomJS,
     Div,
+    FixedTicker,
     GroupBox,
     HoverTool,
     InlineStyleSheet,
@@ -88,6 +90,7 @@ def _schematic_plot(regions, shared_x, available_width):
     diagram.y_range = Range1d(0, 1)
     diagram.yaxis.visible = False
     diagram.xaxis.visible = False
+    diagram.grid.visible = False
     source = _source(
         regions.select("left", "right", "name").with_columns(
             pl.Series("color", ["#dbeafe", "#e2e8f0", "#dbeafe", "#e2e8f0", "#dbeafe"])
@@ -102,12 +105,14 @@ def _schematic_plot(regions, shared_x, available_width):
         fill_color="color",
         line_color="#64748b",
     )
-    diagram.add_tools(HoverTool(renderers=[glyph], tooltips=[("Region", "@name")]))
+    diagram.add_tools(HoverTool(renderers=[glyph], tooltips=[("Zone", "@name")]))
     for index, name, lo, hi in regions.select(
         "region", "name", "left", "right"
     ).iter_rows():
         display_name = (
-            ("C1", "Sk", "Gap", "Quad", "C2")[index] if available_width < 600 else name
+            ("C1", "Sk", "C2 (before Quad)", "Quad", "C2 (after Quad)")[index]
+            if available_width < 600
+            else fill(name, width=16)
         )
         diagram.add_layout(
             Label(
@@ -115,6 +120,7 @@ def _schematic_plot(regions, shared_x, available_width):
                 y=0.5,
                 text=display_name,
                 text_align="center",
+                text_baseline="middle",
                 text_font_size="9px",
             )
         )
@@ -124,6 +130,8 @@ def _schematic_plot(regions, shared_x, available_width):
             y=0.5,
             text="Esc" if available_width < 600 else "Escaped",
             text_align="center",
+            text_baseline="middle",
+            text_font_size="9px",
         )
     )
     return diagram
@@ -463,8 +471,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         title="X coordinate",
         value="schematic",
         options=[
-            ("schematic", "Schematic"),
-            ("equal", "Equal regions"),
+            ("schematic", "Equal chambers"),
+            ("equal", "Equal zones"),
             ("physical", "Axial distance (mm)"),
             ("time", "Elapsed time (s)"),
         ],
@@ -760,7 +768,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                 restrictions.text = (
                     ""
                     if regional
-                    else "Regional bars require schematic or equal regions. Physical mode shows boundary guides."
+                    else "Regional bars require equal chambers or equal zones. Physical mode shows boundary guides."
                 )
             else:
                 restrictions.text = (
@@ -900,6 +908,25 @@ def build_document(db, doc, experiment: int, cluster: int):
                             _bar_plot(bars, row_name, members.height, shared_x)
                         )
                 for plot in plots:
+                    if regional:
+                        centers = [
+                            (lo + hi) / 2
+                            for lo, hi in mapped_regions.select(
+                                "left", "right"
+                            ).iter_rows()
+                        ]
+                        plot.xaxis.ticker = FixedTicker(ticks=centers)
+                        plot.xaxis.major_label_overrides = {
+                            center: str(index)
+                            for index, center in enumerate(centers, start=1)
+                        }
+                        plot.xaxis.major_tick_line_color = None
+                        plot.xaxis.minor_tick_line_color = None
+                        plot.xgrid.ticker = FixedTicker(
+                            ticks=mapped_regions["right"].to_list()
+                        )
+                        plot.xgrid.grid_line_color = "#94a3b8"
+                        plot.xgrid.grid_line_alpha = 0.3
                     prepare_toolbar(plot)
                 panels.extend(plots)
                 axis_figures.extend(plots)
@@ -911,9 +938,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                     if not spatial
                     else "Axial distance (mm)"
                     if mode.value == "physical"
-                    else "Axial distance (schematic)"
-                    if mode.value == "schematic"
-                    else "Axial distance (equal regions)"
+                    else "Zone"
                 )
             if chosen.is_empty():
                 panels.insert(

@@ -238,6 +238,7 @@ def _event_plot(
     shared_x,
     height,
     layout,
+    use_x_markers,
     regions,
     physical_guides,
     show_envelope,
@@ -297,10 +298,14 @@ def _event_plot(
             "x",
             "y",
             source=source,
-            marker="circle" if layout == "beeswarm" else "x",
-            size=10,
+            marker="circle"
+            if layout == "beeswarm"
+            else "x"
+            if use_x_markers
+            else "dot",
+            size=10 if layout == "beeswarm" else 6,
             color=color,
-            line_width=0 if layout == "beeswarm" else 1.5,
+            line_width=0 if layout == "beeswarm" else 1,
         )
         swarm_glyphs.append(glyph)
         plot.add_tools(
@@ -578,6 +583,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     schematic = checkbox("Schematic", True)
     guides = checkbox("Guides", True)
     show_events = checkbox("Realizations", True)
+    x_markers = checkbox("Use x markers", True)
     show_cdf = checkbox("Cumulative")
     show_bars = checkbox("Bar chart")
     show_pager = checkbox("Realizations pager")
@@ -628,6 +634,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         group(
             "Realizations",
             column(
+                x_markers,
                 group_fragmentations,
                 group("Events", event_controls),
                 group("Y-axis", column(layout, envelope, spacing=4)),
@@ -930,7 +937,9 @@ def build_document(db, doc, experiment: int, cluster: int):
             schematic.disabled = not regional
             guides.visible = mode.value == "physical"
             envelope.visible = layout.value == "beeswarm"
-            marker = "●" if layout.value == "beeswarm" else "×"
+            x_markers.disabled = layout.value == "beeswarm"
+            use_x_markers = enabled(x_markers) and not x_markers.disabled
+            marker = "×" if use_x_markers else "●"
             for kind, color in event_colors.items():
                 event_options[kind].stylesheets[0].css = (
                     f'label::before {{ content: "{marker}"; color: {color}; '
@@ -1037,6 +1046,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                             shared_x,
                             plot_height,
                             layout.value,
+                            use_x_markers,
                             mapped_regions,
                             enabled(guides) and mode.value == "physical",
                             enabled(envelope) and layout.value == "beeswarm",
@@ -1166,6 +1176,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         (schematic, "active"),
         (guides, "active"),
         (show_events, "active"),
+        (x_markers, "active"),
         (show_bars, "active"),
         (selector, "value"),
     ]:

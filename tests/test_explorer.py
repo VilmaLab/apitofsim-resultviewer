@@ -674,3 +674,101 @@ def test_unavailable_document(monkeypatch):
     doc = Document()
     build_document(None, doc, 1, 1)
     assert doc.roots[0].text == "Explorer data unavailable: Missing &lt;events&gt;"
+
+
+@pytest.mark.parametrize("mode", ["schematic", "equal", "physical", "time"])
+def test_cumulative_pathway_areas(monkeypatch, mode):
+    from bokeh.document import Document
+    from bokeh.models import CheckboxGroup, GroupBox, Select
+
+    frames = cohort(
+        [1, 2, 3, 4],
+        event(1, "fragmentation", 1, 1, 2, 7),
+        event(2, "fragmentation", 2, 1, 2, 7),
+        event(3, "escape", 3, 2, 6),
+        event(4, "collision", 4, 1, 1),
+    )
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    controls = list(doc.select({"type": CheckboxGroup}))
+    next(w for w in controls if w.labels == ["Cumulative"]).active = [0]
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "X coordinate"
+    ).value = mode
+    fates = next(
+        g.child.children[0]
+        for g in doc.select({"type": GroupBox})
+        if g.title == "Pathways"
+    )
+    colors = {
+        name: plot.PATHWAY_COLORS[i % len(plot.PATHWAY_COLORS)]
+        for i, name in enumerate(fates.labels)
+    }
+    assert set(colors.values()).isdisjoint(plot.COLORS.values())
+    for color in colors.values():
+        assert f"background: {color}" in fates.stylesheets[0].css
+
+    cumulative = next(p for p in doc.select({"type": plot.figure}) if p.name == "cdf")
+    assert not cumulative.legend
+    assert len(cumulative.renderers) == 2
+    fragmented, escaped = cumulative.renderers
+    assert (
+        fragmented.glyph.__class__.__name__
+        == escaped.glyph.__class__.__name__
+        == "VArea"
+    )
+    first, second = fragmented.data_source.data, escaped.data_source.data
+    assert first["position"] == second["position"]
+    endpoint = data.coordinate_regions(frames[3], mode)["right"][-1]
+    escape_position = 2 if mode == "time" else endpoint
+    assert second["position"][3:5] == [escape_position] * 2
+    event_plot = next(
+        p for p in doc.select({"type": plot.figure}) if p.name == "events"
+    )
+    escape_source = next(
+        r.data_source
+        for r in event_plot.renderers
+        if r.data_source.data.get("id") == [3]
+    )
+    assert escape_source.data["x"] == [
+        2
+        if mode == "time"
+        else 6000
+        if mode == "physical"
+        else sum(data.escape_slot(data.coordinate_regions(frames[3], mode))) / 2
+    ]
+    # Tied fragmentations form one vertical jump; unresolved histories stay out.
+    assert first["fraction"] == [0, 0, 0.5, 0.5, 0.5, 0.5]
+    assert second["fraction"] == [0, 0, 0, 0, 0.25, 0.25]
+    assert first["bottom"] == [0] * 6
+    assert second["bottom"] == first["top"]
+    assert second["top"][-1] == 0.75
+    assert fragmented.glyph.fill_color == colors["Parent → A + B"]
+    assert escaped.glyph.fill_color == colors["Parent → Parent"]
+
+    next(w for w in controls if w.labels == ["Realizations"]).active = []
+    next(w for w in controls if w.labels == ["Facet pathways"]).active = [0]
+    facets = [p for p in doc.select({"type": plot.figure}) if p.name == "cdf"]
+    assert len(facets) == 3
+    for facet in facets:
+        if "Incomplete" in facet.title.text:
+            assert not facet.renderers
+        else:
+            assert len(facet.renderers) == 1
+            area = facet.renderers[0]
+            assert area.data_source.data["top"][-1] == 1
+            assert not any(area.data_source.data["bottom"])
+            name = facet.title.text.split(" (N=")[0]
+            assert area.glyph.fill_color == colors[name]
+            if name == "Parent → Parent":
+                assert area.data_source.data["position"][1:3] == [escape_position] * 2
+
+    next(w for w in controls if w.labels == ["Facet pathways"]).active = []
+    fates.active = [fates.labels.index("Parent → Parent")]
+    cumulative = next(p for p in doc.select({"type": plot.figure}) if p.name == "cdf")
+    assert cumulative.renderers[0].glyph.fill_color == colors["Parent → Parent"]
+    assert cumulative.renderers[0].data_source.data["top"][-1] == 1
+    fates.active = []
+    assert not any(p.name == "cdf" for p in doc.select({"type": plot.figure}))
+    assert doc.to_json() is not None

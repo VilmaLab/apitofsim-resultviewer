@@ -75,8 +75,10 @@ def load_data(db, experiment: int, cluster: int):
     ).pl()
     pathways = connection.execute(
         """
-        select p.id as pathway_id, a.common_name || ' + ' || b.common_name as pathway
+        select p.id as pathway_id, c.common_name || ' → ' ||
+               a.common_name || ' + ' || b.common_name as pathway
         from pathway p
+        join cluster c on c.id = p.cluster_id
         join cluster a on a.id = p.product1_id
         join cluster b on b.id = p.product2_id
         where p.cluster_id = ?
@@ -90,7 +92,15 @@ def load_data(db, experiment: int, cluster: int):
         )
     )
     events = preprocess_events(events, regions)
-    return classify(realizations, events), events, pathways, regions
+    cluster_name = connection.execute(
+        "select common_name from cluster where id = ?", (cluster,)
+    ).fetchone()[0]
+    return (
+        classify(realizations, events, pathways, cluster_name),
+        events,
+        pathways,
+        regions,
+    )
 
 
 def preprocess_events(events, regions):
@@ -108,7 +118,7 @@ def preprocess_events(events, regions):
     ).sort("realization_id", "t", "id")
 
 
-def classify(realizations, events):
+def classify(realizations, events, pathways, cluster_name):
     """Accept exactly one terminal event, which must also be the last event."""
     terminal = pl.col("type").is_in(["fragmentation", "escape"])
     histories = events.group_by("realization_id").agg(
@@ -130,13 +140,14 @@ def classify(realizations, events):
         realizations.join(
             histories, left_on="id", right_on="realization_id", how="left"
         )
+        .join(pathways, left_on="last_pathway", right_on="pathway_id", how="left")
         .with_columns(
             pl.when(pl.col("terminal_count") > 1)
             .then(pl.lit("Ambiguous"))
             .when(valid & (pl.col("last_type") == "escape"))
-            .then(pl.lit("Escaped"))
+            .then(pl.lit(f"{cluster_name} → {cluster_name}"))
             .when(valid)
-            .then(pl.concat_str(pl.lit("Pathway "), pl.col("last_pathway")))
+            .then(pl.col("pathway").fill_null("Unknown pathway"))
             .otherwise(pl.lit("Incomplete"))
             .alias("fate"),
             pl.when(valid).then(pl.col("last_id")).alias("terminal_event_id"),
@@ -270,7 +281,7 @@ def aggregate(realizations, events, regions):
         events, left_on="terminal_event_id", right_on="id", how="inner"
     )
     fragmented = terminals.filter(pl.col("type") == "fragmentation")
-    escaped = realizations.filter(pl.col("fate") == "Escaped").height
+    escaped = terminals.filter(pl.col("type") == "escape").height
     unresolved = n - fragmented.height - escaped
     counts = (
         fragmented.group_by("position")

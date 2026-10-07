@@ -52,6 +52,7 @@ class Event:
     y: float
     z: float
     pathway_id: int | None = None
+    z_clamped: bool = False
 
     @property
     def radial(self):
@@ -143,8 +144,9 @@ def load_cohort(db, experiment: int, cluster: int) -> Cohort:
                         float(pos["t"]),
                         float(pos["x"]),
                         float(pos["y"]),
-                        float(pos["z"]),
+                        max(float(pos["z"]), 0.0),
                         int(pathway_id) if pathway_id is not None else None,
+                        pos["z"] < 0,
                     )
                 )
     for realization in realizations:
@@ -161,10 +163,10 @@ def load_cohort(db, experiment: int, cluster: int) -> Cohort:
     pathways = {int(pid): f"{first} + {second}" for pid, first, second in pathway_rows}
     # ConfigFile's length order is L0, L1, L2, L3, Lsk. This order follows
     # the machine: first chamber, skimmer, gap, quadrupole, second chamber.
-    from apitofsim.plotting.events import get_geometery, lengths_to_cumulative_lengths
+    from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_lengths
 
     boundaries = tuple(
-        float(v) for v in lengths_to_cumulative_lengths(get_geometery(db, experiment))
+        float(v) for v in lengths_to_cumulative_lengths(get_geometry(db, experiment))
     )
     for realization in realizations:
         if (
@@ -415,7 +417,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         )
 
     left_controls = column(
-        group("Fates", column(fate, fate_facets, spacing=4)),
+        group("Pathways", column(fate, fate_facets, spacing=4)),
         group("Events", column(event_types, spacing=4)),
         group("X axis", column(mode, schematic, restrictions, spacing=4)),
         group("Layout", column(layout, violin, spacing=4)),
@@ -627,11 +629,19 @@ def build_document(db, doc, experiment: int, cluster: int):
             details.text = _details(selected, state["event"], cohort.pathways)
             counts.text = f"<b>{len(chosen)} selected / {total} total realizations</b>"
             incomplete = sum(r.fate in ("Incomplete", "Ambiguous") for r in chosen)
-            quality.text = (
-                f"<span style='color:#a21caf'>{incomplete} incomplete or ambiguous histories; "
-                "unresolved outcomes are not counted as escaped.</span>"
-                if incomplete
-                else ""
+            clamped = sum(e.z_clamped for r in chosen for e in r.events)
+            quality.text = "<br>".join(
+                message
+                for message in (
+                    f"{clamped} events with negative z position have been clamped to 0"
+                    if clamped
+                    else "",
+                    f"<span style='color:#a21caf'>{incomplete} incomplete or ambiguous histories; "
+                    "unresolved outcomes are not counted as escaped.</span>"
+                    if incomplete
+                    else "",
+                )
+                if message
             )
             active_types = {EVENT_TYPES[i] for i in event_types.active}
             coordinates = Coordinates(cohort.boundaries, mode.value)

@@ -18,7 +18,7 @@ The builds are not code-signed, so:
   ```
 
 - **Windows**: SmartScreen shows "Windows protected your PC". Choose
-  *More info* → *Run anyway*.
+  _More info_ → _Run anyway_.
 
 On Windows and macOS the viewer opens in its own window. On Linux it starts a
 local server and opens your usual browser, because the native window there
@@ -42,13 +42,13 @@ apitofresview
 
 ### Options
 
-| Option | Effect |
-| --- | --- |
+| Option            | Effect                                           |
+| ----------------- | ------------------------------------------------ |
 | `--database PATH` | Experiment database path (overrides `$DATABASE`) |
-| `--port N` | Serve on a fixed port instead of a free one |
-| `--no-window` | Serve only; don't open a window or a browser |
-| `--no-browser` | Don't open a browser |
-| `--debug` | Show tracebacks in the browser |
+| `--port N`        | Serve on a fixed port instead of a free one      |
+| `--no-window`     | Serve only; don't open a window or a browser     |
+| `--no-browser`    | Don't open a browser                             |
+| `--debug`         | Show tracebacks in the browser                   |
 
 ## Developing
 
@@ -60,6 +60,42 @@ uv run apitofresview --database /path/to/experiments.duckdb
 
 `DATABASE=/path/to/experiments.duckdb uv run uvicorn apitofresview.webapp:create_app --factory` also works if you
 want a plain ASGI server.
+
+### Using a development copy of apitofsim
+
+Check out apitofsim as a sibling directory of apitofsim-resultviewer. From the
+apitofsim-resultviewer directory, run:
+
+```bash
+./install_dev.sh
+```
+
+This creates `.venv-local` from the release lockfile, installs Meson build
+tools, and installs the sibling apitofsim checkout as an editable package
+explicitly into `.venv-local/bin/python`. Building apitofsim also requires a
+C++ toolchain and its native dependencies, including TBB >=2023.0 and
+Eigen >=3.4.
+
+Set `UV_NO_SYNC=1 UV_PROJECT_ENVIRONMENT=.venv-local` when running development
+commands. Disabling sync preserves the editable install instead of restoring
+the pinned release wheel.
+
+```bash
+UV_NO_SYNC=1 UV_PROJECT_ENVIRONMENT=.venv-local uv run apitofresview \
+  --database /path/to/experiments.duckdb
+```
+
+To check the selected interpreter and simulator installation without importing
+or rebuilding apitofsim:
+
+```bash
+UV_NO_SYNC=1 UV_PROJECT_ENVIRONMENT=.venv-local uv run python -c \
+  'import sys, importlib.metadata as m; print(sys.executable); print(m.distribution("apitofsim").read_text("direct_url.json"))'
+```
+
+The output should show `.venv-local/bin/python`, the sibling apitofsim
+checkout, and `"editable": true`. To switch back to the pinned release, drop
+`UV_NO_SYNC` and `UV_PROJECT_ENVIRONMENT` (or remove `.venv-local`).
 
 ### Frontend assets
 

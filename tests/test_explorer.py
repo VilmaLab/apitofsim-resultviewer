@@ -479,7 +479,6 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         "Views",
         "Elements",
         "Realizations",
-        "Selected realization",
     }
     assert all(p.toolbar.logo is None for p in plots)
     assert any(a.icon == "fullscreen" for a in doc.select({"type": CustomAction}))
@@ -551,11 +550,22 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     )
     source.selected.indices = [0]
     assert text_contains("Realization #1")
-    assert text_contains("Pathway: Parent → A + B")
-    assert text_contains("Parent → A &lt; B + C")
+    assert text_contains("<em>Parent → A + B</em>")
+    assert not text_contains("Pathway:")
+    assert not text_contains("Parent → A &lt; B + C")
     assert not text_contains("pathway #7")
     details = next(d for d in doc.select({"type": Div}) if "Realization #1" in d.text)
+    assert details.text.startswith("<button id='clear-selection'>")
     assert "background:#fde68a" in details.text
+    assert "<th>Time (ns)</th>" in details.text
+    assert "<th>Axial dist. (mm)</th>" in details.text
+    assert "<th>Radial dist. (mm)</th>" in details.text
+    radial = checkbox("Use axial/radial distances")
+    assert radial.visible and radial.active == [0]
+    radial.active = []
+    assert all(f"<th>{axis} (mm)</th>" in details.text for axis in ("x", "y", "z"))
+    assert "Axial dist." not in details.text and "Radial dist." not in details.text
+    radial.active = [0]
     assert any(
         r.glyph.line_color == "#f59e0b"
         for p in plots()
@@ -564,15 +574,9 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     )
     bridge = doc.roots[0].children[1]
     bridge.text = "1"
-    assert (
-        'id="event-1" style="display:block;width:100%;text-align:left;padding:8px;background:#fde68a'
-        in details.text
-    )
+    assert 'id="event-1" style="background:#fde68a' in details.text
     bridge.text = "999"
-    assert (
-        'id="event-1" style="display:block;width:100%;text-align:left;padding:8px;background:#fde68a'
-        in details.text
-    )
+    assert 'id="event-1" style="background:#fde68a' in details.text
     checkbox("Collision").active = []
     assert text_contains("Selected hidden event #1")
     checkbox("Collision").active = [0]
@@ -605,7 +609,8 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     fates.active = [fates.labels.index("Parent → Parent")]
     assert text_contains("1 selected / 3 total realizations")
     assert not text_contains("Realization #1")
-    assert text_contains("Click an event")
+    assert text_contains("<em>Click an event to inspect its realization.</em>")
+    assert not radial.visible
     fates.active = list(range(len(fates.labels)))
     slider = next(iter(doc.select({"type": RangeSlider})))
     pager = checkbox("Realizations pager")
@@ -992,3 +997,17 @@ def test_categorical_pathway_palette():
     assert pathway_colors <= set(plot.Category20[20])
     assert pathway_colors.isdisjoint({"#1f77b4", "#aec7e8", "#2ca02c", "#98df8a"})
     assert plot._pathway_colors(names[:2], "Survival")[names[1]] == colors[names[1]]
+
+
+def test_details_use_cohort_number_and_convert_units():
+    realizations, events, _, _ = cohort(
+        [16052], event(42, "collision", 16052, 2e-9, 0.003)
+    )
+    selected = realizations.with_row_index("realization_number", offset=1)
+    details = plot._details(selected, events, 42)
+    assert "Realization #1</h3>" in details
+    assert "Realization #16052" not in details
+    assert "Result #" not in details and "disabled" not in details
+    assert "<td>2</td><td>3</td><td>5000</td>" in details
+    cartesian = plot._details(selected, events, 42, radial=False)
+    assert "<td>2</td><td>3000</td><td>4000</td><td>3</td>" in cartesian

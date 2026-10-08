@@ -75,31 +75,40 @@ def _source(frame):
     return ColumnDataSource(frame.to_dict(as_series=False))
 
 
-def _details(realization, events, selected_event, pathways):
+def _details(realization, events, selected_event, radial=True):
     if realization.is_empty():
-        return "<p>Click an event to inspect its realization.</p>"
+        return "<p><em>Click an event to inspect its realization.</em></p>"
     member = realization.row(0, named=True)
+    headings = ["Type", "Time (ns)"] + (
+        ["Axial dist. (mm)", "Radial dist. (mm)"]
+        if radial
+        else ["x (mm)", "y (mm)", "z (mm)"]
+    )
     rows = []
-    history = events.join(pathways, on="pathway_id", how="left", maintain_order="left")
-    for event in history.iter_rows(named=True):
-        fields = (
-            f"Event #{event['id']} · {event['type']} · t={event['t']:.6g} s · "
-            f"x={event['x'] * 1000:.6g} mm · y={event['y'] * 1000:.6g} mm · "
-            f"Axial distance={event['z'] * 1000:.6g} mm · "
-            f"Radial distance={event['radial'] * 1000:.6g} mm"
+    for event in events.iter_rows(named=True):
+        kind = escape(event["type"])
+        coordinates = (
+            [event["z"], event["radial"]]
+            if radial
+            else [event[axis] for axis in ("x", "y", "z")]
         )
-        if event["pathway_id"] is not None:
-            fields += f" · {event['pathway'] or 'Unknown pathway'}"
+        values = [event["t"] * 1e9, *(value * 1000 for value in coordinates)]
         rows.append(
-            f'<button class="explorer-event" data-event="{event["id"]}" id="event-{event["id"]}" '
-            f'style="display:block;width:100%;text-align:left;padding:8px;'
-            f'background:{"#fde68a" if event["id"] == selected_event else "white"};border-bottom:1px solid #ddd">'
-            f"{escape(fields)}</button>"
+            f'<tr class="explorer-event" data-event="{event["id"]}" id="event-{event["id"]}" '
+            f'style="background:{"#fde68a" if event["id"] == selected_event else "white"}">'
+            f'<td><button type="button" aria-label="Inspect event #{event["id"]}">{kind}</button></td>'
+            + "".join(f"<td>{value:.6g}</td>" for value in values)
+            + "</tr>"
         )
     return (
-        f"<h3>Realization #{member['id']}</h3><p>Result #{member['experiment_result_id']}<br>"
-        f"Pathway: {escape(member['fate'])}</p><button id='clear-selection'>Clear selection</button>"
+        "<button id='clear-selection'>Clear selection</button>"
+        f"<h3>Realization #{member['realization_number']}</h3>"
+        f"<p><em>{escape(member['fate'])}</em></p>"
+        '<div style="overflow-x:auto"><table><thead><tr>'
+        + "".join(f"<th>{heading}</th>" for heading in headings)
+        + "</tr></thead><tbody>"
         + "".join(rows)
+        + "</tbody></table></div>"
     )
 
 
@@ -611,9 +620,27 @@ def build_document(db, doc, experiment: int, cluster: int):
         visible=False,
     )
     details = Div(
-        text=_details(realizations.head(0), events.head(0), None, pathways),
+        text=_details(realizations.head(0), events.head(0), None),
         sizing_mode="stretch_width",
+        stylesheets=[
+            InlineStyleSheet(
+                css="""
+                :host { color: #1f2937; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { padding: 6px 4px; border-bottom: 1px solid #ddd; }
+                th { text-align: left; }
+                td:not(:first-child) { text-align: right; white-space: nowrap; }
+                .explorer-event { cursor: pointer; }
+                .explorer-event button {
+                    background: transparent; border: 0; padding: 0;
+                    color: inherit; font: inherit; text-align: left; cursor: pointer;
+                }
+            """
+            )
+        ],
     )
+    use_radial = checkbox("Use axial/radial distances", True)
+    use_radial.visible = False
     detail_bridge = Div(text="", visible=False)
     fullscreen_state = Div(text="normal", visible=False)
     viewport_width = Div(text="1440,900", visible=False)
@@ -656,7 +683,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
     right_controls = column(
-        group("Selected realization", details),
+        details,
+        use_radial,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
     left_toggle = Toggle(label="« Controls", active=True, width=100, height=32)
@@ -872,7 +900,10 @@ def build_document(db, doc, experiment: int, cluster: int):
                 maintain_order="left",
             )
             selected_events = events_for(chosen_events, selected)
-            details.text = _details(selected, selected_events, state["event"], pathways)
+            details.text = _details(
+                selected, selected_events, state["event"], enabled(use_radial)
+            )
+            use_radial.visible = not selected.is_empty()
             counts.text = (
                 f"<b>{chosen.height} selected / {total} total realizations</b>"
             )
@@ -1195,6 +1226,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     for widget in event_options.values():
         widget.on_change("active", control_changed)
     for widget, property_name in [
+        (use_radial, "active"),
         (fate, "active"),
         (fate_facets, "active"),
         (group_fragmentations, "active"),

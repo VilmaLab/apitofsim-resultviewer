@@ -1,6 +1,7 @@
 """Bokeh presentation and interaction for the realization Explorer."""
 
 from html import escape
+from math import hypot
 from textwrap import fill
 
 import polars as pl
@@ -33,6 +34,7 @@ from .data import (
     aggregate,
     coordinate_regions,
     escape_slot,
+    initial_slot,
     events_for,
     layout_events,
     load_data,
@@ -44,6 +46,7 @@ from .data import (
 
 
 COLORS = {
+    "init": "#a16207",
     "collision": Category10[10][0],
     "fragmentation": Category10[10][3],
     "escape": Category10[10][2],
@@ -84,6 +87,45 @@ def _details(realization, events, selected_event, radial=True):
         if radial
         else ["x (mm)", "y (mm)", "z (mm)"]
     )
+    motion_columns = (
+        [
+            ("velocity", "z", "Axial velocity (m/s)"),
+            ("velocity", "xy", "Radial speed (m/s)"),
+            ("omega", "xyz", "Angular speed (rad/s)"),
+        ]
+        if radial
+        else [
+            (key, axis, f"{label} {axis} ({unit})")
+            for key, label, unit in (
+                ("velocity", "Velocity", "m/s"),
+                ("omega", "Angular velocity", "rad/s"),
+            )
+            for axis in "xyz"
+        ]
+    )
+    motion_columns = [
+        column for column in motion_columns if column[0] in events.columns
+    ]
+    headings += [label for _, _, label in motion_columns]
+    detail_columns = [
+        ("rot_energy", "Rotational energy (J)"),
+        ("vibrational_energy", "Vibrational energy (J)"),
+        ("theta", "Collision angle (rad)"),
+        ("u_norm", "Collision u_norm (m/s)"),
+        ("accepted", "Collision accepted"),
+    ]
+    detail_columns = [
+        (key, label) for key, label in detail_columns if key in events.columns
+    ]
+    headings += [label for _, label in detail_columns]
+
+    def format_value(value):
+        if value is None:
+            return "—"
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        return f"{value:.6g}"
+
     rows = []
     for event in events.iter_rows(named=True):
         kind = escape(event["type"])
@@ -93,11 +135,23 @@ def _details(realization, events, selected_event, radial=True):
             else [event[axis] for axis in ("x", "y", "z")]
         )
         values = [event["t"] * 1e9, *(value * 1000 for value in coordinates)]
+        for key, axes, _ in motion_columns:
+            vector = event[key]
+            values.append(
+                None
+                if vector is None
+                else vector[axes]
+                if len(axes) == 1
+                else hypot(*(vector[axis] for axis in axes))
+            )
         rows.append(
             f'<tr class="explorer-event" data-event="{event["id"]}" id="event-{event["id"]}" '
             f'style="background:{"#fde68a" if event["id"] == selected_event else "white"}">'
             f'<td><button type="button" aria-label="Inspect event #{event["id"]}">{kind}</button></td>'
-            + "".join(f"<td>{value:.6g}</td>" for value in values)
+            + "".join(f"<td>{format_value(value)}</td>" for value in values)
+            + "".join(
+                f"<td>{format_value(event[key])}</td>" for key, _ in detail_columns
+            )
             + "</tr>"
         )
     return (
@@ -159,16 +213,20 @@ def _schematic_plot(regions, shared_x, available_width):
                 text_font_size="9px",
             )
         )
-    diagram.add_layout(
-        Label(
-            x=sum(escape_slot(regions)) / 2,
-            y=0.5,
-            text="Esc" if available_width < 600 else "Escaped",
-            text_align="center",
-            text_baseline="middle",
-            text_font_size="9px",
+    for slot, label, short in (
+        (initial_slot(regions), "Initial", "Init"),
+        (escape_slot(regions), "Escaped", "Esc"),
+    ):
+        diagram.add_layout(
+            Label(
+                x=sum(slot) / 2,
+                y=0.5,
+                text=short if available_width < 600 else label,
+                text_align="center",
+                text_baseline="middle",
+                text_font_size="9px",
+            )
         )
-    )
     return diagram
 
 
@@ -571,9 +629,10 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     fate_facets = checkbox("Facet pathways")
     group_fragmentations = checkbox("Group fragmentations", True)
-    event_options = {kind: checkbox(kind.title(), True) for kind in EVENT_TYPES} | {
-        name: checkbox(name, True) for name in fragmentation_names
-    }
+    event_options = {
+        kind: checkbox("Initial" if kind == "init" else kind.title(), True)
+        for kind in EVENT_TYPES
+    } | {name: checkbox(name, True) for name in fragmentation_names}
     for kind, widget in event_options.items():
         widget.name = f"event:{kind}"
         widget.sizing_mode = "stretch_width"
@@ -639,8 +698,8 @@ def build_document(db, doc, experiment: int, cluster: int):
             )
         ],
     )
-    use_radial = checkbox("Use axial/radial distances", True)
-    use_radial.visible = False
+    summarise_motion = checkbox("Summarise non-axial motion", True)
+    summarise_motion.visible = False
     detail_bridge = Div(text="", visible=False)
     fullscreen_state = Div(text="normal", visible=False)
     viewport_width = Div(text="1440,900", visible=False)
@@ -684,7 +743,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     )
     right_controls = column(
         details,
-        use_radial,
+        summarise_motion,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
     left_toggle = Toggle(label="« Controls", active=True, width=100, height=32)
@@ -901,9 +960,9 @@ def build_document(db, doc, experiment: int, cluster: int):
             )
             selected_events = events_for(chosen_events, selected)
             details.text = _details(
-                selected, selected_events, state["event"], enabled(use_radial)
+                selected, selected_events, state["event"], enabled(summarise_motion)
             )
-            use_radial.visible = not selected.is_empty()
+            summarise_motion.visible = not selected.is_empty()
             counts.text = (
                 f"<b>{chosen.height} selected / {total} total realizations</b>"
             )
@@ -949,9 +1008,9 @@ def build_document(db, doc, experiment: int, cluster: int):
                 events, realizations.filter(pl.col("fate").is_in(selected_fates))
             )
             kinds = (
-                ["collision", "fragmentation", "escape"]
+                list(EVENT_TYPES)
                 if grouped
-                else ["collision", *fragmentation_names, "escape"]
+                else ["init", "collision", *fragmentation_names, "escape"]
             )
             event_colors = {
                 kind: COLORS[kind] if kind in EVENT_TYPES else fate_colors[kind]
@@ -1026,7 +1085,11 @@ def build_document(db, doc, experiment: int, cluster: int):
             )
             max_position = positioned["position"].max()
             if spatial:
-                left_edge = mapped_regions["left"][0]
+                left_edge = (
+                    initial_slot(mapped_regions)[0]
+                    if regional
+                    else mapped_regions["left"][0]
+                )
                 right_edge = (
                     slot[1]
                     if regional
@@ -1168,7 +1231,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                         plot.xaxis.major_tick_line_color = None
                         plot.xaxis.minor_tick_line_color = None
                         plot.xgrid.ticker = FixedTicker(
-                            ticks=mapped_regions["right"].to_list()
+                            ticks=[mapped_regions["left"][0], *mapped_regions["right"]]
                         )
                         plot.xgrid.grid_line_color = "#94a3b8"
                         plot.xgrid.grid_line_alpha = 0.3
@@ -1226,7 +1289,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     for widget in event_options.values():
         widget.on_change("active", control_changed)
     for widget, property_name in [
-        (use_radial, "active"),
+        (summarise_motion, "active"),
         (fate, "active"),
         (fate_facets, "active"),
         (group_fragmentations, "active"),

@@ -1,6 +1,6 @@
 """Numerical, storage and interaction behavior of the realization Explorer."""
 
-from math import sin
+from math import hypot, sin
 from types import SimpleNamespace
 
 import duckdb
@@ -529,7 +529,11 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert controls[2].child.children[1].title == "Views"
     assert controls[3].child.children[0].labels == ["Use x markers"]
     assert controls[3].child.children[1].labels == ["Group fragmentations"]
-    assert [g.title for g in controls[3].child.children[2:]] == ["Events", "Y-axis"]
+    assert controls[3].child.children[2].labels == [
+        "Place initial/escape in their own zones"
+    ]
+    assert controls[3].child.children[3].labels == ["Spread initial/escape X"]
+    assert [g.title for g in controls[3].child.children[4:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
 
@@ -819,6 +823,12 @@ def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, heigh
         }
         return check(document);
     }""")
+    for label in ("Place initial/escape in their own zones", "Spread initial/escape X"):
+        control = page.get_by_text(label, exact=True)
+        expect(control).to_have_count(1)
+        assert control.evaluate("el => el.getBoundingClientRect().width") < 205
+    page.get_by_text("Spread initial/escape X", exact=True).scroll_into_view_if_needed()
+    page.screenshot(path=str(tmp_path / f"controls-{width}.png"))
 
 
 @pytest.mark.parametrize("mode", ["schematic", "equal", "physical", "time"])
@@ -1129,6 +1139,323 @@ def test_initial_events_position_and_fate(mode):
     else:
         assert positioned["position"][0] == 0
     assert data.aggregate(members, positioned, mapped)[2:] == (1, 0)
+
+
+@pytest.mark.parametrize("mode", ["schematic", "equal", "physical", "time"])
+def test_collapsed_terminal_coordinates(mode):
+    _, events, _, regions = cohort(
+        [1], event(1, "init", 1, 0, 0), event(2, "escape", 1, 1, 5)
+    )
+    mapped = data.coordinate_regions(regions, mode)
+    collapsed = data.position_events(events, mapped, mode, own_zones=False)
+    if mode in ("schematic", "equal"):
+        assert collapsed["position"].to_list() == [
+            mapped["left"][0],
+            mapped["right"][-1],
+        ]
+    else:
+        assert_frame_equal(collapsed, data.position_events(events, mapped, mode))
+
+
+@pytest.mark.parametrize("mode", ["schematic", "equal"])
+def test_terminal_spreading_modes(mode):
+    _, events, _, regions = cohort(
+        list(range(1, 21)),
+        *[event(i, "init", i, 0, 0) for i in range(1, 21)],
+        *[event(20 + i, "escape", i, 1, 5) for i in range(1, 21)],
+        event(41, "collision", 1, 0.5, 2),
+    )
+    mapped = data.coordinate_regions(regions, mode)
+    events = data.position_events(events, mapped, mode).with_columns(
+        pl.col("realization_id").alias("realization_number")
+    )
+    original = data.layout_events(events, "realization")
+    start, end = data.initial_slot(mapped)[0], data.escape_slot(mapped)[1]
+
+    def spread(frame, layout="realization", height=380):
+        return data.spread_terminal_x(
+            frame, mapped, layout, start, end, 600, height, (0.5, 20.5)
+        )
+
+    displayed = spread(original)
+    assert displayed["plot_y"].to_list() == original["plot_y"].to_list()
+    assert (
+        displayed.filter(pl.col("type") == "collision")["position"].to_list()
+        == original.filter(pl.col("type") == "collision")["position"].to_list()
+    )
+    for kind, slot in (
+        ("init", data.initial_slot(mapped)),
+        ("escape", data.escape_slot(mapped)),
+    ):
+        xs = displayed.filter(pl.col("type") == kind)["position"].to_list()
+        assert xs[0] != xs[1] and xs[:2] == xs[2:4]
+        assert slot[0] < min(xs) < max(xs) < slot[1]
+    assert_frame_equal(displayed.sort("id"), spread(original.reverse()).sort("id"))
+    dense = spread(original, height=20)
+    assert dense.filter(pl.col("type") == "init")["position"].n_unique() > 2
+    strip = data.layout_events(events, "strip")
+    jittered = spread(strip, "strip")
+    assert jittered["plot_y"].to_list() == strip["plot_y"].to_list()
+    assert jittered.filter(pl.col("type") == "init")["position"].n_unique() == 20
+    assert_frame_equal(jittered.sort("id"), spread(strip.reverse(), "strip").sort("id"))
+
+
+@pytest.mark.parametrize("kind", ["init", "escape"])
+def test_beeswarm_terminal_spill_stages(kind):
+    _, events, _, regions = cohort(
+        [1],
+        *[event(i, "collision", 1, i, 2) for i in range(1, 4)],
+        *[event(i, kind, 1, i, 0 if kind == "init" else 5) for i in range(4, 24)],
+    )
+    mapped = data.coordinate_regions(regions, "equal")
+    events = data.position_events(events, mapped, "equal")
+    slot = data.initial_slot(mapped) if kind == "init" else data.escape_slot(mapped)
+    start, end = data.initial_slot(mapped)[0], data.escape_slot(mapped)[1]
+    # 100 px per unit: this 65 px slot holds five centered columns of 10 px circles.
+    packed, diameter = data.pack_beeswarm(
+        events, start, end, (end - start) * 100, 380, terminal_regions=mapped
+    )
+    assert diameter == 10
+    ordinary = packed.filter(pl.col("type") == "collision")
+    assert ordinary["plot_y"].abs().max() == 10
+    terminals = packed.filter(pl.col("type") == kind).sort("id")
+    assert terminals["position"][:3].to_list() == pytest.approx([sum(slot) / 2] * 3)
+    assert terminals["plot_y"][:3].to_list() == [0, 10, -10]
+    assert terminals["position"][3] != terminals["position"][0]
+    assert terminals["plot_y"][:15].abs().max() == 10
+    assert terminals["plot_y"][15:].abs().max() == 20
+    assert terminals["position"][15:].n_unique() == 5
+    centers = list(zip(packed["position"] * 100, packed["plot_y"], strict=True))
+    for i, (x, y) in enumerate(centers):
+        assert all(hypot(x - px, y - py) >= diameter - 1e-7 for px, py in centers[:i])
+    assert terminals["position"].min() >= slot[0] + diameter / 200
+    assert terminals["position"].max() <= slot[1] - diameter / 200
+    shuffled, _ = data.pack_beeswarm(
+        events.reverse(), start, end, (end - start) * 100, 380, terminal_regions=mapped
+    )
+    assert_frame_equal(packed.sort("id"), shuffled.sort("id"))
+
+
+@pytest.mark.parametrize("count", [0, 1, 10, 200])
+def test_beeswarm_terminal_only_and_height_fit(count):
+    _, events, _, regions = cohort(
+        [1], *[event(i, "init", 1, i, 0) for i in range(1, count + 1)]
+    )
+    mapped = data.coordinate_regions(regions, "equal")
+    events = data.position_events(events, mapped, "equal")
+    start, end = data.initial_slot(mapped)[0], data.escape_slot(mapped)[1]
+    packed, diameter = data.pack_beeswarm(
+        events, start, end, 600, 60, terminal_regions=mapped
+    )
+    assert packed.height == count
+    if count:
+        assert packed["plot_y"].abs().max() + diameter / 2 <= 30
+        if count >= 10:
+            assert packed["position"].n_unique() > 1
+            assert packed.sort("id")["plot_y"][:3].to_list() == [0, 0, 0]
+        centers = list(
+            zip(
+                (packed["position"] - start) * 600 / (end - start),
+                packed["plot_y"],
+                strict=True,
+            )
+        )
+        for i, (x, y) in enumerate(centers):
+            assert all(
+                hypot(x - px, y - py) >= diameter - 1e-7 for px, py in centers[:i]
+            )
+
+
+@pytest.mark.parametrize("mode", ["schematic", "equal"])
+def test_terminal_zone_controls_and_bar_only_slot(monkeypatch, mode):
+    from bokeh.document import Document
+    from bokeh.models import CheckboxGroup, Label, Select
+
+    frames = cohort(
+        [1, 2],
+        event(1, "init", 1, 0, 0),
+        event(2, "escape", 1, 1, 5),
+        event(3, "init", 2, 0, 0),
+        event(4, "escape", 2, 1, 5),
+    )
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    controls = {
+        w.labels[0]: w
+        for w in doc.select({"type": CheckboxGroup})
+        if len(w.labels) == 1
+    }
+    own = controls["Place initial/escape in their own zones"]
+    spread = controls["Spread initial/escape X"]
+    x_mode = next(w for w in doc.select({"type": Select}) if w.title == "X coordinate")
+    y_mode = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")
+    x_mode.value = mode
+    mapped = data.coordinate_regions(frames[3], mode)
+
+    def coordinates():
+        chart = doc.select_one({"name": "events"})
+        return {
+            i: x
+            for r in chart.renderers
+            if "id" in r.data_source.data
+            for i, x in zip(
+                r.data_source.data["id"], r.data_source.data["x"], strict=True
+            )
+        }
+
+    def labels():
+        return {label.text for label in doc.select({"type": Label})}
+
+    assert (
+        own.active == spread.active == [0] and not own.disabled and not spread.disabled
+    )
+    assert coordinates()[1] != coordinates()[3]
+    spread.active = []
+    assert coordinates()[1] == coordinates()[3] == sum(data.initial_slot(mapped)) / 2
+    spread.active = [0]
+    own.active = []
+    assert spread.disabled and spread.active == [0]
+    assert coordinates() == {1: 0, 2: mapped["right"][-1], 3: 0, 4: mapped["right"][-1]}
+    assert "Initial" not in labels() and "Escaped" not in labels()
+    assert doc.select_one({"name": "events"}).x_range.start == 0
+    assert doc.select_one({"name": "events"}).x_range.end < data.escape_slot(mapped)[1]
+    controls["Bar chart"].active = [0]
+    assert "Escaped" in labels() and "Initial" not in labels()
+    assert doc.select_one({"name": "events"}).x_range.end > data.escape_slot(mapped)[1]
+    assert coordinates()[2] == mapped["right"][-1]
+    bars = doc.select_one({"name": "bars"})
+    assert bars.renderers[-1].glyph.left == data.escape_slot(mapped)[0]
+    assert bars.renderers[-1].glyph.top == 1
+    controls["Bar chart"].active = []
+    assert "Escaped" not in labels()
+    own.active = [0]
+    y_mode.value = "radial"
+    assert spread.disabled and spread.active == [0]
+    assert coordinates()[1] == sum(data.initial_slot(mapped)) / 2
+    y_mode.value = "strip"
+    assert not spread.disabled and coordinates()[1] != coordinates()[3]
+    for value in ("physical", "time"):
+        x_mode.value = value
+        assert own.disabled and spread.disabled
+        assert own.active == spread.active == [0]
+        assert coordinates()[1] == 0
+        assert coordinates()[2] == (5000 if value == "physical" else 1)
+    x_mode.value = mode
+    y_mode.value = "realization"
+    assert not own.disabled and not spread.disabled
+    assert coordinates()[1] != coordinates()[3]
+
+
+@pytest.mark.parametrize("layout", ["realization", "strip", "beeswarm"])
+def test_spread_plot_resize_selection_filtering_and_facets(monkeypatch, layout):
+    from bokeh.document import Document
+    from bokeh.models import CheckboxGroup, Select
+
+    frames = cohort(
+        list(range(1, 14)),
+        *[event(i * 3, "init", i, 0, 0) for i in range(1, 14)],
+        *[event(i * 3 + 1, "collision", i, 1, 2) for i in range(1, 4)],
+        *[event(i * 3 + 2, "escape", i, 2, 5) for i in range(1, 13)],
+        event(41, "fragmentation", 13, 2, 2, 7),
+    )
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    controls = {
+        w.labels[0]: w
+        for w in doc.select({"type": CheckboxGroup})
+        if len(w.labels) == 1
+    }
+    controls["Cumulative"].active = [0]
+    y_mode = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")
+    y_mode.value = layout
+    if layout == "beeswarm":
+        controls["Envelope"].active = [0]
+
+    def chart():
+        return doc.select_one({"name": "events"})
+
+    def points(p):
+        return {
+            i: (x, y)
+            for r in p.renderers
+            if "id" in r.data_source.data
+            for i, x, y in zip(
+                r.data_source.data["id"],
+                r.data_source.data["x"],
+                r.data_source.data["y"],
+                strict=True,
+            )
+        }
+
+    def check_highlights(p):
+        visible = points(p)
+        for renderer in p.renderers:
+            values = renderer.data_source.data
+            if (
+                "position" in values
+                and "id" not in values
+                and renderer.glyph.__class__.__name__ != "Patch"
+            ):
+                expected = (
+                    [visible[3]]
+                    if getattr(renderer.glyph, "size", None) == 20
+                    else [visible[i] for i in (3, 4, 5)]
+                )
+                assert (
+                    list(zip(values["position"], values["plot_y"], strict=True))
+                    == expected
+                )
+        if layout == "beeswarm":
+            patch = next(
+                r for r in p.renderers if r.glyph.__class__.__name__ == "Patch"
+            )
+            assert min(patch.data_source.data["position"]) <= min(
+                x for x, _ in visible.values()
+            )
+            assert max(patch.data_source.data["position"]) >= max(
+                x for x, _ in visible.values()
+            )
+
+    source = next(
+        r.data_source
+        for r in chart().renderers
+        if 3 in r.data_source.data.get("id", [])
+    )
+    source.selected.indices = [source.data["id"].index(3)]
+    p = chart()
+    before = points(p)
+    # Highlights are updated from the same displayed positions after each repack.
+    for width, height in ((300, 240), (900, 600)):
+        p.set_from_json("inner_width", width)
+        p.set_from_json("inner_height", height)
+        check_highlights(p)
+        if layout != "beeswarm":
+            assert all(
+                r.glyph.size == 6 for r in p.renderers if "id" in r.data_source.data
+            )
+    assert points(p) != before
+    p.x_range.start -= 0.3
+    check_highlights(p)
+    if layout == "realization":
+        p.y_range.end += 100
+        check_highlights(p)
+    cumulative = doc.select_one({"name": "cdf"})
+    escaped = next(
+        r for r in cumulative.renderers if r.glyph.fill_color == plot.COLORS["escape"]
+    )
+    assert escaped.data_source.data["position"][-3:-1] == [9, 9]
+    controls["Initial"].active = []
+    assert 3 not in points(chart())
+    controls["Initial"].active = [0]
+    controls["Facet pathways"].active = [0]
+    facets = list(doc.select({"name": "events"}))
+    assert len(facets) == 2
+    assert sum(len(points(p)) for p in facets) == frames[1].height
+    for p in facets:
+        p.set_from_json("inner_width", 320)
+        assert points(p)
 
 
 def test_initial_event_controls_and_schematic(monkeypatch):

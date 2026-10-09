@@ -12,7 +12,7 @@ import polars as pl
 from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_lengths
 
 
-EVENT_TYPES = ("collision", "fragmentation", "escape")
+EVENT_TYPES = ("init", "collision", "fragmentation", "escape")
 REGIONS = (
     "First chamber",
     "Skimmer",
@@ -57,22 +57,16 @@ def load_data(db, experiment: int, cluster: int):
     # DuckDB replacement scans reference the local Polars frame directly.
     events = connection.execute(
         """
-        with events as (
-            select id, realization_id, 'collision' as type, postime,
-                   null::integer as pathway_id from collision_event
-            union all
-            select id, realization_id, 'fragmentation', postime, pathway_id
-            from fragmentation_event
-            union all
-            select id, realization_id, 'escape', postime, null::integer
-            from escape_event
-        )
-        select e.id, e.realization_id, e.type,
+        select e.id, e.realization_id, e.event_type::varchar as type,
                e.postime.t::double as t, e.postime.x::double as x,
                e.postime.y::double as y,
                greatest(e.postime.z::double, 0.0) as z,
-               e.pathway_id, e.postime.z < 0 as z_clamped
-        from events e join realizations r on r.id = e.realization_id
+               f.pathway_id, e.postime.z < 0 as z_clamped,
+               e.velocity, e.omega, e.rot_energy, e.vibrational_energy,
+               e.particle_index, c.theta, c.u_norm, c.accepted
+        from event_info e join realizations r on r.id = e.realization_id
+        left join collision_event c on c.id = e.id
+        left join fragmentation_event f on f.id = e.id
         order by e.realization_id, e.postime.t, e.id
         """
     ).pl()
@@ -196,6 +190,12 @@ def escape_slot(regions):
     return end, end + max((end - regions["left"][-1]) * 0.65, 0.5)
 
 
+def initial_slot(regions):
+    start = regions["left"][0]
+    lo, hi = escape_slot(regions)
+    return start - (hi - lo), start
+
+
 def position_events(events, regions, mode):
     if mode in ("time", "physical"):
         position = pl.col("t") if mode == "time" else pl.col("z") * 1000
@@ -215,7 +215,9 @@ def position_events(events, regions, mode):
                 .otherwise(position)
             )
         position = (
-            pl.when(pl.col("type") == "escape")
+            pl.when(pl.col("type") == "init")
+            .then(pl.lit(sum(initial_slot(regions)) / 2))
+            .when(pl.col("type") == "escape")
             .then(pl.lit(sum(escape_slot(regions)) / 2))
             .otherwise(position)
         )

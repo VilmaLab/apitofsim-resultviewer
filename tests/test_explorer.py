@@ -322,11 +322,21 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
     )
     conn.execute("create table cluster(id int, common_name varchar)")
     conn.execute("create table realization(id int, experiment_result_id int)")
-    for kind in ("collision", "fragmentation", "escape"):
-        suffix = ", pathway_id int" if kind == "fragmentation" else ""
-        conn.execute(
-            f"create table {kind}_event(id int, realization_id int, postime struct(x float,y float,z float,t float){suffix})"
+    conn.execute("""
+        create table event_info(
+            id int, realization_id int, event_type varchar,
+            postime struct(x double,y double,z double,t double),
+            velocity struct(x double,y double,z double) default {'x':1,'y':2,'z':3},
+            omega struct(x double,y double,z double) default {'x':4,'y':5,'z':6},
+            rot_energy double default 1e-21,
+            vibrational_energy double default 2e-20,
+            particle_index int default 0
         )
+    """)
+    conn.execute(
+        "create table collision_event(id int, theta double, u_norm double, accepted bool)"
+    )
+    conn.execute("create table fragmentation_event(id int, pathway_id int)")
     conn.execute(
         "insert into cluster values (1,'5A_5SA_negative'),(2,'4A_5SA_negative'),(3,'1A_neutral')"
     )
@@ -335,18 +345,25 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
     conn.execute("insert into single_pathway_experiment_result values (12,1,7)")
     conn.execute("insert into realization values (100,10),(101,11),(102,12)")
     conn.execute(
-        "insert into collision_event values (501,100, {'x':1,'y':2,'z':0,'t':0.5})"
+        "insert into event_info (id,realization_id,event_type,postime) values (501,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
     )
     conn.execute(
-        "insert into fragmentation_event values (502,100, {'x':1,'y':2,'z':2,'t':1.5},7)"
+        "insert into event_info (id,realization_id,event_type,postime) values (502,100,'fragmentation', {'x':1,'y':2,'z':2,'t':1.5})"
     )
-    conn.execute("insert into escape_event values (503,102, {'x':1,'y':2,'z':5,'t':2})")
+    conn.execute(
+        "insert into event_info (id,realization_id,event_type,postime) values (503,102,'escape', {'x':1,'y':2,'z':5,'t':2})"
+    )
+    conn.execute("insert into collision_event values (501,0.75,-114.5,false)")
+    conn.execute("insert into fragmentation_event values (502,7)")
+    conn.execute(
+        "insert into event_info (id,realization_id,event_type,postime) values (500,100,'init', {'x':0,'y':0,'z':0,'t':0})"
+    )
     if negative_z:
         conn.execute(
-            "update collision_event set postime = struct_update(postime, z := -0.000001)"
+            "update event_info set postime = struct_update(postime, z := -0.000001) where id = 501"
         )
         conn.execute(
-            "update fragmentation_event set postime = struct_update(postime, z := -0.000002)"
+            "update event_info set postime = struct_update(postime, z := -0.000002) where id = 502"
         )
     geometry = data
 
@@ -360,7 +377,7 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
             "realization",
             "collision_event",
             "fragmentation_event",
-            "escape_event",
+            "event_info",
         )
     }
     conn.close()
@@ -372,7 +389,21 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
         "5A_5SA_negative → 4A_5SA_negative + 1A_neutral",
         "5A_5SA_negative → 5A_5SA_negative",
     ]
-    assert events["id"].to_list() == [501, 502, 503]
+    assert events["id"].to_list() == [500, 501, 502, 503]
+    collision = events.filter(pl.col("id") == 501).row(0, named=True)
+    assert collision["theta"] == 0.75 and collision["u_norm"] == -114.5
+    assert collision["accepted"] is False
+    assert collision["velocity"] == {"x": 1, "y": 2, "z": 3}
+    assert collision["rot_energy"] == 1e-21
+    assert collision["vibrational_energy"] == 2e-20
+    assert collision["particle_index"] == 0
+    details = plot._details(
+        realizations.head(1).with_columns(pl.lit(1).alias("realization_number")),
+        events,
+        500,
+    )
+    assert "Angular speed (rad/s)" in details
+    assert "<td>No</td>" in details and "<td>—</td>" in details
     assert events.filter(pl.col("id") == 502)["pathway_id"][0] == 7
     assert pathways.to_dict(as_series=False) == {
         "pathway_id": [7],
@@ -380,7 +411,7 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
     }
     assert events["z_clamped"].sum() == (2 if negative_z else 0)
     if negative_z:
-        assert events.head(2)["z"].to_list() == [0, 0]
+        assert events.filter(pl.col("z_clamped"))["z"].to_list() == [0, 0]
         regions = data.coordinate_regions(regions, "schematic")
         events = data.position_events(events, regions, "schematic")
         assert data.aggregate(realizations, events, regions)[1]["fraction"][0] == 0.5
@@ -393,14 +424,14 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
     conn.execute("insert into multi_pathway_experiment_result values (13,1,9)")
     conn.execute("insert into realization values (103,13)")
     conn.execute(
-        "insert into collision_event values (504,101, {'x':1,'y':2,'z':0,'t':1}), (505,103, {'x':1,'y':2,'z':0,'t':1}), (506,100, {'x':1,'y':2,'z':0,'t':0.5})"
+        "insert into event_info (id,realization_id,event_type,postime) values (504,101,'collision', {'x':1,'y':2,'z':0,'t':1}), (505,103,'collision', {'x':1,'y':2,'z':0,'t':1}), (506,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
     )
     conn.close()
     conn = duckdb.connect(database_path, read_only=True)
     db = SimpleNamespace(db=conn)
     realizations, events, _, _ = data.load_data(db, 1, 1)
     assert realizations["id"].to_list() == [100, 102]
-    assert events["id"].to_list() == [501, 506, 502, 503]
+    assert events["id"].to_list() == [500, 501, 506, 502, 503]
     empty = data.load_data(db, 99, 1)
     assert empty[0].is_empty() and empty[1].is_empty()
     conn.close()
@@ -442,7 +473,10 @@ def test_bokeh_document_modes_and_views(monkeypatch):
                     assert p.xaxis[0].major_label_overrides == dict(
                         zip(centers, ["1", "2", "3", "4", "5"], strict=True)
                     )
-                    assert p.xgrid[0].ticker.ticks == regions["right"].to_list()
+                    assert p.xgrid[0].ticker.ticks == [
+                        regions["left"][0],
+                        *regions["right"],
+                    ]
                     assert p.xgrid[0].grid_line_alpha == 0.3
     for toggle in doc.select({"type": CheckboxGroup}):
         if toggle.labels and toggle.labels[0] in (
@@ -560,7 +594,7 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert "<th>Time (ns)</th>" in details.text
     assert "<th>Axial dist. (mm)</th>" in details.text
     assert "<th>Radial dist. (mm)</th>" in details.text
-    radial = checkbox("Use axial/radial distances")
+    radial = checkbox("Summarise non-axial motion")
     assert radial.visible and radial.active == [0]
     radial.active = []
     assert all(f"<th>{axis} (mm)</th>" in details.text for axis in ("x", "y", "z"))
@@ -897,6 +931,7 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
 
     assert grouping.active == [0] and not grouping.disabled
     assert [w.labels[0] for w in options.children] == [
+        "Initial",
         "Collision",
         "Fragmentation",
         "Escape",
@@ -911,6 +946,7 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
 
     grouping.active = []
     assert [w.labels[0] for w in options.children] == [
+        "Initial",
         "Collision",
         "Parent → A + B",
         "Parent → C + D",
@@ -944,6 +980,7 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
     facets.active = [0]
     assert grouping.active == [0] and grouping.disabled
     assert [w.labels[0] for w in options.children] == [
+        "Initial",
         "Collision",
         "Fragmentation",
         "Escape",
@@ -1003,11 +1040,88 @@ def test_details_use_cohort_number_and_convert_units():
     realizations, events, _, _ = cohort(
         [16052], event(42, "collision", 16052, 2e-9, 0.003)
     )
+    events = events.with_columns(
+        pl.Series("velocity", [{"x": -3.0, "y": 4.0, "z": -12.0}]),
+        pl.Series("omega", [{"x": 2.0, "y": -3.0, "z": 6.0}]),
+        pl.lit(7).alias("particle_index"),
+    )
     selected = realizations.with_row_index("realization_number", offset=1)
     details = plot._details(selected, events, 42)
     assert "Realization #1</h3>" in details
     assert "Realization #16052" not in details
     assert "Result #" not in details and "disabled" not in details
-    assert "<td>2</td><td>3</td><td>5000</td>" in details
+    assert (
+        "<td>2</td><td>3</td><td>5000</td><td>-12</td><td>5</td><td>7</td>" in details
+    )
+    assert all(
+        f"<th>{heading}</th>" in details
+        for heading in (
+            "Axial velocity (m/s)",
+            "Radial speed (m/s)",
+            "Angular speed (rad/s)",
+        )
+    )
+    assert "Particle index" not in details and "Pathway ID" not in details
     cartesian = plot._details(selected, events, 42, radial=False)
-    assert "<td>2</td><td>3000</td><td>4000</td><td>3</td>" in cartesian
+    assert (
+        "<td>2</td><td>3000</td><td>4000</td><td>3</td><td>-3</td><td>4</td><td>-12</td><td>2</td><td>-3</td><td>6</td>"
+        in cartesian
+    )
+    assert all(
+        f"<th>{label} {axis} ({unit})</th>" in cartesian
+        for label, unit in (("Velocity", "m/s"), ("Angular velocity", "rad/s"))
+        for axis in "xyz"
+    )
+    assert "Radial speed" not in cartesian and "Angular speed" not in cartesian
+    assert "Particle index" not in cartesian and "Pathway ID" not in cartesian
+
+
+@pytest.mark.parametrize("mode", ["schematic", "equal", "physical", "time"])
+def test_initial_events_position_and_fate(mode):
+    members, events, _, regions = cohort(
+        [1], event(1, "init", 1, 0, 0), event(2, "escape", 1, 1, 5)
+    )
+    assert members["terminal_event_id"].to_list() == [2]
+    mapped = data.coordinate_regions(regions, mode)
+    positioned = data.position_events(events, mapped, mode)
+    if mode in ("schematic", "equal"):
+        lo, hi = data.initial_slot(mapped)
+        escape_lo, escape_hi = data.escape_slot(mapped)
+        assert hi - lo == pytest.approx(escape_hi - escape_lo)
+        assert positioned["position"][0] == (lo + hi) / 2 < mapped["left"][0]
+    else:
+        assert positioned["position"][0] == 0
+    assert data.aggregate(members, positioned, mapped)[2:] == (1, 0)
+
+
+def test_initial_event_controls_and_schematic(monkeypatch):
+    from bokeh.document import Document
+    from bokeh.models import CheckboxGroup, Label, Select
+
+    frames = cohort([1], event(1, "init", 1, 0, 0), event(2, "escape", 1, 1, 5))
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    control = doc.select_one({"name": "event:init"})
+    assert isinstance(control, CheckboxGroup)
+    assert control.labels == ["Initial"] and not control.disabled
+    coordinate = next(
+        s for s in doc.select({"type": Select}) if s.title == "X coordinate"
+    )
+    for mode in ("schematic", "equal"):
+        coordinate.value = mode
+        chart = doc.select_one({"name": "events"})
+        renderer = next(
+            r for r in chart.renderers if r.data_source.data.get("id") == [1]
+        )
+        assert chart.x_range.start < renderer.data_source.data["x"][0] < 0
+        mapped = data.coordinate_regions(frames[3], mode)
+        assert chart.xgrid[0].ticker.ticks == [mapped["left"][0], *mapped["right"]]
+        assert any(
+            label.text in ("Initial", "Init") for label in doc.select({"type": Label})
+        )
+    control.active = []
+    chart = doc.select_one({"name": "events"})
+    assert all(1 not in r.data_source.data.get("id", []) for r in chart.renderers)
+    control.active = [0]
+    assert doc.to_json() is not None

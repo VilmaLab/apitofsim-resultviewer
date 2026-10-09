@@ -784,6 +784,43 @@ def test_unavailable_document(monkeypatch):
     assert doc.roots[0].text == "Explorer data unavailable: Missing &lt;events&gt;"
 
 
+@pytest.mark.parametrize("width,height", [(920, 995), (640, 600)])
+def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, height):
+    from bokeh.document import Document
+    from bokeh.embed import file_html
+    from bokeh.resources import INLINE
+    from playwright.sync_api import expect
+
+    frames = cohort([1], event(1, "escape", 1, 1, 5))
+    monkeypatch.setattr(plot, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    html = tmp_path / "explorer.html"
+    html.write_text(file_html(doc, INLINE, "Explorer"))
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(html.as_uri())
+    groups = page.locator(".bk-GroupBox")
+    expect(groups).to_have_count(7)
+    # A shrinking flex item can be shorter than its fieldset, which then
+    # paints over the next group even though all controls remain in the DOM.
+    page.wait_for_function("""() => {
+        function check(root) {
+            for (const element of root.querySelectorAll('*')) {
+                if (element.matches('.bk-GroupBox')) {
+                    const fieldset = element.shadowRoot.querySelector('fieldset');
+                    const outer = element.getBoundingClientRect();
+                    const inner = fieldset.getBoundingClientRect();
+                    if (!outer.height || inner.bottom > outer.bottom + 1)
+                        return false;
+                }
+                if (element.shadowRoot && !check(element.shadowRoot)) return false;
+            }
+            return true;
+        }
+        return check(document);
+    }""")
+
+
 @pytest.mark.parametrize("mode", ["schematic", "equal", "physical", "time"])
 def test_cumulative_pathway_areas(monkeypatch, mode):
     from bokeh.document import Document

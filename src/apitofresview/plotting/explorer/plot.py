@@ -713,6 +713,8 @@ def build_document(db, doc, experiment: int, cluster: int):
             width_policy="max",
             height_policy="min",
             margin=(5, 0),
+            # The scroll container must not shrink groups below their contents.
+            styles={"flex-shrink": "0"},
             stylesheets=[InlineStyleSheet(css="fieldset { min-inline-size: 0; }")],
         )
 

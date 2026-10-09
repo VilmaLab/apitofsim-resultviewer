@@ -22,6 +22,7 @@ from .layout import (
     escape_slot,
     initial_slot,
     pack_beeswarm,
+    prepare_beeswarm,
     spread_terminal_x,
 )
 
@@ -319,6 +320,11 @@ def _event_plot(
     if selection_updates is not None:
         selection_updates.append(update_highlight)
     if layout == "beeswarm" or spread_terminals:
+        prepared = (
+            prepare_beeswarm(events, regions if spread_terminals else None)
+            if layout == "beeswarm"
+            else None
+        )
         last_dimensions = None
         pending = False
         live = doc is not None and doc.session_context is not None
@@ -355,6 +361,7 @@ def _event_plot(
                     events,
                     *dimensions[:4],
                     terminal_regions=regions if spread_terminals else None,
+                    prepared=prepared,
                 )
                 plot.y_range.start, plot.y_range.end = (
                     -inner_height / 2,

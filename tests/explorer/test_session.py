@@ -971,3 +971,53 @@ def test_live_packing_waits_for_dimensions_and_coalesces_updates(monkeypatch, la
     ).value = "time"
     doc.session_callbacks[0].callback()
     assert len(calls) == 1
+
+
+def test_beeswarm_reuses_preparation_until_cohort_or_coordinates_change(monkeypatch):
+    frames = cohort(
+        [1],
+        event(1, "init", 1, 0, 0),
+        event(2, "collision", 1, 1, 2),
+        event(3, "escape", 1, 2, 5),
+    )
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    preparations, packs = [], []
+    prepare, pack = plot.prepare_beeswarm, plot.pack_beeswarm
+
+    def preparing(*args):
+        result = prepare(*args)
+        preparations.append(result)
+        return result
+
+    def packing(*args, **kwargs):
+        packs.append(kwargs["prepared"])
+        return pack(*args, **kwargs)
+
+    monkeypatch.setattr(plot, "prepare_beeswarm", preparing)
+    monkeypatch.setattr(plot, "pack_beeswarm", packing)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
+    ).value = "beeswarm"
+    chart = doc.select_one({"name": "events"})
+    chart.set_from_json("inner_width", 900)
+    chart.set_from_json("inner_height", 380)
+    chart.x_range.start, chart.x_range.end = 1, 4
+    chart.set_from_json("inner_width", 300)
+    assert len(preparations) == 1
+    assert len(packs) > 1
+    assert all(item is preparations[0] for item in packs)
+
+    next(
+        w for w in doc.select({"type": CheckboxGroup}) if w.name == "event:collision"
+    ).active = []
+    assert len(preparations) == 2
+    assert len(preparations[-1].positions) == 2
+    assert packs[-1] is preparations[-1]
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "X coordinate"
+    ).value = "time"
+    assert len(preparations) == 3
+    assert preparations[-1].slots is None
+    assert packs[-1] is preparations[-1]

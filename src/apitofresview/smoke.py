@@ -145,6 +145,48 @@ def _check_report_route(url, failures):
         print("OK   report route", flush=True)
 
 
+def _check_beeswarm(failures):
+    """Exercise JIT compilation, terminal buckets and envelopes in the bundle."""
+    try:
+        import polars as pl
+
+        from apitofresview.plotting.explorer.layout import (
+            beeswarm_envelope,
+            pack_beeswarm,
+            prepare_beeswarm,
+        )
+
+        events = pl.DataFrame(
+            {
+                "id": range(9),
+                "type": ["init"] * 3 + ["collision"] * 3 + ["escape"] * 3,
+                "position": [-0.325] * 3 + [0.5] * 3 + [1.325] * 3,
+            }
+        )
+        regions = pl.DataFrame({"left": [0.0], "right": [1.0]})
+        prepared = prepare_beeswarm(events, regions)
+        for width in (600, 300):
+            packed, diameter = pack_beeswarm(
+                events,
+                -0.65,
+                1.65,
+                width,
+                380,
+                prepared=prepared,
+            )
+            assert packed.height == events.height
+            assert 0 < diameter <= 10
+            assert packed["plot_y"].abs().max() + diameter / 2 <= 190
+            assert not beeswarm_envelope(
+                packed, diameter / 2 * 2.3 / width, diameter / 2
+            ).is_empty()
+    except Exception as err:
+        failures.append(f"beeswarm: {err!r}")
+        print(f"FAIL beeswarm: {err!r}", flush=True)
+    else:
+        print("OK   beeswarm", flush=True)
+
+
 def run_smoke_test(sock, database_path=None, debug=False):
     from apitofresview.webapp import create_app  # type: ignore[reportMissingImports]
 
@@ -165,6 +207,7 @@ def run_smoke_test(sock, database_path=None, debug=False):
         for label, module, attr in IMPORT_CHECKS:
             _check_import(label, module, attr, failures)
         _check_mpl_backend(failures)
+        _check_beeswarm(failures)
         _check_report_route(server.url, failures)
     finally:
         server.stop()

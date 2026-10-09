@@ -1,9 +1,12 @@
 """Display coordinates and screen-space packing for the Explorer."""
 
-from collections import deque
+from dataclasses import dataclass
 from math import ceil, floor, sin, sqrt
 
+import numpy as np
 import polars as pl
+
+from ._beeswarm import envelope_edges, stack_swarm, terminal_swarm
 
 SCHEMATIC_WEIGHTS = (3, 3, 1, 1, 1)
 
@@ -119,194 +122,105 @@ def spread_terminal_x(
     return events.with_columns(pl.Series("position", positions, dtype=pl.Float64))
 
 
-def _stack_swarm(points, width, diameter):
-    nearby = deque()
-    result = {}
-    for index, x in points:
-        if x < -diameter or x > width + diameter:
-            result[index] = 0.0
-            continue
-        while nearby and x - nearby[0][0] >= diameter:
-            nearby.popleft()
-        intervals = sorted(
-            (
-                y - sqrt(max(0, diameter**2 - (x - px) ** 2)),
-                y + sqrt(max(0, diameter**2 - (x - px) ** 2)),
-            )
-            for px, y in nearby
-        )
-        # Find the nearest tangent endpoint of the forbidden interval at zero.
-        merged = []
-        for lo, hi in intervals:
-            if merged and lo < merged[-1][1] - 1e-9:
-                merged[-1][1] = max(merged[-1][1], hi)
-            else:
-                merged.append([lo, hi])
-        y = 0.0
-        for lo, hi in merged:
-            if lo + 1e-9 < 0 < hi - 1e-9:
-                y = hi if hi <= -lo else lo
-                break
-        result[index] = y
-        nearby.append((x, y))
-    return result
+@dataclass(frozen=True)
+class PreparedBeeswarm:
+    """Cohort coordinates and ordering, independent of zoom and screen size."""
+
+    positions: np.ndarray
+    order: np.ndarray
+    ordinary: np.ndarray
+    init: np.ndarray
+    escape: np.ndarray
+    slots: np.ndarray | None
 
 
-def _terminal_swarm(events, points, regions, start, scale, width, diameter):
-    terminal = dict(
-        events.with_row_index()
-        .filter(pl.col("type").is_in(["init", "escape"]))
-        .select("index", "type")
-        .iter_rows()
-    )
-    ordinary = [(i, x) for i, x in points if i not in terminal]
-    ys = _stack_swarm(ordinary, width, diameter)
-    xs = dict(points)
-    ids = events["id"].to_list()
-    extent = max((abs(y) for y in ys.values()), default=0)
-    buckets = {}
-
-    def add(x, y):
-        buckets.setdefault((floor(x / diameter), floor(y / diameter)), []).append(
-            (x, y)
-        )
-
-    def free(x, y):
-        bx, by = floor(x / diameter), floor(y / diameter)
-        return all(
-            (x - px) ** 2 + (y - py) ** 2 >= diameter**2 * (1 - 1e-9)
-            for dx in (-1, 0, 1)
-            for dy in (-1, 0, 1)
-            for px, py in buckets.get((bx + dx, by + dy), ())
-        )
-
-    for i, x in ordinary:
-        if -diameter <= x <= width + diameter:
-            add(x, ys[i])
-    for kind, slot in (
-        ("init", initial_slot(regions)),
-        ("escape", escape_slot(regions)),
-    ):
-        indices = sorted(
-            (i for i in terminal if terminal[i] == kind), key=lambda i: ids[i]
-        )
-        lo, hi = ((x - start) * scale for x in slot)
-        center = (lo + hi) / 2
-        if hi < -diameter or lo > width + diameter:
-            ys.update(dict.fromkeys(indices, 0.0))
-            continue
-        radius = min(diameter / 2, (hi - lo) / 2)
-        columns = [center]
-        for step in range(
-            1, min(len(indices), floor(((hi - lo) / 2 - radius) / diameter)) + 1
-        ):
-            columns.extend((center - step * diameter, center + step * diameter))
-        levels = [0.0]
-        for step in range(1, floor(extent / diameter) + 1):
-            levels.extend((step * diameter, -step * diameter))
-
-        def candidates():
-            for x in columns:
-                for y in levels:
-                    yield x, y
-            step = len(levels) // 2 + 1
-            while True:
-                for sign in (1, -1):
-                    for x in columns:
-                        yield x, sign * step * diameter
-                step += 1
-
-        slots = candidates()
-        for i in indices:
-            x, y = next(slots)
-            while not free(x, y):
-                x, y = next(slots)
-            xs[i], ys[i] = x, y
-            add(x, y)
-    return xs, ys
+def prepare_beeswarm(events, terminal_regions=None):
+    positions = events["position"].to_numpy().astype(np.float64, copy=False)
+    ids = events["id"].to_numpy()
+    order = np.lexsort((ids, positions))
+    empty = np.empty(0, dtype=np.int64)
+    if terminal_regions is None:
+        return PreparedBeeswarm(positions, order, order, empty, empty, None)
+    initial = (events["type"] == "init").to_numpy()
+    escaped = (events["type"] == "escape").to_numpy()
+    ordinary = order[~(initial | escaped)[order]]
+    terminals = []
+    for mask in (initial, escaped):
+        indices = np.flatnonzero(mask)
+        terminals.append(indices[np.argsort(ids[indices], kind="stable")])
+    slots = np.array([initial_slot(terminal_regions), escape_slot(terminal_regions)])
+    return PreparedBeeswarm(positions, order, ordinary, *terminals, slots)
 
 
 def pack_beeswarm(
-    events, start, end, width, height, diameter=10, terminal_regions=None
+    events,
+    start,
+    end,
+    width,
+    height,
+    diameter=10,
+    terminal_regions=None,
+    *,
+    prepared=None,
 ):
-    """Pack tangent circles in screen coordinates, shrinking to fit vertically."""
-    scale = width / max(end - start, 1e-12)
-    if (
-        terminal_regions is not None
-        and not events.filter(pl.col("type").is_in(["init", "escape"])).is_empty()
-    ):
-        slot_width = (
-            initial_slot(terminal_regions)[1] - initial_slot(terminal_regions)[0]
-        )
-        diameter = min(diameter, slot_width * scale)
-    ordered = events.with_row_index().sort("position", "id")
-    points = [
-        (index, (x - start) * scale)
-        for index, x in ordered.select("index", "position").iter_rows()
-    ]
+    """Pack tangent circles, reusing preparation for the same events and regions."""
+    if prepared is None:
+        prepared = prepare_beeswarm(events, terminal_regions)
+    scale = float(width) / max(end - start, 1e-12)
+    width, diameter = float(width), float(diameter)
+    xs = (prepared.positions - start) * scale
+    slots = None if prepared.slots is None else (prepared.slots - start) * scale
+    if slots is not None and len(prepared.init) + len(prepared.escape):
+        diameter = min(diameter, slots[0, 1] - slots[0, 0])
+    ordinary_xs = xs[prepared.ordinary]
     lower, upper = 0.0, diameter
     best = None
     for _ in range(16):
-        if terminal_regions is None:
-            xs, ys = dict(points), _stack_swarm(points, width, diameter)
+        if slots is None:
+            ys = np.empty(events.height)
+            ys[prepared.order] = stack_swarm(ordinary_xs, width, diameter)
+            packed_xs = xs
         else:
-            xs, ys = _terminal_swarm(
-                events, points, terminal_regions, start, scale, width, diameter
+            packed_xs, ys = terminal_swarm(
+                xs,
+                ordinary_xs,
+                prepared.ordinary,
+                prepared.init,
+                prepared.escape,
+                slots,
+                width,
+                diameter,
             )
-        result = [ys[i] for i in range(events.height)]
-        extent = max((abs(y) for y in result), default=0) * 2 + diameter
+        extent = np.max(np.abs(ys), initial=0) * 2 + diameter
         if extent <= height:
-            best = (result, xs, diameter)
+            best = ys, packed_xs, diameter
             lower = diameter
         else:
             upper = diameter
         if upper - lower <= max(upper * 0.01, 1e-6):
             break
         diameter = (lower + upper) / 2 if lower else diameter * height / extent * 0.95
-    result, xs, diameter = best
-    return events.with_columns(
-        pl.Series("plot_y", result, dtype=pl.Float64),
-        *(
-            [
-                pl.Series(
-                    "position",
-                    [xs[i] / scale + start for i in range(events.height)],
-                    dtype=pl.Float64,
-                )
-            ]
-            if terminal_regions is not None
-            else []
-        ),
-    ), diameter
+    ys, packed_xs, diameter = best
+    columns = [pl.Series("plot_y", ys)]
+    if slots is not None:
+        columns.append(pl.Series("position", packed_xs / scale + start))
+    return events.with_columns(*columns), diameter
 
 
 def beeswarm_envelope(events, x_padding, y_padding):
     """Outline the packed circles using their radii in each coordinate."""
     if events.is_empty():
         return pl.DataFrame(schema={"position": pl.Float64, "plot_y": pl.Float64})
-    points = sorted(events.select("position", "plot_y").iter_rows())
-    samples = sorted(
-        {
-            x + offset * x_padding
-            for x, _ in points
-            for offset in (-1, -sqrt(3) / 2, -0.5, 0, 0.5, sqrt(3) / 2, 1)
-        }
-    )
-    nearby = deque()
-    cursor = 0
-    upper, lower = [], []
-    for x in samples:
-        while cursor < len(points) and points[cursor][0] <= x + x_padding:
-            nearby.append(points[cursor])
-            cursor += 1
-        while nearby and nearby[0][0] < x - x_padding:
-            nearby.popleft()
-        edges = [
-            (y, y_padding * sqrt(max(0, 1 - ((x - px) / x_padding) ** 2)))
-            for px, y in nearby
-        ]
-        upper.append(max((y + radius for y, radius in edges), default=0.0))
-        lower.append(min((y - radius for y, radius in edges), default=0.0))
+    xs = events["position"].to_numpy().astype(np.float64, copy=False)
+    ys = events["plot_y"].to_numpy().astype(np.float64, copy=False)
+    order = np.argsort(xs)
+    xs, ys = xs[order], ys[order]
+    offsets = np.array([-1, -sqrt(3) / 2, -0.5, 0, 0.5, sqrt(3) / 2, 1])
+    samples = np.unique((xs[:, None] + offsets * x_padding).ravel())
+    upper, lower = envelope_edges(xs, ys, samples, float(x_padding), float(y_padding))
     return pl.DataFrame(
-        {"position": samples + samples[::-1], "plot_y": upper + lower[::-1]}
+        {
+            "position": np.concatenate((samples, samples[::-1])),
+            "plot_y": np.concatenate((upper, lower[::-1])),
+        }
     )

@@ -9,6 +9,8 @@ dependencies = [
     "bokeh==3.10",
     "duckdb>=1.5.5",
     "mplbed>=0.3.0",
+    "numba>=0.68.0",
+    "numpy>=2.0.0",
     "panel==1.10.0a3",
     "starlette>=1.4.1",
     "starlette-htmx>=0.1.1",
@@ -51,13 +53,13 @@ environments = [
 
 [tool.uv.sources]
 apitofsim = [
-  { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.0.17/apitofsim-0.0.17-cp313-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-  { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.0.17/apitofsim-0.0.17-cp313-abi3-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
-  { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.0.17/apitofsim-0.0.17-cp313-abi3-win_amd64.whl", marker = "sys_platform == 'win32' and platform_machine == 'AMD64'" },
+  { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.0.18/apitofsim-0.0.18-cp313-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.0.18/apitofsim-0.0.18-cp313-abi3-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
+  { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.0.18/apitofsim-0.0.18-cp313-abi3-win_amd64.whl", marker = "sys_platform == 'win32' and platform_machine == 'AMD64'" },
   # Fallback for platforms outside [tool.uv] environments: every source in a
   # list needs a marker and uv's parser has no `not`, so the complement has to
   # be written with De Morgan (or the sdist used as the only source).
-  # { url = "https://github.com/VilmaLab/apitofsim/archive/refs/tags/v0.0.16.tar.gz", marker = "(sys_platform != 'linux' or platform_machine != 'x86_64') and (sys_platform != 'darwin' or platform_machine != 'arm64') and (sys_platform != 'win32' or platform_machine != 'AMD64')" },
+  # { url = "https://github.com/VilmaLab/apitofsim/archive/refs/tags/v0.0.18.tar.gz", marker = "(sys_platform != 'linux' or platform_machine != 'x86_64') and (sys_platform != 'darwin' or platform_machine != 'arm64') and (sys_platform != 'win32' or platform_machine != 'AMD64')" },
 ]
 workingtitle = { git = "https://github.com/frankier/workingtitle.git" }
 

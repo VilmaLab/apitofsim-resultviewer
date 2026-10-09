@@ -84,6 +84,10 @@ def test_layouts_and_envelope():
     assert_frame_equal(
         envelope, event_layout.beeswarm_envelope(packed.reverse(), 5 * 5000 / 600, 5)
     )
+    assert event_layout.beeswarm_envelope(pl.DataFrame(), 1, 5).schema == {
+        "position": pl.Float64,
+        "plot_y": pl.Float64,
+    }
     for subset in (events.head(0), events.head(1), events.head(3)):
         packed = pack(subset)
         outline = event_layout.beeswarm_envelope(packed, 1, 5)
@@ -290,3 +294,66 @@ def test_schematic_and_time_coordinates():
         )["position"].to_list()
         == events["t"].to_list()
     )
+
+
+def test_beeswarm_preparation_survives_resize_and_zoom():
+    import numpy as np
+
+    _, events, _, regions = cohort(
+        [1],
+        event(1, "init", 1, 0, 0),
+        event(2, "collision", 1, 1, 2),
+        event(3, "collision", 1, 2, 2),
+        event(4, "escape", 1, 3, 5),
+    )
+    mapped = event_layout.coordinate_regions(regions, "equal")
+    events = event_layout.position_events(events, mapped, "equal")
+    for terminals in (None, mapped):
+        prepared = event_layout.prepare_beeswarm(events, terminals)
+        positions, order = prepared.positions.copy(), prepared.order.copy()
+        for start, end, width, height in (
+            (-1, 6, 600, 380),
+            (1, 4, 300, 200),
+            (-2, 7, 900, 600),
+        ):
+            cached, diameter = event_layout.pack_beeswarm(
+                events,
+                start,
+                end,
+                width,
+                height,
+                terminal_regions=terminals,
+                prepared=prepared,
+            )
+            fresh, fresh_diameter = event_layout.pack_beeswarm(
+                events,
+                start,
+                end,
+                width,
+                height,
+                terminal_regions=terminals,
+            )
+            assert_frame_equal(cached, fresh)
+            assert diameter == fresh_diameter
+        np.testing.assert_array_equal(prepared.positions, positions)
+        np.testing.assert_array_equal(prepared.order, order)
+
+
+@pytest.mark.parametrize(
+    "intervals, expected",
+    [
+        ([(-1, 0.6e-9), (-0.6e-9, 1)], 1),
+        ([(-1, 0.4e-9), (-0.4e-9, 1)], 0),
+        ([(-1, 0), (0, 1)], 0),
+        ([(-1, 1), (0.5, 3)], -1),
+        ([], 0),
+    ],
+)
+def test_beeswarm_interval_tangency_tolerance(intervals, expected):
+    import numpy as np
+
+    from apitofresview.plotting.explorer._beeswarm import nearest_y
+
+    lows = np.array([lo for lo, _ in intervals], dtype=float)
+    highs = np.array([hi for _, hi in intervals], dtype=float)
+    assert nearest_y(lows, highs, len(lows)) == expected

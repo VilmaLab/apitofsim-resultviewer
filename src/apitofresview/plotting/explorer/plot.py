@@ -39,6 +39,7 @@ from .data import (
     layout_events,
     load_data,
     position_events,
+    spread_terminal_x,
     pack_beeswarm,
     select_realizations,
     beeswarm_envelope,
@@ -57,6 +58,12 @@ PATHWAY_COLORS = (
     # Extend with lighter categorical colours, reserving both blues and greens.
     *(color for i, color in enumerate(Category20[20][1::2]) if i not in (0, 2)),
 )
+CHECKBOX_CSS = """
+    .bk-input-group { white-space: normal; }
+    label { display: flex; align-items: center; width: 100%; }
+    input { flex-shrink: 0; }
+    span { min-width: 0; overflow-wrap: anywhere; }
+"""
 
 
 def _pathway_colors(names, escaped):
@@ -166,7 +173,7 @@ def _details(realization, events, selected_event, radial=True):
     )
 
 
-def _schematic_plot(regions, shared_x, available_width):
+def _schematic_plot(regions, shared_x, available_width, initial=True, escaped=True):
     diagram = figure(
         height=56,
         min_height=56,
@@ -213,10 +220,12 @@ def _schematic_plot(regions, shared_x, available_width):
                 text_font_size="9px",
             )
         )
-    for slot, label, short in (
-        (initial_slot(regions), "Initial", "Init"),
-        (escape_slot(regions), "Escaped", "Esc"),
+    for visible, slot, label, short in (
+        (initial, initial_slot(regions), "Initial", "Init"),
+        (escaped, escape_slot(regions), "Escaped", "Esc"),
     ):
+        if not visible:
+            continue
         diagram.add_layout(
             Label(
                 x=sum(slot) / 2,
@@ -314,6 +323,7 @@ def _event_plot(
     on_selected,
     event_colors,
     realization_bounds=(1, 1),
+    spread_terminals=False,
 ):
     plot = figure(
         name="events",
@@ -397,7 +407,7 @@ def _event_plot(
             )
         )
         source.selected.on_change("indices", on_selected(source))
-    if layout == "beeswarm":
+    if layout == "beeswarm" or spread_terminals:
         last_dimensions = None
         highlights = []
 
@@ -411,19 +421,43 @@ def _event_plot(
                 inner_height = plot.inner_height or height - 60
             except UnsetValueError:
                 inner_height = height - 60
-            dimensions = (shared_x.start, shared_x.end, width, inner_height)
+            dimensions = (
+                shared_x.start,
+                shared_x.end,
+                width,
+                inner_height,
+                plot.y_range.start,
+                plot.y_range.end,
+            )
             if dimensions == last_dimensions:
                 return
             last_dimensions = dimensions
-            packed, diameter = pack_beeswarm(events, *dimensions)
-            plot.y_range.start, plot.y_range.end = -inner_height / 2, inner_height / 2
-            plot.y_range.reset_start = plot.y_range.start
-            plot.y_range.reset_end = plot.y_range.end
-            positions = dict(packed.select("id", "plot_y").iter_rows())
+            if layout == "beeswarm":
+                packed, diameter = pack_beeswarm(
+                    events,
+                    *dimensions[:4],
+                    terminal_regions=regions if spread_terminals else None,
+                )
+                plot.y_range.start, plot.y_range.end = (
+                    -inner_height / 2,
+                    inner_height / 2,
+                )
+                plot.y_range.reset_start = plot.y_range.start
+                plot.y_range.reset_end = plot.y_range.end
+            else:
+                diameter = 6
+                packed = spread_terminal_x(
+                    events, regions, layout, *dimensions[:4], dimensions[4:], diameter
+                )
+            positions = {
+                i: (x, y)
+                for i, x, y in packed.select("id", "position", "plot_y").iter_rows()
+            }
             for glyph in swarm_glyphs:
                 glyph.data_source.data = {
                     **glyph.data_source.data,
-                    "y": [positions[i] for i in glyph.data_source.data["id"]],
+                    "x": [positions[i][0] for i in glyph.data_source.data["id"]],
+                    "y": [positions[i][1] for i in glyph.data_source.data["id"]],
                 }
                 glyph.glyph.size = diameter
             if envelope_source is not None:
@@ -445,6 +479,8 @@ def _event_plot(
             plot.on_change(property_name, repack)
         for property_name in ("start", "end"):
             shared_x.on_change(property_name, repack)
+            if spread_terminals and layout == "realization":
+                plot.y_range.on_change(property_name, repack)
         repack(None, None, None)
     elif selected_id is not None:
         _highlight(plot, events, selected_id, event_id)
@@ -608,27 +644,24 @@ def build_document(db, doc, experiment: int, cluster: int):
         active=list(range(len(fate_names))),
         sizing_mode="stretch_width",
         stylesheets=[
-            InlineStyleSheet(
-                css="""
-                    .bk-input-group { white-space: normal; }
-                    label { display: flex; align-items: center; width: 100%; }
-                    input { flex-shrink: 0; }
-                    span { min-width: 0; overflow-wrap: anywhere; }
-                """
-                + count_styles
-                + pathway_legend
-            )
+            InlineStyleSheet(css=CHECKBOX_CSS + count_styles + pathway_legend)
         ],
     )
 
     def checkbox(label, checked=False):
-        return CheckboxGroup(labels=[label], active=[0] if checked else [])
+        return CheckboxGroup(
+            labels=[label],
+            active=[0] if checked else [],
+            stylesheets=[InlineStyleSheet(css=CHECKBOX_CSS)],
+        )
 
     def enabled(widget):
         return bool(widget.active)
 
     fate_facets = checkbox("Facet pathways")
     group_fragmentations = checkbox("Group fragmentations", True)
+    own_zones = checkbox("Place initial/escape in their own zones", True)
+    spread_x = checkbox("Spread initial/escape X", True)
     event_options = {
         kind: checkbox("Initial" if kind == "init" else kind.title(), True)
         for kind in EVENT_TYPES
@@ -636,7 +669,6 @@ def build_document(db, doc, experiment: int, cluster: int):
     for kind, widget in event_options.items():
         widget.name = f"event:{kind}"
         widget.sizing_mode = "stretch_width"
-        widget.stylesheets = [InlineStyleSheet()]
     event_controls = column(spacing=4, width_policy="max")
     mode = Select(
         title="X coordinate",
@@ -735,6 +767,8 @@ def build_document(db, doc, experiment: int, cluster: int):
             column(
                 x_markers,
                 group_fragmentations,
+                own_zones,
+                spread_x,
                 group("Events", event_controls),
                 group("Y-axis", column(layout, envelope, spacing=4)),
                 spacing=4,
@@ -1045,10 +1079,18 @@ def build_document(db, doc, experiment: int, cluster: int):
             )
             selected_events = events_for(chosen_events, selected)
             mapped_regions = coordinate_regions(regions, mode.value)
-            positioned = position_events(chosen_events, mapped_regions, mode.value)
-            slot = escape_slot(mapped_regions)
             spatial = mode.value != "time"
             regional = mode.value in ("schematic", "equal")
+            own_zones.disabled = not regional
+            spread_x.disabled = (
+                not regional or not enabled(own_zones) or layout.value == "radial"
+            )
+            dedicated_zones = regional and enabled(own_zones)
+            spread_terminals = enabled(spread_x) and not spread_x.disabled
+            positioned = position_events(
+                chosen_events, mapped_regions, mode.value, dedicated_zones
+            )
+            slot = escape_slot(mapped_regions)
             show_bars.disabled = not regional
             schematic.disabled = not regional
             guides.visible = mode.value == "physical"
@@ -1060,9 +1102,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                 event_options[kind].stylesheets[0].css = (
                     f'label::before {{ content: "{marker}"; color: {color}; '
                     "display: inline-block; width: 12px; margin-right: 4px; text-align: center; font-size: 16px; }"
-                    ".bk-input-group { white-space: normal; }"
-                    "label { display: flex; align-items: center; width: 100%; }"
-                    "input { flex-shrink: 0; } span { overflow-wrap: anywhere; min-width: 0; }"
+                    + CHECKBOX_CSS
                 )
             if regional and state["auto_cdf"] and enabled(show_bars):
                 show_cdf.active = []
@@ -1089,12 +1129,12 @@ def build_document(db, doc, experiment: int, cluster: int):
             if spatial:
                 left_edge = (
                     initial_slot(mapped_regions)[0]
-                    if regional
+                    if dedicated_zones
                     else mapped_regions["left"][0]
                 )
                 right_edge = (
                     slot[1]
-                    if regional
+                    if dedicated_zones or (regional and enabled(show_bars))
                     else max(
                         mapped_regions["right"][-1],
                         max_position
@@ -1135,7 +1175,13 @@ def build_document(db, doc, experiment: int, cluster: int):
             panels = []
             if enabled(schematic) and spatial and regional and not chosen.is_empty():
                 panels.append(
-                    _schematic_plot(mapped_regions, shared_x, available_width)
+                    _schematic_plot(
+                        mapped_regions,
+                        shared_x,
+                        available_width,
+                        initial=dedicated_zones,
+                        escaped=dedicated_zones or enabled(show_bars),
+                    )
                 )
 
             def selection_callback(source):
@@ -1178,6 +1224,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                                 members["realization_number"].min() or 1,
                                 members["realization_number"].max() or 1,
                             ),
+                            spread_terminals=spread_terminals,
                         )
                     )
                 if enabled(show_cdf) or (enabled(show_bars) and regional):
@@ -1295,6 +1342,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         (fate, "active"),
         (fate_facets, "active"),
         (group_fragmentations, "active"),
+        (own_zones, "active"),
+        (spread_x, "active"),
         (mode, "value"),
         (layout, "value"),
         (envelope, "active"),

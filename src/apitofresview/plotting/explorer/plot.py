@@ -11,6 +11,7 @@ from bokeh.models import (
     Label,
     Range1d,
     Span,
+    TapTool,
 )
 from bokeh.palettes import Category10, Category20
 from bokeh.plotting import figure
@@ -86,40 +87,45 @@ def _schematic_plot(regions, shared_x, available_width, initial=True, escaped=Tr
         line_color="#64748b",
     )
     diagram.add_tools(HoverTool(renderers=[glyph], tooltips=[("Zone", "@name")]))
+    labels = []
     for index, name, lo, hi in regions.select(
         "region", "name", "left", "right"
     ).iter_rows():
-        display_name = (
-            ("C1", "Sk", "C2 (before Quad)", "Quad", "C2 (after Quad)")[index]
-            if available_width < 600
-            else fill(name, width=16)
+        short = ("C1", "Sk", "C2 (before Quad)", "Quad", "C2 (after Quad)")[index]
+        full = fill(name, width=16)
+        display_name = short if available_width < 600 else full
+        label = Label(
+            x=(lo + hi) / 2,
+            y=0.5,
+            text=display_name,
+            text_align="center",
+            text_baseline="middle",
+            text_font_size="9px",
         )
-        diagram.add_layout(
-            Label(
-                x=(lo + hi) / 2,
-                y=0.5,
-                text=display_name,
-                text_align="center",
-                text_baseline="middle",
-                text_font_size="9px",
-            )
-        )
+        diagram.add_layout(label)
+        labels.append((label, short, full))
     for visible, slot, label, short in (
         (initial, initial_slot(regions), "Initial", "Init"),
         (escaped, escape_slot(regions), "Escaped", "Esc"),
     ):
         if not visible:
             continue
-        diagram.add_layout(
-            Label(
-                x=sum(slot) / 2,
-                y=0.5,
-                text=short if available_width < 600 else label,
-                text_align="center",
-                text_baseline="middle",
-                text_font_size="9px",
-            )
+        annotation = Label(
+            x=sum(slot) / 2,
+            y=0.5,
+            text=short if available_width < 600 else label,
+            text_align="center",
+            text_baseline="middle",
+            text_font_size="9px",
         )
+        diagram.add_layout(annotation)
+        labels.append((annotation, short, label))
+
+    def resize_labels(attr, old, new):
+        for annotation, short, full in labels:
+            annotation.text = short if new < 600 else full
+
+    diagram.on_change("inner_width", resize_labels)
     return diagram
 
 
@@ -159,11 +165,10 @@ def _physical_guides(plot, regions):
     )
 
 
-def _highlight(plot, events, selected_id, event_id):
-    visible = events.filter(pl.col("realization_id") == selected_id).sort("t", "id")
-    if visible.is_empty():
-        return
-    source = _source(visible.select("position", "plot_y"))
+def _highlight(plot, get_events, selection):
+    """Keep selection overlays alive and update them from displayed coordinates."""
+    source = ColumnDataSource(dict(position=[], plot_y=[]))
+    clicked_source = ColumnDataSource(dict(position=[], plot_y=[]))
     plot.line("position", "plot_y", source=source, color="#111827", line_width=2.5)
     plot.scatter(
         "position",
@@ -175,22 +180,38 @@ def _highlight(plot, events, selected_id, event_id):
         line_color="#111827",
         line_width=2,
     )
-    clicked = (
-        visible.head(0)
-        if event_id is None
-        else visible.filter(pl.col("id") == event_id)
+    plot.scatter(
+        "position",
+        "plot_y",
+        source=clicked_source,
+        marker="circle",
+        size=20,
+        fill_alpha=0,
+        line_color="#f59e0b",
+        line_width=3,
     )
-    if not clicked.is_empty():
-        plot.scatter(
-            "position",
-            "plot_y",
-            source=_source(clicked.select("position", "plot_y")),
-            marker="circle",
-            size=20,
-            fill_alpha=0,
-            line_color="#f59e0b",
-            line_width=3,
+
+    def update():
+        events = get_events()
+        visible = (
+            events.head(0)
+            if selection["selected"] is None
+            else events.filter(pl.col("realization_id") == selection["selected"]).sort(
+                "t", "id"
+            )
         )
+        clicked = (
+            visible.head(0)
+            if selection["event"] is None
+            else visible.filter(pl.col("id") == selection["event"])
+        )
+        source.data = visible.select("position", "plot_y").to_dict(as_series=False)
+        clicked_source.data = clicked.select("position", "plot_y").to_dict(
+            as_series=False
+        )
+
+    update()
+    return update
 
 
 def _event_plot(
@@ -202,12 +223,13 @@ def _event_plot(
     regions,
     physical_guides,
     show_envelope,
-    selected_id,
-    event_id,
+    selection,
     on_selected,
     event_colors,
     realization_bounds=(1, 1),
     spread_terminals=False,
+    selection_updates=None,
+    doc=None,
 ):
     plot = figure(
         name="events",
@@ -291,20 +313,33 @@ def _event_plot(
             )
         )
         source.selected.on_change("indices", on_selected(source))
+    plot.select_one(TapTool).renderers = swarm_glyphs
+    packed = events
+    update_highlight = _highlight(plot, lambda: packed, selection)
+    if selection_updates is not None:
+        selection_updates.append(update_highlight)
     if layout == "beeswarm" or spread_terminals:
         last_dimensions = None
-        highlights = []
+        pending = False
+        live = doc is not None and doc.session_context is not None
 
-        def repack(attr, old, new):
-            nonlocal last_dimensions
+        def repack():
+            nonlocal last_dimensions, packed, pending
+            pending = False
+            if live and plot.document is not doc:
+                return
             try:
-                width = plot.inner_width or 600
+                width = plot.inner_width
             except UnsetValueError:
-                width = 600
+                width = None
             try:
-                inner_height = plot.inner_height or height - 60
+                inner_height = plot.inner_height
             except UnsetValueError:
-                inner_height = height - 60
+                inner_height = None
+            if live and (not width or not inner_height):
+                return
+            width = width or 600
+            inner_height = inner_height or height - 60
             dimensions = (
                 shared_x.start,
                 shared_x.end,
@@ -315,7 +350,6 @@ def _event_plot(
             )
             if dimensions == last_dimensions:
                 return
-            last_dimensions = dimensions
             if layout == "beeswarm":
                 packed, diameter = pack_beeswarm(
                     events,
@@ -333,6 +367,8 @@ def _event_plot(
                 packed = spread_terminal_x(
                     events, regions, layout, *dimensions[:4], dimensions[4:], diameter
                 )
+            # Beeswarm sets its own Y range; cache the resulting bounds.
+            last_dimensions = (*dimensions[:4], plot.y_range.start, plot.y_range.end)
             positions = {
                 i: (x, y)
                 for i, x, y in packed.select("id", "position", "plot_y").iter_rows()
@@ -351,23 +387,25 @@ def _event_plot(
                     diameter / 2,
                 )
                 envelope_source.data = outline.to_dict(as_series=False)
-            for renderer in highlights:
-                plot.renderers.remove(renderer)
-            highlights.clear()
-            if selected_id is not None:
-                previous = len(plot.renderers)
-                _highlight(plot, packed, selected_id, event_id)
-                highlights.extend(plot.renderers[previous:])
+            update_highlight()
+
+        def schedule_repack(attr, old, new):
+            nonlocal pending
+            if live:
+                if not pending:
+                    pending = True
+                    doc.add_next_tick_callback(repack)
+            else:
+                repack()
 
         for property_name in ("inner_width", "inner_height"):
-            plot.on_change(property_name, repack)
+            plot.on_change(property_name, schedule_repack)
         for property_name in ("start", "end"):
-            shared_x.on_change(property_name, repack)
+            shared_x.on_change(property_name, schedule_repack)
             if spread_terminals and layout == "realization":
-                plot.y_range.on_change(property_name, repack)
-        repack(None, None, None)
-    elif selected_id is not None:
-        _highlight(plot, events, selected_id, event_id)
+                plot.y_range.on_change(property_name, schedule_repack)
+        if not live:
+            repack()
     return plot
 
 

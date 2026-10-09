@@ -859,3 +859,115 @@ def test_initial_event_controls_and_schematic(monkeypatch):
     assert all(1 not in r.data_source.data.get("id", []) for r in chart.renderers)
     control.active = [0]
     assert doc.to_json() is not None
+
+
+@pytest.mark.parametrize("layout", ["realization", "strip", "beeswarm", "radial"])
+def test_inspection_and_frame_changes_preserve_plots(monkeypatch, layout):
+    frames = cohort(
+        [1, 2],
+        event(1, "init", 1, 0, 0),
+        event(2, "escape", 1, 1, 5),
+        event(3, "init", 2, 0, 0),
+        event(4, "escape", 2, 1, 5),
+    )
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
+    ).value = layout
+    p = doc.select_one({"name": "events"})
+    p.set_from_json("inner_width", 900)
+    p.set_from_json("inner_height", 380)
+    p.x_range.start, p.x_range.end = 1, 8
+    renderers = list(p.renderers)
+    ranges = p.x_range, p.y_range
+    source = next(
+        r.data_source for r in p.renderers if 1 in r.data_source.data.get("id", [])
+    )
+
+    # Inspection must not re-enter the cohort/layout pipeline.
+    monkeypatch.setattr(
+        session, "layout_events", lambda *args: pytest.fail("Plot rebuilt")
+    )
+    monkeypatch.setattr(
+        plot, "pack_beeswarm", lambda *args, **kwargs: pytest.fail("Selection repacked")
+    )
+    monkeypatch.setattr(
+        plot, "spread_terminal_x", lambda *args: pytest.fail("Selection repacked")
+    )
+    source.selected.indices = [source.data["id"].index(1)]
+    bridge = doc.roots[0].children[1]
+    bridge.text = "2"
+    clicked = next(r for r in p.renderers if getattr(r.glyph, "size", None) == 20)
+    assert clicked.data_source.data["position"]
+    bridge.text = "clear"
+    assert not clicked.data_source.data["position"]
+    source.selected.indices = [source.data["id"].index(1)]
+    bridge.text = "2"
+    assert clicked.data_source.data["position"]
+    next(
+        w
+        for w in doc.select({"type": CheckboxGroup})
+        if w.labels == ["Summarise non-axial motion"]
+    ).active = []
+
+    viewport = next(d for d in doc.select({"type": Div}) if d.text == "1440,900")
+    viewport.text = "1280,901"
+    viewport.text = "640,901"
+    fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
+    fullscreen.text = "full"
+    assert p.height > 440
+    fullscreen.text = "normal"
+    assert p.height == 440
+    assert doc.select_one({"name": "events"}) is p
+    assert p.renderers == renderers
+    assert (p.x_range, p.y_range) == ranges
+    assert (p.x_range.start, p.x_range.end) == (1, 8)
+
+
+@pytest.mark.parametrize("layout", ["realization", "beeswarm"])
+def test_live_packing_waits_for_dimensions_and_coalesces_updates(monkeypatch, layout):
+    frames = cohort([1], event(1, "init", 1, 0, 0), event(2, "escape", 1, 1, 5))
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    doc = Document()
+    # Exercise server scheduling without starting a network server.
+    doc._session_context = lambda: object()
+    packing_name = "pack_beeswarm" if layout == "beeswarm" else "spread_terminal_x"
+    original = getattr(plot, packing_name)
+    calls = []
+
+    def pack(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(plot, packing_name, pack)
+    build_document(None, doc, 1, 1)
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
+    ).value = layout
+    p = doc.select_one({"name": "events"})
+    assert not calls
+    p.set_from_json("inner_width", 300)
+    assert len(doc.session_callbacks) == 1
+    doc.session_callbacks[0].callback()
+    assert not calls  # Height is still unknown.
+    p.set_from_json("inner_width", 900)
+    p.set_from_json("inner_height", 380)
+    p.x_range.start, p.x_range.end = 0, 8
+    assert len(doc.session_callbacks) == 1
+    doc.session_callbacks[0].callback()
+    assert len(calls) == 1
+    assert not doc.session_callbacks
+    # Returning to the same dimensions before the next tick needs no work.
+    p.x_range.start = 1
+    p.x_range.start = 0
+    doc.session_callbacks[0].callback()
+    assert len(calls) == 1
+    # A queued update for a plot removed by a control change must be discarded.
+    p.set_from_json("inner_width", 800)
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "X coordinate"
+    ).value = "time"
+    doc.session_callbacks[0].callback()
+    assert len(calls) == 1

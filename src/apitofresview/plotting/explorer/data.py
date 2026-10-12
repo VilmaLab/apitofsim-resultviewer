@@ -4,6 +4,7 @@ Time coordinates use the recorder's raw ``postime.t``; there is no separate
 realization start timestamp in the database.
 """
 
+import duckdb
 import polars as pl
 from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_lengths
 
@@ -31,51 +32,40 @@ def make_regions(boundaries):
 
 def load_data(db, experiment: int, cluster: int):
     """Return realization, event, pathway and region frames for one cohort."""
-    connection = db.db
-    realizations = connection.execute(
-        """
-        with results as (
-            select id from multi_pathway_experiment_result
-            where experiment_run_id = ? and cluster_id = ?
-            union
-            select s.id from single_pathway_experiment_result s
-            join pathway p on p.id = s.pathway_id
-            where s.experiment_run_id = ? and p.cluster_id = ?
+    realizations = (
+        db.realizations_query(run_id=experiment, parent=cluster)
+        .select("realization_id as id, experiment_result_id")
+        .order("id")
+        .pl()
+    )
+    events = (
+        db.events_query(run_id=experiment, parent=cluster, sort=True)
+        .pl()
+        .rename({"event_id": "id", "event_type": "type"})
+        .with_columns(
+            pl.col("type").cast(pl.String),
+            pl.col("t", "x", "y", "z").cast(pl.Float64),
+            (pl.col("z") < 0).alias("z_clamped"),
         )
-        select r.id, r.experiment_result_id from realization r
-        join results on results.id = r.experiment_result_id
-        order by r.id
-        """,
-        (experiment, cluster, experiment, cluster),
-    ).pl()
-    # DuckDB replacement scans reference the local Polars frame directly.
-    events = connection.execute(
-        """
-        select e.id, e.realization_id, e.event_type::varchar as type,
-               e.postime.t::double as t, e.postime.x::double as x,
-               e.postime.y::double as y,
-               greatest(e.postime.z::double, 0.0) as z,
-               f.pathway_id, e.postime.z < 0 as z_clamped,
-               e.velocity, e.omega, e.rot_energy, e.vibrational_energy,
-               e.particle_index, c.theta, c.u_norm, c.accepted
-        from event_info e join realizations r on r.id = e.realization_id
-        left join collision_event c on c.id = e.id
-        left join fragmentation_event f on f.id = e.id
-        order by e.realization_id, e.postime.t, e.id
-        """
-    ).pl()
-    pathways = connection.execute(
-        """
-        select p.id as pathway_id, c.common_name || ' → ' ||
-               a.common_name || ' + ' || b.common_name as pathway
-        from pathway p
-        join cluster c on c.id = p.cluster_id
-        join cluster a on a.id = p.product1_id
-        join cluster b on b.id = p.product2_id
-        where p.cluster_id = ?
-        """,
-        (cluster,),
-    ).pl()
+        .with_columns(pl.col("z").clip(lower_bound=0))
+    )
+    pathways = (
+        db.db.table("pathway_report")
+        .filter(
+            duckdb.ColumnExpression("cluster_id") == duckdb.ConstantExpression(cluster)
+        )
+        .pl()
+        .select(
+            "pathway_id",
+            pl.concat_str(
+                "cluster_common_name",
+                pl.lit(" → "),
+                "product1_common_name",
+                pl.lit(" + "),
+                "product2_common_name",
+            ).alias("pathway"),
+        )
+    )
     regions = make_regions(
         tuple(
             float(v)
@@ -83,9 +73,12 @@ def load_data(db, experiment: int, cluster: int):
         )
     )
     events = preprocess_events(events, regions)
-    cluster_name = connection.execute(
-        "select common_name from cluster where id = ?", (cluster,)
-    ).fetchone()[0]
+    cluster_name = (
+        db.clusters_query()
+        .filter(duckdb.ColumnExpression("id") == duckdb.ConstantExpression(cluster))
+        .select("common_name")
+        .fetchone()[0]
+    )
     return (
         classify(realizations, events, pathways, cluster_name),
         events,

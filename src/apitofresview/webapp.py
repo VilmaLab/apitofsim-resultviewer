@@ -13,7 +13,7 @@ from functools import partial
 import duckdb
 from apitofsim.plotting.report import get_report
 from apitofsim.workflow.db import (
-    ExperimentDatabase,
+    RealizationDatabase,
 )
 from bokeh.server.asgi import BokehASGI
 from mplbed import (
@@ -166,7 +166,7 @@ def pathway_type_lbl(is_single_pathway):
 
 def get_experiment_choices(db):
     experiment_choices = []
-    df = db.report_df("experiment_summary")
+    df = db.experiment_overview_query().fetchdf()
     for row in df.itertuples():
         pathway_desc = pathway_type_lbl(row.is_single_pathway)
         label = (
@@ -180,24 +180,14 @@ def get_experiment_choices(db):
 
 def get_experiment_overview(db, experiment):
     """Return display-ready run metadata and configuration for one experiment."""
-    row = db.db.execute(
-        """
-        select
-            summary.experiment_run_id,
-            summary.config_name,
-            summary.start_time,
-            summary.successes,
-            summary.failures,
-            summary.is_single_pathway,
-            config.config,
-            run.run_config
-        from experiment_summary as summary
-        join experiment_run as run on run.id = summary.experiment_run_id
-        join experiment_config as config on config.id = run.experiment_config_id
-        where summary.experiment_run_id = ?
-        """,
-        (experiment,),
-    ).fetchone()
+    row = (
+        db.experiment_overview_query(experiment)
+        .select(
+            "experiment_run_id, config_name, start_time, successes, failures, "
+            "is_single_pathway, config, run_config"
+        )
+        .fetchone()
+    )
     if row is None:
         return None
 
@@ -220,15 +210,13 @@ def get_cluster_choices(db, experiment):
     """The clusters occurring in the given experiment run, as (label, value)."""
     if experiment is None:
         return []
-    df = db.db.execute(
-        """
-        select distinct cluster_id, cluster_common_name, cluster_atomic_mass
-        from experiment_cluster_report
-        where experiment_run_id = ?
-        order by cluster_atomic_mass, cluster_common_name
-        """,
-        (experiment,),
-    ).fetchdf()
+    df = (
+        db.experiment_clusters_query(experiment)
+        .select("cluster_id, cluster_common_name, cluster_atomic_mass")
+        .distinct()
+        .order("cluster_atomic_mass, cluster_common_name")
+        .fetchdf()
+    )
     return [
         (f"{row.cluster_common_name} ({row.cluster_atomic_mass} amu)", row.cluster_id)
         for row in df.itertuples()
@@ -600,14 +588,11 @@ async def explorer(request, params):
 def get_is_single_pathway(db, experiment, cluster):
     if experiment is None or cluster is None:
         return None
-    row = db.db.execute(
-        """
-        select is_single_pathway
-        from experiment_cluster_report
-        where experiment_run_id = ? and cluster_id = ?
-        """,
-        (experiment, cluster),
-    ).fetchone()
+    row = (
+        db.experiment_clusters_query(experiment, cluster)
+        .select("is_single_pathway")
+        .fetchone()
+    )
     return row[0] if row else None
 
 
@@ -665,7 +650,7 @@ def create_app(database_path=None, debug=True):
     if database_path is None:
         database_path = environ["DATABASE"]
 
-    db = ExperimentDatabase(database_path, readonly=True)
+    db = RealizationDatabase(database_path, readonly=True)
     app = Starlette(
         debug=debug,
         routes=[

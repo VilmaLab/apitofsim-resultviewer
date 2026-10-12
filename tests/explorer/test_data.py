@@ -1,10 +1,9 @@
 """Explorer data behavior."""
 
-from types import SimpleNamespace
-
 import duckdb
 import polars as pl
 import pytest
+from apitofsim.workflow.db import RealizationDatabase
 
 from apitofresview.plotting.explorer import data
 
@@ -57,42 +56,34 @@ def test_terminal_histories(history, fate, terminal):
 
 
 @pytest.mark.parametrize("negative_z", [False, True])
-def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp_path):
+@pytest.mark.parametrize("attached", [False, True])
+def test_adapter_resolves_results_and_preserves_ids(
+    monkeypatch, negative_z, attached, tmp_path
+):
     database_path = str(tmp_path / "explorer.duckdb")
-    conn = duckdb.connect(database_path)
-    conn.execute(
-        "create table multi_pathway_experiment_result(id int, experiment_run_id int, cluster_id int)"
-    )
-    conn.execute(
-        "create table single_pathway_experiment_result(id int, experiment_run_id int, pathway_id int)"
-    )
-    conn.execute(
-        "create table pathway(id int, cluster_id int, product1_id int, product2_id int)"
-    )
-    conn.execute("create table cluster(id int, common_name varchar)")
-    conn.execute("create table realization(id int, experiment_result_id int)")
+    db = RealizationDatabase(database_path)
+    db.create_tables()
+    conn = db.db
+    for column, value in {
+        "velocity": "{'x':1,'y':2,'z':3}",
+        "omega": "{'x':4,'y':5,'z':6}",
+        "rot_energy": "1e-21",
+        "vibrational_energy": "2e-20",
+        "particle_index": "0",
+    }.items():
+        conn.execute(f"alter table event_info alter {column} set default {value}")
     conn.execute("""
-        create table event_info(
-            id int, realization_id int, event_type varchar,
-            postime struct(x double,y double,z double,t double),
-            velocity struct(x double,y double,z double) default {'x':1,'y':2,'z':3},
-            omega struct(x double,y double,z double) default {'x':4,'y':5,'z':6},
-            rot_energy double default 1e-21,
-            vibrational_energy double default 2e-20,
-            particle_index int default 0
-        )
+        insert into cluster (id, common_name) values
+        (1,'5A_5SA_negative'),(2,'4A_5SA_negative'),(3,'1A_neutral');
+        insert into pathway values (7,1,2,3);
+        insert into experiment_config (id) values (1);
+        insert into experiment_run (id, experiment_config_id) values (1,1),(2,1);
+        insert into multi_pathway_experiment_result (id,experiment_run_id,cluster_id)
+        values (10,1,1),(11,2,1);
+        insert into single_pathway_experiment_result (id,experiment_run_id,pathway_id)
+        values (12,1,7);
+        insert into realization values (100,10),(101,11),(102,12);
     """)
-    conn.execute(
-        "create table collision_event(id int, theta double, u_norm double, accepted bool)"
-    )
-    conn.execute("create table fragmentation_event(id int, pathway_id int)")
-    conn.execute(
-        "insert into cluster values (1,'5A_5SA_negative'),(2,'4A_5SA_negative'),(3,'1A_neutral')"
-    )
-    conn.execute("insert into pathway values (7,1,2,3)")
-    conn.execute("insert into multi_pathway_experiment_result values (10,1,1),(11,2,1)")
-    conn.execute("insert into single_pathway_experiment_result values (12,1,7)")
-    conn.execute("insert into realization values (100,10),(101,11),(102,12)")
     conn.execute(
         "insert into event_info (id,realization_id,event_type,postime) values (501,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
     )
@@ -127,9 +118,34 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
             "event_info",
         )
     }
-    conn.close()
-    conn = duckdb.connect(database_path, read_only=True)
-    db = SimpleNamespace(db=conn)
+    db.close()
+    if attached:
+        cluster_path = str(tmp_path / "clusters.duckdb")
+        clusters = duckdb.connect(cluster_path)
+        clusters.execute(
+            f"attach '{database_path.replace(chr(39), chr(39) * 2)}' as results (read_only)"
+        )
+        for table in ("cluster", "pathway"):
+            clusters.execute(f"create table {table} as select * from results.{table}")
+        clusters.close()
+        conn = duckdb.connect(":memory:")
+        conn.execute(
+            f"attach '{database_path.replace(chr(39), chr(39) * 2)}' as results (read_only)"
+        )
+        conn.execute(
+            f"attach '{cluster_path.replace(chr(39), chr(39) * 2)}' as clusters (read_only)"
+        )
+        for (table,) in conn.execute(
+            "select table_name from information_schema.tables "
+            "where table_catalog = 'results' and table_type = 'BASE TABLE'"
+        ).fetchall():
+            source = "clusters" if table in ("cluster", "pathway") else "results"
+            conn.execute(f"create view {table} as select * from {source}.{table}")
+        db = RealizationDatabase((conn, None))
+        db.refresh_views()
+    else:
+        db = RealizationDatabase(database_path, readonly=True)
+    conn = db.db
     realizations, events, pathways, regions = data.load_data(db, 1, 1)
     assert realizations["id"].to_list() == [100, 102]
     assert realizations["fate"].to_list() == [
@@ -155,24 +171,32 @@ def test_adapter_resolves_results_and_preserves_ids(monkeypatch, negative_z, tmp
         assert events.filter(pl.col("id") == 502)["region"][0] == 0
     for table, snapshot in snapshots.items():
         assert conn.execute(f"select * from {table}").fetchall() == snapshot
-    conn.close()
-    conn = duckdb.connect(database_path)
-    # UNION of result IDs prevents duplicate histories across result tables.
-    conn.execute("insert into single_pathway_experiment_result values (10,1,7)")
-    conn.execute("insert into multi_pathway_experiment_result values (13,1,9)")
-    conn.execute("insert into realization values (103,13)")
+    db.close()
+    db = RealizationDatabase(database_path)
+    conn = db.db
+    conn.execute(
+        "insert into multi_pathway_experiment_result (id,experiment_run_id,cluster_id) values (13,1,2)"
+    )
+    conn.execute("insert into realization values (103,13),(104,10),(105,12)")
+    conn.execute(
+        "insert into event_info (id,realization_id,event_type,postime) "
+        "values (507,105,'fragmentation', {'x':0,'y':0,'z':2,'t':1})"
+    )
     conn.execute(
         "insert into event_info (id,realization_id,event_type,postime) values (504,101,'collision', {'x':1,'y':2,'z':0,'t':1}), (505,103,'collision', {'x':1,'y':2,'z':0,'t':1}), (506,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
     )
-    conn.close()
-    conn = duckdb.connect(database_path, read_only=True)
-    db = SimpleNamespace(db=conn)
+    db.close()
+    db = RealizationDatabase(database_path, readonly=True)
+    conn = db.db
     realizations, events, _, _ = data.load_data(db, 1, 1)
-    assert realizations["id"].to_list() == [100, 102]
-    assert events["id"].to_list() == [500, 501, 506, 502, 503]
+    assert realizations["id"].to_list() == [100, 102, 104, 105]
+    assert realizations["fate"].to_list()[-2:] == ["Incomplete", "Incomplete"]
+    assert events["id"].to_list() == [500, 501, 506, 502, 503, 507]
+    assert events.filter(pl.col("id") == 506)["theta"][0] is None
+    assert events.filter(pl.col("id") == 507)["pathway_id"][0] is None
     empty = data.load_data(db, 99, 1)
     assert empty[0].is_empty() and empty[1].is_empty()
-    conn.close()
+    db.close()
 
 
 def test_fates_and_preprocessing():

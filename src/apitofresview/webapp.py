@@ -602,6 +602,7 @@ def spectrogram_bokeh(db, doc):
         basic_spectrogram,
         get_intensities,
     )
+    from apitofsim.transmission import transform_intensity
     from bokeh.layouts import layout
 
     args = doc.session_context.request.arguments
@@ -618,8 +619,12 @@ def spectrogram_bokeh(db, doc):
         cluster_id=cluster,
         is_single_pathway=get_is_single_pathway(db, experiment, cluster),  # type: ignore[arg-type]
     )
+    transmission_model = args.get("transmission_model")
+    if transmission_model is not None:
+        transmission_model = transmission_model[-1].decode()
+    transform_intensity(df, transmission_model)
     renderer = holoviews.renderer("bokeh").instance(mode="server")
-    plot = renderer.get_plot(basic_spectrogram(df), doc)
+    plot = renderer.get_plot(basic_spectrogram(df, scale="sum"), doc)
     root = layout(  # type: ignore[call-arg]
         [[plot.state]], sizing_mode="fixed"
     )

@@ -109,6 +109,10 @@ npm run build       # one-off build
 npm run watch       # rebuild on change (css + js)
 ```
 
+The desktop command checks these assets at startup and rebuilds them when
+sources change. `--reload` also watches the frontend sources and templates.
+Frozen builds validate the assets bundled by PyInstaller without running npm.
+
 Sources live in `src/js/index.ts` (bundle entry) and `src/css/index.css`
 (Tailwind v4 entry, scanning `src/apitofresview/templates/` for utility
 classes). This mirrors the setup in apitofsim-web.

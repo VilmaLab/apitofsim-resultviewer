@@ -604,6 +604,7 @@ def spectrogram_bokeh(db, doc):
     )
     from apitofsim.transmission import transform_intensity
     from bokeh.layouts import layout
+    from bokeh.models import CustomAction, CustomJS
 
     args = doc.session_context.request.arguments
 
@@ -625,8 +626,40 @@ def spectrogram_bokeh(db, doc):
     transform_intensity(df, transmission_model)
     renderer = holoviews.renderer("bokeh").instance(mode="server")
     plot = renderer.get_plot(basic_spectrogram(df, scale="sum"), doc)
+    figure = plot.state
+    figure.width *= 2
+    figure.y_range.end = 1
+    figure.y_range.reset_end = 1
+    figure.x_range.bounds = (0, 2 * figure.x_range.end)
+    figure.y_range.bounds = (0, 1)
+    figure.toolbar.logo = None
+    figure.add_tools(
+        CustomAction(
+            description="Fullscreen spectrogram",
+            icon="fullscreen",
+            callback=CustomJS(
+                args=dict(figure=figure),
+                code="""
+                    const element = Bokeh.index.find_one(figure)?.el;
+                    if (element == null) return;
+                    if (element._spectrogramFullscreenListener == null) {
+                        const width = figure.width;
+                        const height = figure.height;
+                        element._spectrogramFullscreenListener = () => {
+                            const full = document.fullscreenElement === element;
+                            figure.width = full ? window.innerWidth : width;
+                            figure.height = full ? window.innerHeight : height;
+                        };
+                        document.addEventListener('fullscreenchange', element._spectrogramFullscreenListener);
+                    }
+                    if (document.fullscreenElement === element) void document.exitFullscreen();
+                    else if (document.fullscreenElement == null) void element.requestFullscreen();
+                """,
+            ),
+        )
+    )
     root = layout(  # type: ignore[call-arg]
-        [[plot.state]], sizing_mode="fixed"
+        [[figure]], sizing_mode="fixed"
     )
     doc.add_root(root)
 

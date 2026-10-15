@@ -1,112 +1,58 @@
-import argparse
-import os
-import sys
+"""Result viewer options over the shared desktop runner."""
+
 from pathlib import Path
 
-from apitofresview import config, desktop  # type: ignore[reportMissingImports]
-from apitofresview.webapp import create_app  # type: ignore[reportMissingImports]
+from workingtitle.desktop import run_cli
+
+from apitofresview import config
+from apitofresview.build import ASSETS
+from apitofresview.desktop import APP, SESSION
+from apitofresview.smoke import smoke_test
 
 
-def build_parser():
-    parser = argparse.ArgumentParser(
-        prog="apitofresview",
-        description="Read-only web viewer for APi-ToF simulation results.",
-    )
+def add_arguments(parser):
     parser.add_argument(
         "--database",
         type=Path,
         metavar="PATH",
-        help=f"Experiment database path. Overrides ${config.ENV_VAR}. "
-        "Without either, the viewer cannot start.",
-    )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument(
-        "--port", type=int, default=0, help="0 (the default) picks a free port"
+        help=f"Experiment database path. Overrides ${config.ENV_VAR}.",
     )
     parser.add_argument(
         "--no-window",
         action="store_true",
-        help="Serve only; do not open a native window or a browser",
+        help="Serve only; do not open a native window or browser",
     )
     parser.add_argument(
-        "--no-browser", action="store_true", help="Do not open the system browser"
-    )
-    parser.add_argument(
-        "--reload",
+        "--no-browser",
         action="store_true",
-        help="Restart the server when source files change (browser only)",
+        help="Do not open the system browser",
     )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Show tracebacks in the browser and enable --reload",
-    )
-    parser.add_argument(
-        "--smoke-test",
-        action="store_true",
-        help="Start up, self-check, and exit. Used to validate frozen builds.",
-    )
-    return parser
+
+
+def prepare(args):
+    try:
+        settings = config.load(args.database)
+    except config.ConfigError as exc:
+        raise ValueError(str(exc)) from exc
+    if args.no_window or args.no_browser:
+        args.mode = "server"
+    return {config.ENV_VAR: str(settings.database)}
 
 
 def main(argv=None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    # --debug implies --reload: tracebacks are only useful while iterating.
-    # --smoke-test starts and exits, so reloading it would be pointless.
-    reload = (args.reload or args.debug) and not args.smoke_test
-
-    settings = None
-    if not args.smoke_test:
-        try:
-            settings = config.load(args.database)
-        except config.ConfigError as exc:
-            parser.error(str(exc))
-
-    if reload:
-        # The reloader re-imports the app in a subprocess, so pass the settings
-        # and debug flag on through the environment rather than directly.
-        if args.database:
-            os.environ[config.ENV_VAR] = str(args.database)
-        if args.debug:
-            os.environ[config.DEBUG_ENV_VAR] = "1"
-        desktop.run_reload(args.host, args.port, open_browser=not args.no_browser)
-        return 0
-
-    sock = desktop.bind_socket(args.host, args.port)
-
-    if args.smoke_test:
-        # Self-contained: builds its own throwaway database, so it validates
-        # the bundle without needing a real database path or $DATABASE.
-        from apitofresview.smoke import (
-            run_smoke_test,  # type: ignore[reportMissingImports]
-        )
-
-        return run_smoke_test(sock, args.database, args.debug)
-
-    app = create_app(settings.database, debug=args.debug)
-
-    if args.no_window or not desktop.native_window_supported():
-        desktop.run_browser(app, sock, open_browser=not args.no_browser)
-        return 0
-
-    try:
-        desktop.run_window(app, sock)
-    except Exception as err:
-        # A missing or broken webview backend should degrade to the browser,
-        # not to nothing at all.
-        print(
-            f"Could not open a native window ({err}); falling back to the browser.",
-            file=sys.stderr,
-        )
-        # uvicorn closes the sockets it was handed when it shuts down, so the
-        # socket run_window used is dead by now; the fallback needs a fresh one.
-        sock.close()
-        sock = desktop.bind_socket(args.host, args.port)
-        desktop.run_browser(app, sock, open_browser=not args.no_browser)
-    return 0
+    return run_cli(
+        APP,
+        argv,
+        add_arguments=add_arguments,
+        prepare=prepare,
+        assets=ASSETS,
+        smoke_test=smoke_test,
+        session=SESSION,
+    )
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from multiprocessing import freeze_support
+
+    freeze_support()
+    raise SystemExit(main())

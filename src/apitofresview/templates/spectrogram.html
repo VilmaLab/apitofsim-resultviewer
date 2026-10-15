@@ -18,8 +18,8 @@
             {{ spectrogram_mpl|safe }}
         </div>
 
-        <div x-show="current_tab === 'bokeh'">
-            {{ spectrogram_bokeh|safe }}
+        <div x-show="current_tab === 'bokeh'" class="overflow-x-auto p-4">
+            <div class="mx-auto w-max">{{ spectrogram_bokeh|safe }}</div>
         </div>
     </div>
 {% endblock %}

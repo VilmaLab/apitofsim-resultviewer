@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from apitofresview import desktop  # type: ignore[reportMissingImports]
+from workingtitle.desktop import ServerThread, bind_socket
 
 HTTP_CHECKS = [
     # The overview page (served at the root) renders base.html, which needs
@@ -198,7 +198,7 @@ def run_smoke_test(sock, database_path=None, debug=False):
         tmpdir, database_path = make_test_database()
     app = create_app(database_path, debug=debug)
 
-    server = desktop.ServerThread(app, sock, log_level="warning").start()
+    server = ServerThread(app, sock, log_level="warning").start()
     failures = []
     try:
         print(f"Serving at {server.url}", flush=True)
@@ -221,3 +221,8 @@ def run_smoke_test(sock, database_path=None, debug=False):
         return 1
     print("\nSMOKE TEST PASSED", flush=True)
     return 0
+
+
+def smoke_test(args, session):
+    """Adapt the existing self-check to the shared CLI callback."""
+    return run_smoke_test(bind_socket(args.host, args.port), args.database, args.debug)

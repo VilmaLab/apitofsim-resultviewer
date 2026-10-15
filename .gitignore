@@ -17,3 +17,7 @@ wheels/
 
 # Node dependencies
 /node_modules/
+
+# Generated files
+/src/apitofresview/static/index.css
+/src/apitofresview/static/index.js

@@ -1,4 +1,3 @@
-import os
 import socket
 import subprocess
 import sys
@@ -10,7 +9,7 @@ import pytest
 from apitofsim.workflow.db import ExperimentDatabase
 
 
-SERVER_STARTUP_TIMEOUT = 30
+SERVER_STARTUP_TIMEOUT = 90
 
 
 @pytest.fixture(scope="session")
@@ -95,17 +94,17 @@ def live_server(browser_database):
         [
             sys.executable,
             "-m",
-            "uvicorn",
-            "apitofresview.asgi:app",
-            "--host",
-            "127.0.0.1",
+            "apitofresview",
+            "--database",
+            str(browser_database),
+            "--mode",
+            "server",
             "--port",
             str(port),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        env={**os.environ, "DATABASE": str(browser_database)},
     )
     try:
         _wait_until_serving(base_url, process)

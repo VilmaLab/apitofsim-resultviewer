@@ -59,7 +59,8 @@ uv run apitofresview --database /path/to/experiments.duckdb
 ```
 
 `DATABASE=/path/to/experiments.duckdb uv run uvicorn apitofresview.webapp:create_app --factory` also works if you
-want a plain ASGI server.
+want a plain ASGI server. Build the frontend assets first; this entry point
+does not check or build them.
 
 ### Using a development copy of apitofsim
 
@@ -101,7 +102,8 @@ checkout, and `"editable": true`. To switch back to the pinned release, drop
 
 Client-side dependencies (Alpine, htmx, Tabulator, Tailwind) are pulled from
 npm and bundled into `src/apitofresview/static/index.js` /
-`src/apitofresview/static/index.css` (committed, so the app runs offline):
+`src/apitofresview/static/index.css`. These generated files are Git-ignored and
+must be built in a fresh checkout:
 
 ```sh
 npm install
@@ -111,7 +113,9 @@ npm run watch       # rebuild on change (css + js)
 
 The desktop command checks these assets at startup and rebuilds them when
 sources change. `--reload` also watches the frontend sources and templates.
-Frozen builds validate the assets bundled by PyInstaller without running npm.
+PyInstaller forces a fresh build before bundling; the frozen app validates its
+bundled assets without running npm. Browser tests start through the CLI, which
+builds the assets before serving. A direct ASGI launch does not build them.
 
 Sources live in `src/js/index.ts` (bundle entry) and `src/css/index.css`
 (Tailwind v4 entry, scanning `src/apitofresview/templates/` for utility
@@ -139,8 +143,8 @@ checkout needs network access to those repositories.
 
 ## Tests
 
-Install Chromium once, then run the pytest suite. The suite starts the viewer
-against a temporary DuckDB database and drives it through a real browser.
+Install Chromium once, then run pytest. The suite starts the viewer through its
+CLI against a temporary DuckDB database and drives it through a real browser.
 
 ```sh
 uv run playwright install chromium

@@ -19,5 +19,6 @@ wheels/
 /node_modules/
 
 # Generated files
+/.desktop-build/
 /src/apitofresview/static/index.css
 /src/apitofresview/static/index.js

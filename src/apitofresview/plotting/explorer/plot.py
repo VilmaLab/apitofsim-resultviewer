@@ -180,9 +180,15 @@ def _schematic_plot(
         const span = plot.x_range.end - plot.x_range.start;
         const units = span / Math.max(plot.inner_width, 1);
         const min = units * 5;
+        const instrument = [1, 2, 3, 4, 5];
+        const secondChamber = [3, 4, 5];
+        // Each boundary exchanges width within its containing section.
         const groups = [
-            [[0], [1]], [[1], [2, 3, 4, 5]], [[2], [3, 4, 5]],
-            [[3], [4]], [[4], [5]], [[3, 4, 5], [6]],
+            [[0], instrument],
+            [[1], [2, ...secondChamber]],
+            [[1, 2], secondChamber],
+            [[3], [4]], [[4], [5]],
+            [instrument, [6]],
         ];
         function hit(x) {
             let best = -1, distance = units * 10;
@@ -207,10 +213,27 @@ def _schematic_plot(
         }
         function resizeGroup(widths, indices, change) {
             if (Math.abs(change) < 1e-12) return;
-            const basis = indices.map(i => change < 0 ? Math.max(widths[i] - min, 0) : widths[i]);
-            const total = basis.reduce((a, b) => a + b, 0);
-            if (total <= 0) return;
-            indices.forEach((i, j) => { widths[i] += change * basis[j] / total; });
+            if (change > 0) {
+                const total = indices.reduce((sum, i) => sum + widths[i], 0);
+                indices.forEach(i => { widths[i] *= 1 + change / total; });
+                return;
+            }
+            let remaining = -change;
+            let active = indices.slice();
+            while (remaining > 1e-12 && active.length) {
+                const total = active.reduce((sum, i) => sum + widths[i], 0);
+                const scale = Math.max(0, 1 - remaining / total);
+                const limited = active.filter(i => widths[i] * scale < min);
+                if (!limited.length) {
+                    active.forEach(i => { widths[i] *= scale; });
+                    break;
+                }
+                for (const i of limited) {
+                    remaining -= widths[i] - min;
+                    widths[i] = min;
+                }
+                active = active.filter(i => !limited.includes(i));
+            }
         }
         function preview(x) {
             const drag = source._explorerDrag;

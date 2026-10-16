@@ -201,17 +201,21 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         """() => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected && p.renderers[0].data_source.data.right[0] > 0)"""
     )
     after = widths()
-    assert after[0] > before[0] and after[1] < before[1]
-    assert after[2:] == pytest.approx(before[2:])
+    assert after[0] > before[0]
+    assert all(after[i] < before[i] for i in range(1, 6))
+    assert after[6] == pytest.approx(before[6])
     assert x_range() == pytest.approx(original_range)
     expect(page.get_by_label("Sizing")).to_have_value("Custom")
 
-    for boundary, grow, shrink, fixed in (
-        (1, (1,), (2, 3, 4, 5), (0, 6)),
-        (2, (2,), (3, 4, 5), (0, 1, 6)),
-        (3, (3,), (4,), (0, 1, 2, 5, 6)),
-        (4, (4,), (5,), (0, 1, 2, 3, 6)),
-        (5, (3, 4, 5), (6,), (0, 1, 2)),
+    for boundary, pixels, grow, shrink, fixed in (
+        (0, -20, (1, 2, 3, 4, 5), (0,), (6,)),
+        (1, 20, (1,), (2, 3, 4, 5), (0, 6)),
+        (2, 20, (1, 2), (3, 4, 5), (0, 6)),
+        (2, -20, (3, 4, 5), (1, 2), (0, 6)),
+        (3, 20, (3,), (4,), (0, 1, 2, 5, 6)),
+        (4, 20, (4,), (5,), (0, 1, 2, 3, 6)),
+        (5, 20, (1, 2, 3, 4, 5), (6,), (0,)),
+        (5, -20, (6,), (1, 2, 3, 4, 5), (0,)),
     ):
         old_id = page.evaluate(
             """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
@@ -223,7 +227,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
             arg=old_id,
         )
         before = widths()
-        drag(boundary, 20)
+        drag(boundary, pixels)
         expect(page.get_by_label("Sizing")).to_have_value("Custom")
         after = widths()
         assert sum(after) == pytest.approx(sum(before))
@@ -233,6 +237,29 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
             assert after[index] < before[index]
         for index in fixed:
             assert after[index] == pytest.approx(before[index])
+
+    old_id = page.evaluate(
+        """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
+    )
+    page.get_by_label("Sizing").select_option(label="Equal chambers")
+    page.wait_for_function(
+        """oldId => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && Bokeh.index.find_one(p)?.el?.isConnected)""",
+        arg=old_id,
+    )
+    drag(3, 20)
+    expect(page.get_by_label("Sizing")).to_have_value("Custom")
+    before = widths()
+    old_id = page.evaluate(
+        """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
+    )
+    drag(0, 20)
+    page.wait_for_function(
+        """oldId => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && Bokeh.index.find_one(p)?.el?.isConnected)""",
+        arg=old_id,
+    )
+    after = widths()
+    assert after[3] / before[3] == pytest.approx(after[4] / before[4])
+    assert after[4] / before[4] == pytest.approx(after[5] / before[5])
 
     # A large drag clamps the terminal zone to exactly five screen pixels.
     drag(5, 2000)

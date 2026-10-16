@@ -137,3 +137,91 @@ def test_live_inspection_preserves_plot_and_zoom(page, explorer_server):
         const plot = Bokeh.documents[0].get_model_by_name('events');
         return plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data.position.length === 0;
     }""")
+
+
+def test_schematic_edges_drag_and_update_events(page, explorer_server):
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(explorer_server)
+    page.wait_for_function(
+        """() => [...Bokeh.documents[0]?._all_models.values() ?? []].some(p => p.name === 'schematic' && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)"""
+    )
+
+    def widths():
+        return page.evaluate("""() => {
+            const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+            const data = plot.renderers[0].data_source.data;
+            return data.right.map((right, i) => right - data.left[i]);
+        }""")
+
+    def drag(boundary, pixels):
+        point = page.evaluate(
+            """boundary => {
+            const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+            const view = Bokeh.index.find_one(plot);
+            const bounds = view.canvas_view.events_el.getBoundingClientRect();
+            const x = plot.renderers[0].data_source.data.right[boundary];
+            return {x: bounds.left + view.frame.x_scale.compute(x),
+                y: bounds.top + view.frame.y_scale.compute(0.5)};
+        }""",
+            boundary,
+        )
+        page.mouse.move(point["x"], point["y"])
+        page.mouse.down()
+        page.mouse.move(point["x"] + pixels, point["y"], steps=5)
+        page.mouse.up()
+        page.wait_for_function(
+            """() => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected && p.renderers[0].data_source.data.right.length === 7)"""
+        )
+
+    before = widths()
+    drag(0, 25)
+    page.wait_for_function(
+        """() => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected && p.renderers[0].data_source.data.right[0] > 0)"""
+    )
+    after = widths()
+    assert after[0] > before[0] and after[1] < before[1]
+    assert after[2:] == pytest.approx(before[2:])
+    expect(page.get_by_label("Sizing")).to_have_value("Custom")
+
+    for boundary, grow, shrink, fixed in (
+        (1, (1,), (2, 3, 4, 5), (0, 6)),
+        (2, (2,), (3, 4, 5), (0, 1, 6)),
+        (3, (3,), (4,), (0, 1, 2, 5, 6)),
+        (4, (4,), (5,), (0, 1, 2, 3, 6)),
+        (5, (3, 4, 5), (6,), (0, 1, 2)),
+    ):
+        old_id = page.evaluate(
+            """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
+        )
+        page.get_by_label("Sizing").select_option(label="Equal chambers")
+        expect(page.get_by_label("Sizing")).to_have_value("Equal chambers")
+        page.wait_for_function(
+            """oldId => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && Bokeh.index.find_one(p)?.el?.isConnected)""",
+            arg=old_id,
+        )
+        before = widths()
+        drag(boundary, 20)
+        expect(page.get_by_label("Sizing")).to_have_value("Custom")
+        after = widths()
+        assert sum(after) == pytest.approx(sum(before))
+        for index in grow:
+            assert after[index] > before[index]
+        for index in shrink:
+            assert after[index] < before[index]
+        for index in fixed:
+            assert after[index] == pytest.approx(before[index])
+
+    # A large drag clamps the terminal zone to exactly five screen pixels.
+    drag(5, 2000)
+    expect(page.get_by_label("Sizing")).to_have_value("Custom")
+    pixels = page.evaluate("""() => {
+        const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+        const data = plot.renderers[0].data_source.data;
+        return (data.right[6] - data.left[6]) * plot.inner_width / (plot.x_range.end - plot.x_range.start);
+    }""")
+    assert pixels == pytest.approx(5, abs=0.1)
+    label = page.evaluate("""() => {
+        const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+        return plot.center.filter(item => typeof item.text === 'string').at(-1).text;
+    }""")
+    assert label == ""

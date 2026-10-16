@@ -9,17 +9,30 @@ import polars as pl
 from ._beeswarm import envelope_edges, stack_swarm, terminal_swarm
 
 SCHEMATIC_WEIGHTS = (3, 3, 1, 1, 1)
+EQUAL_WEIGHTS = (1, 1, 1, 1, 1)
 
 
-def coordinate_regions(regions, mode):
+def schematic_widths(sizing):
+    """Initial, five machine zones, and Escaped in display coordinates."""
+    zones = SCHEMATIC_WEIGHTS if sizing == "chambers" else EQUAL_WEIGHTS
+    terminal = max(zones[-1] * 0.65, 0.5)
+    return (terminal, *zones, terminal)
+
+
+def coordinate_regions(regions, mode, widths=None):
     if mode == "physical":
         return regions.with_columns(
             (pl.col("physical_left") * 1000).alias("left"),
             (pl.col("physical_right") * 1000).alias("right"),
         )
-    widths = SCHEMATIC_WEIGHTS if mode == "schematic" else (1,) * regions.height
+    widths = widths or schematic_widths("chambers" if mode == "schematic" else "zones")
+    zone_widths = widths[1:-1]
     return (
-        regions.with_columns(pl.Series("width", widths, dtype=pl.Float64))
+        regions.with_columns(
+            pl.Series("width", zone_widths, dtype=pl.Float64),
+            pl.lit(float(widths[0])).alias("initial_width"),
+            pl.lit(float(widths[-1])).alias("escape_width"),
+        )
         .with_columns(
             (pl.col("width").cum_sum() - pl.col("width")).alias("left"),
             pl.col("width").cum_sum().alias("right"),
@@ -30,13 +43,22 @@ def coordinate_regions(regions, mode):
 
 def escape_slot(regions):
     end = regions["right"][-1]
-    return end, end + max((end - regions["left"][-1]) * 0.65, 0.5)
+    width = (
+        regions["escape_width"][0]
+        if "escape_width" in regions.columns
+        else max((end - regions["left"][-1]) * 0.65, 0.5)
+    )
+    return end, end + width
 
 
 def initial_slot(regions):
     start = regions["left"][0]
-    lo, hi = escape_slot(regions)
-    return start - (hi - lo), start
+    width = (
+        regions["initial_width"][0]
+        if "initial_width" in regions.columns
+        else escape_slot(regions)[1] - escape_slot(regions)[0]
+    )
+    return start - width, start
 
 
 def position_events(events, regions, mode, own_zones=True):
@@ -46,7 +68,13 @@ def position_events(events, regions, mode, own_zones=True):
         # Mapping uses the first inclusive upper boundary, with extrapolation
         # past the final region, matching the original spatial display.
         position = pl.lit(0.0)
-        for index, _, lo, hi, left, right in reversed(list(regions.iter_rows())):
+        for index, lo, hi, left, right in reversed(
+            list(
+                regions.select(
+                    "region", "physical_left", "physical_right", "left", "right"
+                ).iter_rows()
+            )
+        ):
             mapped = (
                 pl.lit(left)
                 if hi == lo

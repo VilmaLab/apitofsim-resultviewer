@@ -1,6 +1,8 @@
 """Cohort selection, controls, and rendering for one Explorer session."""
 
 from html import escape
+import json
+from math import isfinite
 
 import polars as pl
 from bokeh.models import Div, FixedTicker, Range1d
@@ -15,6 +17,7 @@ from .layout import (
     initial_slot,
     layout_events,
     position_events,
+    schematic_widths,
 )
 from .plot import (
     COLORS,
@@ -70,6 +73,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         "auto_cdf": False,
         "syncing_sidebar": False,
         "sidebar": {False: [True, False], True: [False, False]},
+        "widths": schematic_widths("chambers"),
+        "setting_sizing": False,
     }
 
     total = realizations.height
@@ -88,10 +93,12 @@ def build_document(db, doc, experiment: int, cluster: int):
     selection_events = events.head(0)
     active_groups = set()
     selection_notice = Div(visible=False)
+    drag_bridge = Div(text="", visible=False, name="schematic_drag_bridge")
+    ui.frame.children.append(drag_bridge)
 
     def event_plot_height():
         screen_height = int(ui.viewport_width.text.split(",")[1])
-        regional = ui.mode.value in ("schematic", "equal")
+        regional = ui.mode.value == "schematic"
         return (
             max(
                 440,
@@ -315,7 +322,8 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     def sync_display_controls(event_colors):
         """Apply coordinate restrictions and keep at least one view enabled."""
-        regional = ui.mode.value in ("schematic", "equal")
+        regional = ui.mode.value == "schematic"
+        ui.sizing.disabled = not regional
         ui.own_zones.disabled = not regional
         ui.spread_x.disabled = (
             not regional or not enabled(ui.own_zones) or ui.layout.value == "radial"
@@ -355,9 +363,13 @@ def build_document(db, doc, experiment: int, cluster: int):
             .alias("event_group")
         )
         selection_events = chosen_events
-        mapped_regions = coordinate_regions(regions, ui.mode.value)
+        mapped_regions = coordinate_regions(
+            regions,
+            ui.mode.value,
+            state["widths"] if ui.mode.value == "schematic" else None,
+        )
         spatial = ui.mode.value != "time"
-        regional = ui.mode.value in ("schematic", "equal")
+        regional = ui.mode.value == "schematic"
         dedicated_zones = regional and enabled(ui.own_zones)
         spread_terminals = enabled(ui.spread_x) and not ui.spread_x.disabled
         positioned = position_events(
@@ -413,6 +425,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                     mapped_regions,
                     shared_x,
                     available_width,
+                    drag_bridge,
                     initial=dedicated_zones,
                     escaped=dedicated_zones or enabled(ui.show_bars),
                 )
@@ -559,6 +572,35 @@ def build_document(db, doc, experiment: int, cluster: int):
         if not state["updating"]:
             state["auto_cdf"] = False
         render()
+
+    def sizing_changed(attr, old, new):
+        if state["setting_sizing"]:
+            return
+        if new != "custom":
+            state["widths"] = schematic_widths(new)
+        render()
+
+    def dragged(attr, old, new):
+        try:
+            widths = tuple(float(value) for value in json.loads(new))
+        except TypeError, ValueError, json.JSONDecodeError:
+            return
+        if (
+            len(widths) != 7
+            or not all(isfinite(width) and width > 0 for width in widths)
+            or abs(sum(widths) - sum(state["widths"])) > 1e-6
+        ):
+            return
+        state["widths"] = widths
+        state["setting_sizing"] = True
+        try:
+            ui.sizing.value = "custom"
+        finally:
+            state["setting_sizing"] = False
+        render()
+
+    ui.sizing.on_change("value", sizing_changed)
+    drag_bridge.on_change("text", dragged)
 
     for widget in ui.event_options.values():
         widget.on_change("active", control_changed)

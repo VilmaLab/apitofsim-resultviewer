@@ -41,6 +41,7 @@ class Controls:
     event_options: dict[str, CheckboxGroup]
     event_controls: Column
     mode: Select
+    sizing: Select
     layout: Select
     envelope: CheckboxGroup
     schematic: CheckboxGroup
@@ -139,10 +140,18 @@ def create_controls(
         title="X coordinate",
         value="schematic",
         options=[
-            ("schematic", "Equal chambers"),
-            ("equal", "Equal zones"),
+            ("schematic", "Schematic"),
             ("physical", "Axial distance (mm)"),
             ("time", "Elapsed time (s)"),
+        ],
+    )
+    sizing = Select(
+        title="Sizing",
+        value="chambers",
+        options=[
+            ("chambers", "Equal chambers"),
+            ("zones", "Equal zones"),
+            ("custom", "Custom"),
         ],
     )
     layout = Select(
@@ -202,7 +211,7 @@ def create_controls(
 
     left_controls = column(
         group("Pathways", column(fate, fate_facets, spacing=4)),
-        group("X-axis", column(mode, guides, spacing=4)),
+        group("X-axis", column(mode, sizing, guides, spacing=4)),
         group(
             "Elements",
             column(
@@ -317,6 +326,7 @@ def create_controls(
         event_options=event_options,
         event_controls=event_controls,
         mode=mode,
+        sizing=sizing,
         layout=layout,
         envelope=envelope,
         schematic=schematic,

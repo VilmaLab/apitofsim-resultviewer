@@ -3,9 +3,11 @@
 from textwrap import fill
 
 import polars as pl
+from bokeh.events import MouseMove, Pan, PanEnd, PanStart
 from bokeh.core.property.descriptors import UnsetValueError
 from bokeh.models import (
     ColumnDataSource,
+    CustomJS,
     FixedTicker,
     HoverTool,
     Label,
@@ -59,7 +61,9 @@ def _source(frame):
     return ColumnDataSource(frame.to_dict(as_series=False))
 
 
-def _schematic_plot(regions, shared_x, available_width, initial=True, escaped=True):
+def _schematic_plot(
+    regions, shared_x, available_width, drag_bridge, initial=True, escaped=True
+):
     diagram = figure(
         height=56,
         min_height=56,
@@ -68,65 +72,186 @@ def _schematic_plot(regions, shared_x, available_width, initial=True, escaped=Tr
         output_backend="webgl",
         sizing_mode="stretch_width",
     )
+    diagram.name = "schematic"
     diagram.toolbar.logo = None
     diagram.y_range = Range1d(0, 1)
     diagram.yaxis.visible = False
     diagram.xaxis.visible = False
     diagram.grid.visible = False
+    diagram.outline_line_color = None
+    slots = [
+        initial_slot(regions),
+        *regions.select("left", "right").iter_rows(),
+        escape_slot(regions),
+    ]
+    names = ["Initial", *regions["name"].to_list(), "Escaped"]
+    short = ["Init", "C1", "Sk", "C2 pre", "Quad", "C2 post", "Esc"]
+    visible = [initial, True, True, True, True, True, escaped]
     source = _source(
-        regions.select("left", "right", "name").with_columns(
-            pl.Series("color", ["#dbeafe", "#e2e8f0", "#dbeafe", "#e2e8f0", "#dbeafe"])
+        pl.DataFrame(
+            {
+                "left": [slot[0] for slot in slots],
+                "right": [slot[1] for slot in slots],
+                "name": names,
+                "color": [
+                    "#f8fafc",
+                    "#dbeafe",
+                    "#e2e8f0",
+                    "#dbeafe",
+                    "#bfdbfe",
+                    "#dbeafe",
+                    "#f8fafc",
+                ],
+                "alpha": [int(item) for item in visible],
+                "bottom": [0.12, 0.12, 0.12, 0.12, 0.196, 0.12, 0.12],
+                "top": [0.88, 0.88, 0.88, 0.88, 0.804, 0.88, 0.88],
+            }
         )
     )
     glyph = diagram.quad(
         left="left",
         right="right",
-        bottom=0.12,
-        top=0.88,
+        bottom="bottom",
+        top="top",
         source=source,
         fill_color="color",
+        fill_alpha="alpha",
         line_color="#64748b",
+        line_alpha="alpha",
     )
     diagram.add_tools(HoverTool(renderers=[glyph], tooltips=[("Zone", "@name")]))
     labels = []
-    for index, name, lo, hi in regions.select(
-        "region", "name", "left", "right"
-    ).iter_rows():
-        short = ("C1", "Sk", "C2 (before Quad)", "Quad", "C2 (after Quad)")[index]
-        full = fill(name, width=16)
-        display_name = short if available_width < 600 else full
+    full = [fill(name, width=16) for name in names]
+    for index, (lo, hi) in enumerate(slots):
         label = Label(
             x=(lo + hi) / 2,
             y=0.5,
-            text=display_name,
+            text=short[index]
+            if visible[index] and available_width < 600
+            else full[index]
+            if visible[index]
+            else "",
             text_align="center",
             text_baseline="middle",
             text_font_size="9px",
         )
         diagram.add_layout(label)
-        labels.append((label, short, full))
-    for visible, slot, label, short in (
-        (initial, initial_slot(regions), "Initial", "Init"),
-        (escaped, escape_slot(regions), "Escaped", "Esc"),
-    ):
-        if not visible:
-            continue
-        annotation = Label(
-            x=sum(slot) / 2,
-            y=0.5,
-            text=short if available_width < 600 else label,
-            text_align="center",
-            text_baseline="middle",
-            text_font_size="9px",
-        )
-        diagram.add_layout(annotation)
-        labels.append((annotation, short, label))
+        labels.append(label)
 
-    def resize_labels(attr, old, new):
-        for annotation, short, full in labels:
-            annotation.text = short if new < 600 else full
-
-    diagram.on_change("inner_width", resize_labels)
+    args = dict(
+        source=source,
+        labels=labels,
+        full=full,
+        short=short,
+        visible=visible,
+        plot=diagram,
+        bridge=drag_bridge,
+    )
+    common = """
+        const data = source.data;
+        const bounds = data.right.slice(0, 6);
+        const span = plot.x_range.end - plot.x_range.start;
+        const units = span / Math.max(plot.inner_width, 1);
+        const min = units * 5;
+        const groups = [
+            [[0], [1]], [[1], [2, 3, 4, 5]], [[2], [3, 4, 5]],
+            [[3], [4]], [[4], [5]], [[3, 4, 5], [6]],
+        ];
+        function hit(x) {
+            let best = -1, distance = units * 10;
+            for (let i = 0; i < bounds.length; i++) {
+                if ((i === 0 && !visible[0]) || (i === 5 && !visible[6])) continue;
+                const d = Math.abs(bounds[i] - x);
+                if (d < distance) { best = i; distance = d; }
+            }
+            return best;
+        }
+        function labelsFit() {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            context.font = '9px sans-serif';
+            for (let i = 0; i < labels.length; i++) {
+                labels[i].x = (source.data.left[i] + source.data.right[i]) / 2;
+                if (!visible[i]) { labels[i].text = ''; continue; }
+                const room = (source.data.right[i] - source.data.left[i]) / units - 4;
+                const fits = text => Math.max(...text.split('\\n').map(line => context.measureText(line).width)) <= room;
+                labels[i].text = fits(full[i]) ? full[i] : fits(short[i]) ? short[i] : '';
+            }
+        }
+        function resizeGroup(widths, indices, change) {
+            if (Math.abs(change) < 1e-12) return;
+            const basis = indices.map(i => change < 0 ? Math.max(widths[i] - min, 0) : widths[i]);
+            const total = basis.reduce((a, b) => a + b, 0);
+            if (total <= 0) return;
+            indices.forEach((i, j) => { widths[i] += change * basis[j] / total; });
+        }
+        function preview(x) {
+            const drag = source._explorerDrag;
+            if (drag == null) return;
+            const widths = drag.widths.slice();
+            const [left, right] = groups[drag.index];
+            const slack = indices => indices.reduce((sum, i) => sum + widths[i] - min, 0);
+            const delta = Math.max(-slack(left), Math.min(slack(right), x - drag.x));
+            resizeGroup(widths, left, delta);
+            resizeGroup(widths, right, -delta);
+            let edge = drag.start;
+            const lefts = [], rights = [];
+            for (const width of widths) { lefts.push(edge); edge += width; rights.push(edge); }
+            source.data = {...source.data, left: lefts, right: rights};
+            drag.current = widths;
+            labelsFit();
+        }
+    """
+    diagram.js_on_change(
+        "inner_width", CustomJS(args=args, code=common + "labelsFit();")
+    )
+    diagram.js_on_event(
+        MouseMove,
+        CustomJS(
+            args=args,
+            code=common
+            + """
+        const el = Bokeh.index.find_one(plot)?.canvas_view?.events_el;
+        if (el != null) el.style.cursor = hit(cb_obj.x) >= 0 ? 'col-resize' : '';
+    """,
+        ),
+    )
+    diagram.js_on_event(
+        PanStart,
+        CustomJS(
+            args=args,
+            code=common
+            + """
+        const index = hit(cb_obj.x);
+        if (index >= 0) source._explorerDrag = {
+            index, x: cb_obj.x, sx: cb_obj.sx, start: data.left[0],
+            widths: data.right.map((right, i) => right - data.left[i]),
+        };
+    """,
+        ),
+    )
+    diagram.js_on_event(
+        Pan,
+        CustomJS(
+            args=args,
+            code=common
+            + "if (source._explorerDrag) preview(source._explorerDrag.x + (cb_obj.sx - source._explorerDrag.sx) * units);",
+        ),
+    )
+    diagram.js_on_event(
+        PanEnd,
+        CustomJS(
+            args=args,
+            code=common
+            + """
+        if (source._explorerDrag) preview(source._explorerDrag.x + (cb_obj.sx - source._explorerDrag.sx) * units);
+        if (source._explorerDrag != null) {
+            bridge.text = JSON.stringify(source._explorerDrag.current);
+            source._explorerDrag = null;
+        }
+    """,
+        ),
+    )
     return diagram
 
 

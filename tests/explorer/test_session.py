@@ -1,5 +1,7 @@
 """Explorer session behavior."""
 
+import json
+
 import polars as pl
 import pytest
 from bokeh.document import Document
@@ -86,17 +88,29 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         for d in doc.select({"type": Div})
     )
     x_mode = next(s for s in doc.select({"type": Select}) if s.title == "X coordinate")
-    assert x_mode.options[:2] == [
-        ("schematic", "Equal chambers"),
-        ("equal", "Equal zones"),
+    assert x_mode.options[0] == ("schematic", "Schematic")
+    sizing = next(s for s in doc.select({"type": Select}) if s.title == "Sizing")
+    assert sizing.options == [
+        ("chambers", "Equal chambers"),
+        ("zones", "Equal zones"),
+        ("custom", "Custom"),
     ]
 
-    for value in ("equal", "physical", "time", "schematic"):
+    for value, preset in (
+        ("schematic", "zones"),
+        ("physical", None),
+        ("time", None),
+        ("schematic", "chambers"),
+    ):
         x_mode.value = value
-        if value in ("equal", "schematic"):
-            regions = event_layout.coordinate_regions(frames[3], value)
+        assert sizing.disabled == (value != "schematic")
+        if preset:
+            sizing.value = preset
+            regions = event_layout.coordinate_regions(
+                frames[3], value, event_layout.schematic_widths(preset)
+            )
             widths = regions["right"] - regions["left"]
-            if value == "schematic":
+            if preset == "chambers":
                 assert widths[0] == widths[1] == widths[2:].sum()
             centers = ((regions["left"] + regions["right"]) / 2).to_list()
             for p in doc.select({"type": type(figure())}):
@@ -156,7 +170,8 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         "Elements",
         "Realizations",
     ]
-    assert controls[1].child.children[1].labels == ["Guides"]
+    assert controls[1].child.children[1] is sizing
+    assert controls[1].child.children[2].labels == ["Guides"]
     assert controls[2].child.children[0].labels == ["Schematic"]
     assert controls[2].child.children[1].title == "Views"
     assert controls[3].child.children[0].labels == ["Use x markers"]
@@ -168,6 +183,60 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert [g.title for g in controls[3].child.children[4:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
+
+
+def test_schematic_custom_widths_persist_and_align_plots(monkeypatch):
+    frames = cohort(
+        [1],
+        event(1, "init", 1, 0, 0),
+        event(2, "collision", 1, 1, 3.5),
+        event(3, "escape", 1, 2, 5),
+    )
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    sizing = next(s for s in doc.select({"type": Select}) if s.title == "Sizing")
+    coordinate = next(
+        s for s in doc.select({"type": Select}) if s.title == "X coordinate"
+    )
+    custom = (0.75, 2.5, 2.5, 1.25, 1.0, 1.75, 0.55)
+    assert sum(custom) == sum(event_layout.schematic_widths("chambers"))
+    doc.select_one({"name": "schematic_drag_bridge"}).text = json.dumps(custom)
+    assert sizing.value == "custom"
+
+    def check():
+        schematic = doc.select_one({"name": "schematic"})
+        source = schematic.renderers[0].data_source.data
+        assert [
+            right - left
+            for left, right in zip(source["left"], source["right"], strict=True)
+        ] == pytest.approx(custom)
+        assert schematic.outline_line_color is None
+        assert source["top"][4] - source["bottom"][4] == pytest.approx(
+            0.8 * (source["top"][3] - source["bottom"][3])
+        )
+        events = doc.select_one({"name": "events"})
+        assert events.xgrid[0].ticker.ticks == pytest.approx(
+            [source["left"][1], *source["right"][1:6]]
+        )
+        return next(
+            r.data_source.data["x"][0]
+            for r in events.renderers
+            if r.data_source.data.get("id") == [2]
+        )
+
+    custom_position = check()
+    coordinate.value = "physical"
+    assert sizing.disabled
+    coordinate.value = "schematic"
+    assert not sizing.disabled and sizing.value == "custom"
+    assert check() == pytest.approx(custom_position)
+    sizing.value = "zones"
+    assert sizing.value == "zones"
+    equal = doc.select_one({"name": "schematic"}).renderers[0].data_source.data
+    assert [
+        right - left for left, right in zip(equal["left"], equal["right"], strict=True)
+    ] == pytest.approx(event_layout.schematic_widths("zones"))
 
 
 def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
@@ -413,8 +482,16 @@ def test_unavailable_document(monkeypatch):
     assert doc.roots[0].text == "Explorer data unavailable: Missing &lt;events&gt;"
 
 
-@pytest.mark.parametrize("mode", ["schematic", "equal", "physical", "time"])
-def test_cumulative_pathway_areas(monkeypatch, mode):
+@pytest.mark.parametrize(
+    "mode,sizing",
+    [
+        ("schematic", "chambers"),
+        ("schematic", "zones"),
+        ("physical", None),
+        ("time", None),
+    ],
+)
+def test_cumulative_pathway_areas(monkeypatch, mode, sizing):
     frames = cohort(
         [1, 2, 3, 4],
         event(1, "fragmentation", 1, 1, 2, 7),
@@ -430,6 +507,10 @@ def test_cumulative_pathway_areas(monkeypatch, mode):
     next(
         w for w in doc.select({"type": Select}) if w.title == "X coordinate"
     ).value = mode
+    if sizing:
+        next(
+            w for w in doc.select({"type": Select}) if w.title == "Sizing"
+        ).value = sizing
     fates = next(
         g.child.children[0]
         for g in doc.select({"type": GroupBox})
@@ -452,7 +533,10 @@ def test_cumulative_pathway_areas(monkeypatch, mode):
     )
     first, second = fragmented.data_source.data, escaped.data_source.data
     assert first["position"] == second["position"]
-    endpoint = event_layout.coordinate_regions(frames[3], mode)["right"][-1]
+    mapped = event_layout.coordinate_regions(
+        frames[3], mode, event_layout.schematic_widths(sizing) if sizing else None
+    )
+    endpoint = mapped["right"][-1]
     escape_position = 2 if mode == "time" else endpoint
     assert second["position"][3:5] == [escape_position] * 2
     event_plot = next(p for p in doc.select({"type": figure}) if p.name == "events")
@@ -466,10 +550,7 @@ def test_cumulative_pathway_areas(monkeypatch, mode):
         if mode == "time"
         else 6000
         if mode == "physical"
-        else sum(
-            event_layout.escape_slot(event_layout.coordinate_regions(frames[3], mode))
-        )
-        / 2
+        else sum(event_layout.escape_slot(mapped)) / 2
     ]
     # Tied fragmentations form one vertical jump; unresolved histories stay out.
     assert first["fraction"] == [0, 0, 0.5, 0.5, 0.5, 0.5]
@@ -635,8 +716,8 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
     assert doc.to_json() is not None
 
 
-@pytest.mark.parametrize("mode", ["schematic", "equal"])
-def test_terminal_zone_controls_and_bar_only_slot(monkeypatch, mode):
+@pytest.mark.parametrize("sizing", ["chambers", "zones"])
+def test_terminal_zone_controls_and_bar_only_slot(monkeypatch, sizing):
     frames = cohort(
         [1, 2],
         event(1, "init", 1, 0, 0),
@@ -656,8 +737,11 @@ def test_terminal_zone_controls_and_bar_only_slot(monkeypatch, mode):
     spread = controls["Spread initial/escape X"]
     x_mode = next(w for w in doc.select({"type": Select}) if w.title == "X coordinate")
     y_mode = next(w for w in doc.select({"type": Select}) if w.title == "Y coordinate")
-    x_mode.value = mode
-    mapped = event_layout.coordinate_regions(frames[3], mode)
+    x_mode.value = "schematic"
+    next(w for w in doc.select({"type": Select}) if w.title == "Sizing").value = sizing
+    mapped = event_layout.coordinate_regions(
+        frames[3], "schematic", event_layout.schematic_widths(sizing)
+    )
 
     def coordinates():
         chart = doc.select_one({"name": "events"})
@@ -717,7 +801,7 @@ def test_terminal_zone_controls_and_bar_only_slot(monkeypatch, mode):
         assert own.active == spread.active == [0]
         assert coordinates()[1] == 0
         assert coordinates()[2] == (5000 if value == "physical" else 1)
-    x_mode.value = mode
+    x_mode.value = "schematic"
     y_mode.value = "realization"
     assert not own.disabled and not spread.disabled
     assert coordinates()[1] != coordinates()[3]
@@ -842,14 +926,18 @@ def test_initial_event_controls_and_schematic(monkeypatch):
     coordinate = next(
         s for s in doc.select({"type": Select}) if s.title == "X coordinate"
     )
-    for mode in ("schematic", "equal"):
-        coordinate.value = mode
+    sizing = next(w for w in doc.select({"type": Select}) if w.title == "Sizing")
+    for preset in ("chambers", "zones"):
+        coordinate.value = "schematic"
+        sizing.value = preset
         chart = doc.select_one({"name": "events"})
         renderer = next(
             r for r in chart.renderers if r.data_source.data.get("id") == [1]
         )
         assert chart.x_range.start < renderer.data_source.data["x"][0] < 0
-        mapped = event_layout.coordinate_regions(frames[3], mode)
+        mapped = event_layout.coordinate_regions(
+            frames[3], "schematic", event_layout.schematic_widths(preset)
+        )
         assert chart.xgrid[0].ticker.ticks == [mapped["left"][0], *mapped["right"]]
         assert any(
             label.text in ("Initial", "Init") for label in doc.select({"type": Label})

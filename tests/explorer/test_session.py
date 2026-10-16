@@ -104,7 +104,8 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         ("schematic", "chambers"),
     ):
         x_mode.value = value
-        assert sizing.disabled == (value != "schematic")
+        assert sizing.visible == (value == "schematic")
+        assert not sizing.disabled
         if preset:
             sizing.value = preset
             regions = event_layout.coordinate_regions(
@@ -241,9 +242,9 @@ def test_schematic_custom_widths_persist_and_align_plots(monkeypatch):
 
     custom_position = check()
     coordinate.value = "physical"
-    assert sizing.disabled
+    assert not sizing.visible
     coordinate.value = "schematic"
-    assert not sizing.disabled and sizing.value == "custom"
+    assert sizing.visible and sizing.value == "custom"
     assert check() == pytest.approx(custom_position)
     sizing.value = "zones"
     assert sizing.value == "zones"

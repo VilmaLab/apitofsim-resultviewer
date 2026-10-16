@@ -323,7 +323,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     def sync_display_controls(event_colors):
         """Apply coordinate restrictions and keep at least one view enabled."""
         regional = ui.mode.value == "schematic"
-        ui.sizing.disabled = not regional
+        ui.sizing.visible = regional
         ui.own_zones.disabled = not regional
         ui.spread_x.disabled = (
             not regional or not enabled(ui.own_zones) or ui.layout.value == "radial"

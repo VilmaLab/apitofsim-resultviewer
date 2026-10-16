@@ -275,3 +275,8 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         return plot.center.filter(item => typeof item.text === 'string').at(-1).text;
     }""")
     assert label == ""
+    page.get_by_label("X coordinate").select_option(label="Axial distance (mm)")
+    expect(page.get_by_label("Sizing")).to_be_hidden()
+    page.get_by_label("X coordinate").select_option(label="Schematic")
+    expect(page.get_by_label("Sizing")).to_be_visible()
+    expect(page.get_by_label("Sizing")).to_have_value("Custom")

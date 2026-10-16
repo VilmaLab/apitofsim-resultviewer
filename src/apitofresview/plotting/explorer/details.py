@@ -4,10 +4,15 @@ from html import escape
 from math import hypot
 
 
-def render_details(realization, events, selected_event, radial=True):
-    if realization.is_empty():
-        return "<p><em>Click an event to inspect its realization.</em></p>"
-    member = realization.row(0, named=True)
+def format_value(value):
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return f"{value:.6g}"
+
+
+def _columns(events, radial):
     headings = ["Type", "Time (ns)"] + (
         ["Axial dist. (mm)", "Radial dist. (mm)"]
         if radial
@@ -45,46 +50,79 @@ def render_details(realization, events, selected_event, radial=True):
     ]
     headings += [label for _, label in detail_columns]
 
-    def format_value(value):
-        if value is None:
-            return "—"
-        if isinstance(value, bool):
-            return "Yes" if value else "No"
-        return f"{value:.6g}"
+    return headings, motion_columns, detail_columns
 
+
+def _cells(event, radial, motion_columns, detail_columns, clickable=False):
+    kind = escape(event["type"])
+    if clickable:
+        kind = (
+            f'<button type="button" aria-label="Inspect event #{event["id"]}">'
+            f"{kind}</button>"
+        )
+    coordinates = (
+        [event["z"], event["radial"]]
+        if radial
+        else [event[axis] for axis in ("x", "y", "z")]
+    )
+    values = [event["t"] * 1e9, *(value * 1000 for value in coordinates)]
+    for key, axes, _ in motion_columns:
+        vector = event[key]
+        values.append(
+            None
+            if vector is None
+            else vector[axes]
+            if len(axes) == 1
+            else hypot(*(vector[axis] for axis in axes))
+        )
+    return (
+        f"<td>{kind}</td>"
+        + "".join(f"<td>{format_value(value)}</td>" for value in values)
+        + "".join(f"<td>{format_value(event[key])}</td>" for key, _ in detail_columns)
+    )
+
+
+def render_details(realization, events, selected_event, radial=True):
+    if realization.is_empty():
+        return "<p><em>Click an event to inspect its realization.</em></p>"
+    member = realization.row(0, named=True)
+    headings, motion_columns, detail_columns = _columns(events, radial)
     rows = []
     for event in events.iter_rows(named=True):
-        kind = escape(event["type"])
-        coordinates = (
-            [event["z"], event["radial"]]
-            if radial
-            else [event[axis] for axis in ("x", "y", "z")]
-        )
-        values = [event["t"] * 1e9, *(value * 1000 for value in coordinates)]
-        for key, axes, _ in motion_columns:
-            vector = event[key]
-            values.append(
-                None
-                if vector is None
-                else vector[axes]
-                if len(axes) == 1
-                else hypot(*(vector[axis] for axis in axes))
-            )
         rows.append(
             f'<tr class="explorer-event" data-event="{event["id"]}" id="event-{event["id"]}" '
             f'style="background:{"#fde68a" if event["id"] == selected_event else "white"}">'
-            f'<td><button type="button" aria-label="Inspect event #{event["id"]}">{kind}</button></td>'
-            + "".join(f"<td>{format_value(value)}</td>" for value in values)
-            + "".join(
-                f"<td>{format_value(event[key])}</td>" for key, _ in detail_columns
-            )
+            + _cells(event, radial, motion_columns, detail_columns, clickable=True)
             + "</tr>"
         )
     return (
         "<button id='clear-selection'>Clear selection</button>"
-        f"<h3>Realization #{member['realization_number']}</h3>"
+        f"<h3>Realization #{member['id']}</h3>"
         f"<p><em>{escape(member['fate'])}</em></p>"
         '<div style="overflow-x:auto"><table><thead><tr>'
+        + "".join(f"<th>{heading}</th>" for heading in headings)
+        + "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
+    )
+
+
+def render_choices(events, radial=True):
+    headings, motion_columns, detail_columns = _columns(events, radial)
+    rows = []
+    for event in events.iter_rows(named=True):
+        rows.append(
+            f'<tr class="explorer-choice" data-realization="{event["realization_id"]}" '
+            f'data-event="{event["id"]}">'
+            f'<td><button type="button" aria-label="Inspect event #{event["id"]} '
+            f'in realization #{event["realization_id"]}">{event["realization_id"]}</button></td>'
+            + _cells(event, radial, motion_columns, detail_columns)
+            + "</tr>"
+        )
+    return (
+        "<button id='clear-selection'>Clear selection</button>"
+        "<h3>Choose an event</h3>"
+        '<div style="overflow-x:auto"><table><thead><tr><th>#</th>'
         + "".join(f"<th>{heading}</th>" for heading in headings)
         + "</tr></thead><tbody>"
         + "".join(rows)

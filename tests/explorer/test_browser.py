@@ -1,5 +1,7 @@
 """Explorer browser behavior."""
 
+from contextlib import contextmanager
+
 import pytest
 from bokeh.document import Document
 from bokeh.embed import file_html
@@ -49,22 +51,15 @@ def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, heigh
     page.screenshot(path=str(tmp_path / f"controls-{width}.png"))
 
 
-@pytest.fixture
-def explorer_server(monkeypatch):
-    """Serve the synthetic cohort with real Bokeh session callbacks."""
+@contextmanager
+def serve_explorer(monkeypatch, frames):
+    """Serve a synthetic cohort with real Bokeh session callbacks."""
     from queue import Queue
     from threading import Thread
 
     from bokeh.server.server import Server
     from tornado.ioloop import IOLoop
 
-    frames = cohort(
-        [1, 2],
-        event(1, "init", 1, 0, 0),
-        event(2, "escape", 1, 1, 5),
-        event(3, "init", 2, 0, 0),
-        event(4, "escape", 2, 1, 5),
-    )
     monkeypatch.setattr(session, "load_data", lambda *args: frames)
     ready = Queue()
 
@@ -96,6 +91,31 @@ def explorer_server(monkeypatch):
 
         loop.add_callback(stop)
         thread.join(timeout=10)
+
+
+@pytest.fixture
+def explorer_server(monkeypatch):
+    frames = cohort(
+        [1, 2],
+        event(1, "init", 1, 0, 0),
+        event(2, "escape", 1, 1, 5),
+        event(3, "init", 2, 0, 0),
+        event(4, "escape", 2, 1, 5),
+    )
+    with serve_explorer(monkeypatch, frames) as url:
+        yield url
+
+
+@pytest.fixture
+def overlap_server(monkeypatch):
+    frames = cohort(
+        [100, 101],
+        event(1, "collision", 100, 2e-9, 0.003),
+        event(2, "collision", 101, 2e-9, 0.003),
+        event(3, "escape", 101, 2e-9, 0.003),
+    )
+    with serve_explorer(monkeypatch, frames) as url:
+        yield url
 
 
 def test_live_inspection_preserves_plot_and_zoom(page, explorer_server):
@@ -280,3 +300,71 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     page.get_by_label("X coordinate").select_option(label="Schematic")
     expect(page.get_by_label("Sizing")).to_be_visible()
     expect(page.get_by_label("Sizing")).to_have_value("Custom")
+
+
+def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_server):
+    page.set_viewport_size({"width": 640, "height": 700})
+    page.goto(overlap_server)
+    page.get_by_label("X coordinate").select_option(label="Axial distance (mm)")
+    page.get_by_label("Y coordinate").select_option(label="Radial distance (mm)")
+
+    def point_for(event_id, beeswarm=False):
+        page.wait_for_function(
+            """beeswarm => {
+            try {
+                const center = Bokeh.documents[0].roots()[0].children[0].children[1];
+                const plot = center.children[2].children.find(p => p.name === 'events');
+                const source = plot?.renderers.find(r => r.data_source?.data.id?.includes(1))?.data_source;
+                return plot?.inner_width > 0 && plot?.inner_height > 0 && source &&
+                    source.data.x.every(x => x === 3) &&
+                    (beeswarm ? source.data.y.some(y => y !== 5000)
+                              : source.data.y.every(y => y === 5000));
+            } catch { return false; }
+        }""",
+            arg=beeswarm,
+        )
+        return page.evaluate(
+            """event_id => {
+            const center = Bokeh.documents[0].roots()[0].children[0].children[1];
+            const plot = center.children[2].children.find(p => p.name === 'events');
+            const source = plot.renderers.find(r => r.data_source?.data.id?.includes(event_id)).data_source;
+            const view = Bokeh.index.find_one(plot);
+            const bounds = view.canvas_view.events_el.getBoundingClientRect();
+            const i = source.data.id.indexOf(event_id);
+            return {x: bounds.left + view.frame.x_scale.compute(source.data.x[i]),
+                y: bounds.top + view.frame.y_scale.compute(source.data.y[i])};
+        }""",
+            event_id,
+        )
+
+    point = point_for(1)
+    page.mouse.move(point["x"], point["y"])
+    expect(page.locator(".explorer-hover-row")).to_have_count(3)
+    expect(page.locator(".explorer-hover-head:visible")).to_have_count(1)
+    assert page.locator(".explorer-hover-row").first.evaluate("""row => {
+        const bounds = row.getRootNode().host.getBoundingClientRect();
+        return bounds.left >= 0 && bounds.right <= window.innerWidth;
+    }""")
+    page.mouse.click(point["x"], point["y"])
+    expect(page.get_by_text("Choose an event", exact=True)).to_be_visible()
+    expect(page.locator(".explorer-choice")).to_have_count(3)
+    assert page.locator(".explorer-choice").first.evaluate("""row => {
+        const wrapper = row.closest('table').parentElement;
+        return wrapper.getBoundingClientRect().right <= window.innerWidth + 1;
+    }""")
+    page.get_by_role("button", name="Inspect event #3 in realization #101").click()
+    expect(page.get_by_text("Realization #101", exact=True)).to_be_visible()
+    expect(
+        page.get_by_role("button", name="Inspect event #3", exact=True)
+    ).to_be_visible()
+
+    page.get_by_role("button", name="Clear selection", exact=True).click()
+    page.evaluate("""() => {
+        const control = [...Bokeh.documents[0].all_models]
+            .find(model => model.type === 'Select' && model.title === 'Y coordinate');
+        control.value = 'beeswarm';
+    }""")
+    point = point_for(1, beeswarm=True)
+    page.mouse.click(point["x"], point["y"])
+    expect(page.get_by_text("Realization #100", exact=True)).to_be_visible()
+    expect(page.get_by_text("Choose an event", exact=True)).to_have_count(0)

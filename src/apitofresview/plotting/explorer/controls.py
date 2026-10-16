@@ -194,8 +194,9 @@ def create_controls(
                 th, td { padding: 6px 4px; border-bottom: 1px solid #ddd; }
                 th { text-align: left; }
                 td:not(:first-child) { text-align: right; white-space: nowrap; }
-                .explorer-event { cursor: pointer; }
-                .explorer-event button {
+                .explorer-choice td:nth-child(2) { text-align: left; }
+                .explorer-event, .explorer-choice { cursor: pointer; }
+                .explorer-event button, .explorer-choice button {
                     background: transparent; border: 0; padding: 0;
                     color: inherit; font: inherit; text-align: left; cursor: pointer;
                 }
@@ -304,8 +305,12 @@ def create_controls(
             const view = Bokeh.index.find_one(cb_obj);
             const root = view?.shadow_el ?? view?.el?.shadowRoot ?? view?.el;
             if (!root) return;
-            root.querySelectorAll('.explorer-event').forEach(button => {
-                button.onclick = () => { bridge.text = button.dataset.event; };
+            root.querySelectorAll('.explorer-event, .explorer-choice').forEach(row => {
+                row.onclick = () => {
+                    bridge.text = row.dataset.realization
+                        ? `choose:${row.dataset.realization}:${row.dataset.event}`
+                        : row.dataset.event;
+                };
             });
             const clear = root.querySelector('#clear-selection');
             if (clear) clear.onclick = () => { bridge.text = 'clear'; };

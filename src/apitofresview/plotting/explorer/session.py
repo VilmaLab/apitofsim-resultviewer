@@ -10,7 +10,7 @@ from bokeh.models import Div, FixedTicker, Range1d
 from .aggregation import cumulative_areas, regional_fractions
 from .controls import CHECKBOX_CSS, create_controls, enabled, prepare_toolbar
 from .data import EVENT_TYPES, events_for, load_data, select_realizations
-from .details import render_details
+from .details import render_choices, render_details
 from .layout import (
     coordinate_regions,
     escape_slot,
@@ -68,6 +68,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     state = {
         "selected": None,
         "event": None,
+        "candidates": {},
         "updating": False,
         "grouped": True,
         "auto_cdf": False,
@@ -181,8 +182,18 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     def set_selection(rid, event_id):
         state["selected"], state["event"] = rid, event_id
+        state["candidates"] = {}
         full = ui.fullscreen_state.text == "full"
         if rid is not None and not state["sidebar"][full][1]:
+            state["sidebar"][full][1] = True
+            apply_sidebars(full)
+        update_selection()
+
+    def set_candidates(candidates):
+        state["selected"] = state["event"] = None
+        state["candidates"] = candidates
+        full = ui.fullscreen_state.text == "full"
+        if not state["sidebar"][full][1]:
             state["sidebar"][full][1] = True
             apply_sidebars(full)
         update_selection()
@@ -194,10 +205,18 @@ def build_document(db, doc, experiment: int, cluster: int):
             else chosen.filter(pl.col("id") == state["selected"])
         )
         selected_events = events_for(selection_events, selected)
-        ui.details.text = render_details(
-            selected, selected_events, state["event"], enabled(ui.summarise_motion)
+        if state["candidates"]:
+            candidates = selection_events.filter(
+                pl.col("id").is_in(state["candidates"])
+            ).sort("realization_id", "t", "id")
+            ui.details.text = render_choices(candidates, enabled(ui.summarise_motion))
+        else:
+            ui.details.text = render_details(
+                selected, selected_events, state["event"], enabled(ui.summarise_motion)
+            )
+        ui.summarise_motion.visible = not selected.is_empty() or bool(
+            state["candidates"]
         )
-        ui.summarise_motion.visible = not selected.is_empty()
         hidden = (
             selected_events.head(0)
             if state["event"] is None
@@ -222,6 +241,12 @@ def build_document(db, doc, experiment: int, cluster: int):
     def sidebar_event(attr, old, new):
         if new == "clear":
             set_selection(None, None)
+        elif new.startswith("choose:"):
+            parts = new.split(":")
+            if len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
+                rid, event_id = map(int, parts[1:])
+                if state["candidates"].get(event_id) == rid:
+                    set_selection(rid, event_id)
         elif new.isdigit() and state["selected"] is not None:
             history = events.filter(pl.col("realization_id") == state["selected"])
             if int(new) in history["id"]:
@@ -434,8 +459,18 @@ def build_document(db, doc, experiment: int, cluster: int):
         def selection_callback(source):
             def on_selected(attr, old, new):
                 if new and not state["updating"]:
-                    i = new[0]
-                    set_selection(source.data["realization"][i], source.data["id"][i])
+                    if len(new) > 1 and ui.layout.value != "beeswarm":
+                        set_candidates(
+                            {
+                                source.data["id"][i]: source.data["realization"][i]
+                                for i in new
+                            }
+                        )
+                    else:
+                        i = new[0]
+                        set_selection(
+                            source.data["realization"][i], source.data["id"][i]
+                        )
                     source.selected.indices = []
 
             return on_selected
@@ -556,6 +591,7 @@ def build_document(db, doc, experiment: int, cluster: int):
             return
         state["updating"] = True
         try:
+            state["candidates"] = {}
             selection_updates.clear()
             chosen, chosen_events = prepare_cohort()
             grouped, event_colors, active_groups = sync_event_controls()

@@ -68,6 +68,7 @@ def _schematic_plot(
         height=56,
         min_height=56,
         x_range=shared_x,
+        tools="",
         toolbar_location=None,
         output_backend="webgl",
         sizing_mode="stretch_width",
@@ -102,7 +103,7 @@ def _schematic_plot(
                     "#dbeafe",
                     "#f8fafc",
                 ],
-                "alpha": [int(item) for item in visible],
+                "alpha": [int(visible[0]), 1, 1, 0, 0, 0, int(visible[6])],
                 "bottom": [0.12, 0.12, 0.12, 0.12, 0.196, 0.12, 0.12],
                 "top": [0.88, 0.88, 0.88, 0.88, 0.804, 0.88, 0.88],
             }
@@ -118,6 +119,30 @@ def _schematic_plot(
         fill_alpha="alpha",
         line_color="#64748b",
         line_alpha="alpha",
+    )
+    chamber_source = ColumnDataSource(
+        dict(left=[slots[3][0]], right=[slots[5][1]], name=["Second chamber"])
+    )
+    diagram.quad(
+        left="left",
+        right="right",
+        bottom=0.12,
+        top=0.88,
+        source=chamber_source,
+        fill_color="#dbeafe",
+        line_color="#64748b",
+    )
+    quadrupole_source = ColumnDataSource(
+        dict(left=[slots[4][0]], right=[slots[4][1]], name=["Quadrupole"])
+    )
+    diagram.quad(
+        left="left",
+        right="right",
+        bottom=0.196,
+        top=0.804,
+        source=quadrupole_source,
+        fill_color="#bfdbfe",
+        line_color="#64748b",
     )
     diagram.add_tools(HoverTool(renderers=[glyph], tooltips=[("Zone", "@name")]))
     labels = []
@@ -140,6 +165,8 @@ def _schematic_plot(
 
     args = dict(
         source=source,
+        chamber=chamber_source,
+        quadrupole=quadrupole_source,
         labels=labels,
         full=full,
         short=short,
@@ -198,6 +225,8 @@ def _schematic_plot(
             const lefts = [], rights = [];
             for (const width of widths) { lefts.push(edge); edge += width; rights.push(edge); }
             source.data = {...source.data, left: lefts, right: rights};
+            chamber.data = {...chamber.data, left: [lefts[3]], right: [rights[5]]};
+            quadrupole.data = {...quadrupole.data, left: [lefts[4]], right: [rights[4]]};
             drag.current = widths;
             labelsFit();
         }

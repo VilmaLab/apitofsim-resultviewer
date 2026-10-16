@@ -13,6 +13,7 @@ from bokeh.models import (
     GroupBox,
     HoverTool,
     Label,
+    PanTool,
     RangeSlider,
     Select,
 )
@@ -212,6 +213,19 @@ def test_schematic_custom_widths_persist_and_align_plots(monkeypatch):
             for left, right in zip(source["left"], source["right"], strict=True)
         ] == pytest.approx(custom)
         assert schematic.outline_line_color is None
+        assert not any(isinstance(tool, PanTool) for tool in schematic.tools)
+        assert source["alpha"][3:6] == [0, 0, 0]
+        chamber = schematic.renderers[1].data_source.data
+        quadrupole = schematic.renderers[2].data_source.data
+        assert chamber["left"] == [source["left"][3]]
+        assert chamber["right"] == [source["right"][5]]
+        assert quadrupole["left"] == [source["left"][4]]
+        assert quadrupole["right"] == [source["right"][4]]
+        assert schematic.select_one({"type": HoverTool}).renderers == [
+            schematic.renderers[0]
+        ]
+        assert source["name"][3:6] == list(data.REGIONS[2:5])
+        assert len([item for item in schematic.center if isinstance(item, Label)]) == 7
         assert source["top"][4] - source["bottom"][4] == pytest.approx(
             0.8 * (source["top"][3] - source["bottom"][3])
         )

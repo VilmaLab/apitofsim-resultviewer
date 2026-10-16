@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from bokeh.events import DocumentReady
 from bokeh.layouts import column, row
 from bokeh.models import (
+    BuiltinIcon,
+    Button,
     CheckboxGroup,
     Column,
-    CustomAction,
     CustomJS,
     Div,
+    FullscreenTool,
     GroupBox,
     InlineStyleSheet,
     RangeSlider,
@@ -57,6 +59,7 @@ class Controls:
     detail_bridge: Div
     fullscreen_state: Div
     viewport_width: Div
+    fullscreen_button: Button
     left_controls: Column
     right_controls: Column
     left_toggle: Toggle
@@ -208,8 +211,14 @@ def create_controls(
     detail_bridge = Div(text="", visible=False)
     fullscreen_state = Div(text="normal", visible=False)
     viewport_width = Div(text="1440,900", visible=False)
+    fullscreen_button = Button(
+        label="Fullscreen",
+        icon=BuiltinIcon("fullscreen"),
+        sizing_mode="stretch_width",
+    )
 
     left_controls = column(
+        fullscreen_button,
         group("Pathways", column(fate, fate_facets, spacing=4)),
         group("X-axis", column(mode, sizing, guides, spacing=4)),
         group(
@@ -283,6 +292,24 @@ def create_controls(
         ],
     )
     doc.add_root(frame)
+    fullscreen_button.js_on_click(
+        CustomJS(
+            args=dict(frame=frame, fullscreen_state=fullscreen_state),
+            code="""
+            const view = Bokeh.index.find_one(frame);
+            const element = view?.el;
+            if (element == null) return;
+            if (element._explorerFullscreenListener == null) {
+                element._explorerFullscreenListener = () => {
+                    fullscreen_state.text = document.fullscreenElement === element ? 'full' : 'normal';
+                };
+                document.addEventListener('fullscreenchange', element._explorerFullscreenListener);
+            }
+            if (document.fullscreenElement === element) void document.exitFullscreen();
+            else if (document.fullscreenElement == null) void element.requestFullscreen();
+        """,
+        )
+    )
     doc.js_on_event(
         DocumentReady,
         CustomJS(
@@ -342,6 +369,7 @@ def create_controls(
         detail_bridge=detail_bridge,
         fullscreen_state=fullscreen_state,
         viewport_width=viewport_width,
+        fullscreen_button=fullscreen_button,
         left_controls=left_controls,
         right_controls=right_controls,
         left_toggle=left_toggle,
@@ -353,48 +381,7 @@ def create_controls(
     )
 
 
-def prepare_toolbar(plot, controls):
-    """Use Bokeh's fullscreen toolbar icon for the entire explorer frame."""
+def prepare_toolbar(plot):
+    """Add the standard fullscreen tool to each plot."""
     plot.toolbar.logo = None
-    plot.add_tools(
-        CustomAction(
-            description="Fullscreen explorer",
-            icon="fullscreen",
-            callback=CustomJS(
-                args=dict(
-                    frame=controls.frame, fullscreen_state=controls.fullscreen_state
-                ),
-                code="""
-            const view = Bokeh.index.find_one(frame);
-            const element = view?.el;
-            if (element == null) return;
-            if (element._explorerFullscreenListener == null) {
-                element._explorerFullscreenListener = () => {
-                    fullscreen_state.text = document.fullscreenElement === element ? 'full' : 'normal';
-                };
-                document.addEventListener('fullscreenchange', element._explorerFullscreenListener);
-            }
-            if (document.fullscreenElement === element) void document.exitFullscreen();
-            else if (document.fullscreenElement == null) void element.requestFullscreen();
-        """,
-            ),
-        )
-    )
-    plot.js_on_change(
-        "inner_width",
-        CustomJS(
-            args=dict(toolbar=plot.toolbar),
-            code="""
-        const view = Bokeh.index.find_one(toolbar);
-        if (view == null || view._explorerSized) return;
-        view._explorerSized = true;
-        for (const button of view.tool_button_views) {
-            const style = button.el.style;
-            style.setProperty('--button-width', '40px', 'important');
-            style.setProperty('--button-height', '40px', 'important');
-            style.setProperty('width', '40px', 'important');
-            style.setProperty('height', '40px', 'important');
-        }
-    """,
-        ),
-    )
+    plot.add_tools(FullscreenTool())

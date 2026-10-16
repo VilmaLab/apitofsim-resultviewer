@@ -78,6 +78,54 @@ def test_realization_coordinate(monkeypatch):
     check({4: 1}, [1])
 
 
+def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
+    frames = cohort(
+        [100, 101],
+        event(1, "collision", 100, 2e-9, 0.003),
+        event(2, "collision", 101, 2e-9, 0.003),
+        event(3, "escape", 101, 2e-9, 0.003),
+    )
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    chart = doc.select_one({"name": "events"})
+    source = next(r.data_source for r in chart.renderers if "id" in r.data_source.data)
+    assert len([r for r in chart.renderers if "id" in r.data_source.data]) == 1
+    hover = next(
+        tool
+        for tool in chart.tools
+        if isinstance(tool, HoverTool) and tool.renderers[0].data_source is source
+    )
+    assert "<span>@realization</span>" in hover.tooltips
+    assert source.data["realization"] == [100, 101, 101]
+    assert source.data["time_text"] == ["2"] * 3
+    assert source.data["axial_text"] == ["3"] * 3
+
+    source.selected.indices = [0, 1, 2]
+    details = next(d for d in doc.select({"type": Div}) if "Choose an event" in d.text)
+    assert details.text.count('class="explorer-choice"') == 3
+    assert details.text.index('data-event="1"') < details.text.index('data-event="2"')
+    assert "<th>#</th><th>Type</th>" in details.text
+    bridge = doc.roots[0].children[1]
+    bridge.text = "choose:101:3"
+    assert "Realization #101</h3>" in details.text
+    assert 'id="event-3" style="background:#fde68a' in details.text
+
+    source.selected.indices = [0, 1]
+    assert "Choose an event" in details.text
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
+    ).value = "beeswarm"
+    bridge.text = "choose:100:1"
+    assert "Choose an event" not in details.text
+    assert "Click an event" in details.text
+
+    chart = doc.select_one({"name": "events"})
+    source = next(r.data_source for r in chart.renderers if "id" in r.data_source.data)
+    source.selected.indices = [source.data["id"].index(2)]
+    assert "Realization #101</h3>" in details.text
+
+
 def test_bokeh_document_modes_and_views(monkeypatch):
     frames = cohort(
         [1], event(1, "collision", 1, 0, 0, clamped=True), event(2, "escape", 1, 1, 5)
@@ -243,9 +291,9 @@ def test_schematic_custom_widths_persist_and_align_plots(monkeypatch):
             [source["left"][1], *source["right"][1:6]]
         )
         return next(
-            r.data_source.data["x"][0]
+            r.data_source.data["x"][r.data_source.data["id"].index(2)]
             for r in events.renderers
-            if r.data_source.data.get("id") == [2]
+            if 2 in r.data_source.data.get("id", [])
         )
 
     custom_position = check()
@@ -305,9 +353,9 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     )
     assert set(fates.labels) == {"Parent → A + B", "Parent → Parent", "Incomplete"}
     source = next(
-        s for s in doc.select({"type": ColumnDataSource}) if s.data.get("id") == [2]
+        s for s in doc.select({"type": ColumnDataSource}) if 2 in s.data.get("id", [])
     )
-    source.selected.indices = [0]
+    source.selected.indices = [source.data["id"].index(2)]
     assert text_contains("Realization #1")
     assert text_contains("<em>Parent → A + B</em>")
     assert not text_contains("Pathway:")
@@ -471,8 +519,15 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
                 for r in event_plot.renderers
                 if "id" in r.data_source.data
             )
-            assert source.data["y"] == [5000, 5000]
-            assert source.data["axial_distance"] == [0, 1000]
+            assert source.data["y"] == [5000] * len(source.data["id"])
+            assert dict(
+                zip(source.data["id"], source.data["axial_distance"], strict=True)
+            ) == {
+                1: 0,
+                2: 2000,
+                3: 5000,
+                4: 1000,
+            }
     bridge.text = "clear"
     assert text_contains("Click an event")
     assert len(loads) == 1
@@ -566,15 +621,15 @@ def test_cumulative_pathway_areas(monkeypatch, mode, sizing):
     escape_source = next(
         r.data_source
         for r in event_plot.renderers
-        if r.data_source.data.get("id") == [3]
+        if 3 in r.data_source.data.get("id", [])
     )
-    assert escape_source.data["x"] == [
+    assert escape_source.data["x"][escape_source.data["id"].index(3)] == (
         2
         if mode == "time"
         else 6000
         if mode == "physical"
         else sum(event_layout.escape_slot(mapped)) / 2
-    ]
+    )
     # Tied fragmentations form one vertical jump; unresolved histories stay out.
     assert first["fraction"] == [0, 0, 0.5, 0.5, 0.5, 0.5]
     assert second["fraction"] == [0, 0, 0, 0, 0.25, 0.25]
@@ -649,13 +704,20 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
     facets = checkbox("Facet pathways")
     colors = plot._pathway_colors(fates.labels, "Parent → Parent")
 
-    def event_renderers():
+    def event_points():
         chart = next(p for p in doc.select({"type": figure}) if p.name == "events")
         return {
-            tuple(r.data_source.data["id"]): r
+            event_id: color
             for r in chart.renderers
             if "id" in r.data_source.data
+            for event_id, color in zip(
+                r.data_source.data["id"], r.data_source.data["color"], strict=True
+            )
         }
+
+    def event_glyph():
+        chart = next(p for p in doc.select({"type": figure}) if p.name == "events")
+        return next(r.glyph for r in chart.renderers if "id" in r.data_source.data)
 
     assert grouping.active == [0] and not grouping.disabled
     assert [w.labels[0] for w in options.children] == [
@@ -664,8 +726,8 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
         "Fragmentation",
         "Escape",
     ]
-    assert event_renderers()[(2, 4)].glyph.fill_color == Category10[10][3]
-    assert event_renderers()[(6,)].glyph.fill_color == plot.COLORS["escape"]
+    assert event_points()[2] == event_points()[4] == Category10[10][3]
+    assert event_points()[6] == plot.COLORS["escape"]
     checkbox("Cumulative").active = [0]
     cumulative = next(p for p in doc.select({"type": figure}) if p.name == "cdf")
     assert [r.glyph.fill_color for r in cumulative.renderers] == [
@@ -680,15 +742,15 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
         "Parent → C + D",
         "Parent → Parent",
     ]
-    for ids, name in [
-        ((2,), "Parent → A + B"),
-        ((4,), "Parent → C + D"),
-        ((6,), "Parent → Parent"),
+    for event_id, name in [
+        (2, "Parent → A + B"),
+        (4, "Parent → C + D"),
+        (6, "Parent → Parent"),
     ]:
-        assert event_renderers()[ids].glyph.fill_color == colors[name]
+        assert event_points()[event_id] == colors[name]
         assert f"color: {colors[name]}" in checkbox(name).stylesheets[0].css
     checkbox("Parent → A + B").active = []
-    assert (2,) not in event_renderers() and (4,) in event_renderers()
+    assert 2 not in event_points() and 4 in event_points()
     cumulative = next(p for p in doc.select({"type": figure}) if p.name == "cdf")
     assert len(cumulative.renderers) == 3
 
@@ -696,14 +758,14 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
     assert checkbox("Parent → A + B").disabled and not checkbox("Parent → A + B").active
     assert checkbox("Parent → Parent").disabled and checkbox("Parent → Parent").active
     assert not checkbox("Parent → C + D").disabled and checkbox("Parent → C + D").active
-    assert set(event_renderers()) == {(3,), (4,)}
+    assert set(event_points()) == {3, 4}
     fates.active = list(range(len(fates.labels)))
     assert not checkbox("Parent → A + B").disabled
     assert not checkbox("Parent → A + B").active
     assert (
         checkbox("Parent → Parent").active and not checkbox("Parent → Parent").disabled
     )
-    assert (2,) not in event_renderers() and (6,) in event_renderers()
+    assert 2 not in event_points() and 6 in event_points()
     fates.active = [fates.labels.index("Parent → C + D")]
     facets.active = [0]
     assert grouping.active == [0] and grouping.disabled
@@ -721,7 +783,7 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
     assert checkbox("Fragmentation").disabled and checkbox("Fragmentation").active
     assert not checkbox("Escape").disabled and checkbox("Escape").active
     checkbox("Escape").active = [0]
-    assert (6,) in event_renderers()
+    assert 6 in event_points()
     fates.active = [fates.labels.index("Parent → C + D")]
     assert checkbox("Escape").disabled and checkbox("Escape").active
 
@@ -731,8 +793,8 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
     grouping.active = []
     mode = next(s for s in doc.select({"type": Select}) if s.title == "Y coordinate")
     mode.value = "beeswarm"
-    assert event_renderers()[(2,)].glyph.marker == "circle"
-    assert event_renderers()[(2,)].glyph.fill_color == colors["Parent → A + B"]
+    assert event_glyph().marker == "circle"
+    assert event_points()[2] == colors["Parent → A + B"]
     assert 'content: "●"' in checkbox("Parent → A + B").stylesheets[0].css
     fates.active = []
     assert all(w.disabled and w.active for w in options.children)
@@ -955,9 +1017,13 @@ def test_initial_event_controls_and_schematic(monkeypatch):
         sizing.value = preset
         chart = doc.select_one({"name": "events"})
         renderer = next(
-            r for r in chart.renderers if r.data_source.data.get("id") == [1]
+            r for r in chart.renderers if 1 in r.data_source.data.get("id", [])
         )
-        assert chart.x_range.start < renderer.data_source.data["x"][0] < 0
+        assert (
+            chart.x_range.start
+            < renderer.data_source.data["x"][renderer.data_source.data["id"].index(1)]
+            < 0
+        )
         mapped = event_layout.coordinate_regions(
             frames[3], "schematic", event_layout.schematic_widths(preset)
         )

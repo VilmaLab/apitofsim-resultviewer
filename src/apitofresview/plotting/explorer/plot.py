@@ -19,6 +19,7 @@ from bokeh.palettes import Category10, Category20
 from bokeh.plotting import figure
 
 from .data import REGIONS
+from .details import format_value
 from .layout import (
     beeswarm_envelope,
     escape_slot,
@@ -40,6 +41,22 @@ PATHWAY_COLORS = (
     # Extend with lighter categorical colours, reserving both blues and greens.
     *(color for i, color in enumerate(Category20[20][1::2]) if i not in (0, 2)),
 )
+
+EVENT_TOOLTIP_CSS = """
+.bk-tooltip-content > div > div:not(:first-child) .explorer-hover-head { display: none; }
+.explorer-hover-head, .explorer-hover-row {
+    display: grid; grid-template-columns: 74px 84px 70px 96px;
+    gap: 4px; padding: 4px;
+}
+.explorer-hover-head { font-weight: bold; border-bottom: 1px solid #cbd5e1; }
+.explorer-hover-row { border-bottom: 1px solid #e2e8f0; }
+.explorer-hover-row span:nth-child(n+3) { text-align: right; }
+"""
+
+EVENT_TOOLTIP = """
+<div class="explorer-hover-head"><span>Realization</span><span>Type</span><span>Time (ns)</span><span>Axial dist. (mm)</span></div>
+<div class="explorer-hover-row"><span>@realization</span><span>@type</span><span>@time_text</span><span>@axial_text</span></div>
+"""
 
 
 def _pathway_colors(names, escaped):
@@ -451,18 +468,19 @@ def _event_plot(
                 line_alpha=0.25,
                 color="#64748b",
             )
-    for kind, color in event_colors.items():
-        subset = events.filter(pl.col("event_group") == kind)
-        if subset.is_empty():
-            continue
+    if not events.is_empty():
         source = _source(
-            subset.select(
+            events.select(
                 pl.col("position").alias("x"),
                 pl.col("plot_y").alias("y"),
                 "id",
                 pl.col("realization_id").alias("realization"),
-                pl.col("t").alias("time"),
+                "type",
+                (pl.col("t") * 1e9).alias("time_ns"),
                 (pl.col("z") * 1000).alias("axial_distance"),
+                pl.Series("color", [event_colors[k] for k in events["event_group"]]),
+                pl.Series("time_text", [format_value(t * 1e9) for t in events["t"]]),
+                pl.Series("axial_text", [format_value(z * 1000) for z in events["z"]]),
             )
         )
         glyph = plot.scatter(
@@ -475,19 +493,30 @@ def _event_plot(
             if use_x_markers
             else "dot",
             size=10 if layout == "beeswarm" else 6,
-            color=color,
+            color="color",
             line_width=0 if layout == "beeswarm" else 1,
         )
         swarm_glyphs.append(glyph)
         plot.add_tools(
             HoverTool(
                 renderers=[glyph],
-                tooltips=[
-                    ("Event", "@id"),
-                    ("Realization", "@realization"),
-                    ("t (s)", "@time"),
-                    ("Axial distance (mm)", "@axial_distance"),
-                ],
+                tooltips=EVENT_TOOLTIP,
+                sort_by=["@realization", "@time_ns", "@id"],
+                callback=CustomJS(
+                    args=dict(css=EVENT_TOOLTIP_CSS),
+                    code="""
+                    const view = Bokeh.index.find_one(cb_obj);
+                    for (const tooltip of view?._ttviews?.values() ?? []) {
+                        const root = tooltip.shadow_el;
+                        if (root && !root.querySelector('.explorer-tooltip-style')) {
+                            const style = document.createElement('style');
+                            style.className = 'explorer-tooltip-style';
+                            style.textContent = css;
+                            root.appendChild(style);
+                        }
+                    }
+                    """,
+                ),
             )
         )
         source.selected.on_change("indices", on_selected(source))

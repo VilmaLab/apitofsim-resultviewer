@@ -2,12 +2,12 @@
 
 import polars as pl
 
-from apitofresview.plotting.explorer.details import render_details
+from apitofresview.plotting.explorer.details import render_choices, render_details
 
 from .helpers import cohort, event
 
 
-def test_details_use_cohort_number_and_convert_units():
+def test_details_use_database_id_and_convert_units():
     realizations, events, _, _ = cohort(
         [16052], event(42, "collision", 16052, 2e-9, 0.003)
     )
@@ -18,8 +18,7 @@ def test_details_use_cohort_number_and_convert_units():
     )
     selected = realizations.with_row_index("realization_number", offset=1)
     details = render_details(selected, events, 42)
-    assert "Realization #1</h3>" in details
-    assert "Realization #16052" not in details
+    assert "Realization #16052</h3>" in details
     assert "Result #" not in details and "disabled" not in details
     assert (
         "<td>2</td><td>3</td><td>5000</td><td>-12</td><td>5</td><td>7</td>" in details
@@ -73,3 +72,22 @@ def test_details_escape_fate_and_prompt_when_unselected():
         render_details(members.head(0), events.head(0), None)
         == "<p><em>Click an event to inspect its realization.</em></p>"
     )
+
+
+def test_choices_share_detail_columns_and_show_database_ids():
+    _, events, _, _ = cohort(
+        [16052, 16053],
+        event(42, "collision", 16052, 2e-9, 0.003),
+        event(43, "escape", 16053, 3e-9, 0.004),
+    )
+    events = events.with_columns(pl.Series("accepted", [False, None]))
+    html = render_choices(events)
+    assert "<th>#</th><th>Type</th><th>Time (ns)</th>" in html
+    assert "<th>Axial dist. (mm)</th>" in html
+    assert "<th>Collision accepted</th>" in html
+    assert 'data-realization="16052" data-event="42"' in html
+    assert 'data-realization="16053" data-event="43"' in html
+    assert "<td>2</td><td>3</td><td>5000</td><td>No</td>" in html
+    cartesian = render_choices(events, radial=False)
+    assert all(f"<th>{axis} (mm)</th>" in cartesian for axis in "xyz")
+    assert "Axial dist." not in cartesian

@@ -6,10 +6,11 @@ import polars as pl
 import pytest
 from bokeh.document import Document
 from bokeh.models import (
+    Button,
     CheckboxGroup,
     ColumnDataSource,
-    CustomAction,
     Div,
+    FullscreenTool,
     GroupBox,
     HoverTool,
     Label,
@@ -163,26 +164,33 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         "Realizations",
     }
     assert all(p.toolbar.logo is None for p in plots)
-    assert any(a.icon == "fullscreen" for a in doc.select({"type": CustomAction}))
+    assert all(
+        any(isinstance(tool, FullscreenTool) for tool in p.tools)
+        for p in plots
+        if p.toolbar_location is not None
+    )
     assert len(doc.roots) == 1
     controls = sidebars[0].children[1].children
-    assert [g.title for g in controls] == [
+    assert isinstance(controls[0], Button)
+    assert controls[0].label == "Fullscreen explorer"
+    assert controls[0].icon.icon_name == "fullscreen"
+    assert [g.title for g in controls[1:]] == [
         "Pathways",
         "X-axis",
         "Elements",
         "Realizations",
     ]
-    assert controls[1].child.children[1] is sizing
-    assert controls[1].child.children[2].labels == ["Guides"]
-    assert controls[2].child.children[0].labels == ["Schematic"]
-    assert controls[2].child.children[1].title == "Views"
-    assert controls[3].child.children[0].labels == ["Use x markers"]
-    assert controls[3].child.children[1].labels == ["Group fragmentations"]
-    assert controls[3].child.children[2].labels == [
+    assert controls[2].child.children[1] is sizing
+    assert controls[2].child.children[2].labels == ["Guides"]
+    assert controls[3].child.children[0].labels == ["Schematic"]
+    assert controls[3].child.children[1].title == "Views"
+    assert controls[4].child.children[0].labels == ["Use x markers"]
+    assert controls[4].child.children[1].labels == ["Group fragmentations"]
+    assert controls[4].child.children[2].labels == [
         "Place initial/escape in their own zones"
     ]
-    assert controls[3].child.children[3].labels == ["Spread initial/escape X"]
-    assert [g.title for g in controls[3].child.children[4:]] == ["Events", "Y-axis"]
+    assert controls[4].child.children[3].labels == ["Spread initial/escape X"]
+    assert [g.title for g in controls[4].child.children[4:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
 

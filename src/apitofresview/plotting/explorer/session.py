@@ -529,7 +529,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                     )
                     plot.xgrid.grid_line_color = "#94a3b8"
                     plot.xgrid.grid_line_alpha = 0.3
-                prepare_toolbar(plot, ui)
+                prepare_toolbar(plot)
             if plots:
                 for upper in plots[:-1]:
                     upper.xaxis.visible = False

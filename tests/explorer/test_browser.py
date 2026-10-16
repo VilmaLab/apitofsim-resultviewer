@@ -153,6 +153,12 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
             return data.right.map((right, i) => right - data.left[i]);
         }""")
 
+    def x_range():
+        return page.evaluate("""() => {
+            const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+            return [plot.x_range.start, plot.x_range.end];
+        }""")
+
     def drag(boundary, pixels):
         point = page.evaluate(
             """boundary => {
@@ -174,6 +180,22 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         )
 
     before = widths()
+    original_range = x_range()
+    center = page.evaluate("""() => {
+        const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+        const view = Bokeh.index.find_one(plot);
+        const bounds = view.canvas_view.events_el.getBoundingClientRect();
+        const data = plot.renderers[0].data_source.data;
+        return {x: bounds.left + view.frame.x_scale.compute((data.left[1] + data.right[1]) / 2),
+            y: bounds.top + view.frame.y_scale.compute(0.5)};
+    }""")
+    page.mouse.move(center["x"], center["y"])
+    page.mouse.down()
+    page.mouse.move(center["x"] + 40, center["y"], steps=5)
+    page.mouse.up()
+    assert x_range() == pytest.approx(original_range)
+    assert widths() == pytest.approx(before)
+
     drag(0, 25)
     page.wait_for_function(
         """() => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected && p.renderers[0].data_source.data.right[0] > 0)"""
@@ -181,6 +203,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     after = widths()
     assert after[0] > before[0] and after[1] < before[1]
     assert after[2:] == pytest.approx(before[2:])
+    assert x_range() == pytest.approx(original_range)
     expect(page.get_by_label("Sizing")).to_have_value("Custom")
 
     for boundary, grow, shrink, fixed in (

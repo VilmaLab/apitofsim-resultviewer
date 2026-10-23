@@ -15,6 +15,8 @@ from bokeh.models import (
     GroupBox,
     InlineStyleSheet,
     RangeSlider,
+    Row,
+    SVGIcon,
     Select,
     Toggle,
 )
@@ -64,8 +66,12 @@ class Controls:
     right_controls: Column
     left_toggle: Toggle
     right_toggle: Toggle
+    detail_layouts: dict[str, Toggle]
     left: Column
     right: Column
+    center: Column
+    workspace: Row | Column
+    body: Row
     center_plots: Column
     frame: Column
 
@@ -260,7 +266,35 @@ def create_controls(
         html_attributes={"title": "Show selected realization"},
     )
     left = column(left_toggle, left_controls, width=205, spacing=4)
-    right = column(right_toggle, right_controls, width=38, spacing=4)
+    detail_layouts = {
+        mode: Toggle(
+            label=title,
+            icon=SVGIcon(
+                svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+                '<rect x="1" y="1" width="18" height="18" rx="2" '
+                'fill="none" stroke="currentColor" stroke-width="1.5"/>'
+                f'<path d="{path}" fill="currentColor"/></svg>',
+                size=18,
+            ),
+            stylesheets=[
+                InlineStyleSheet(css=".bk-btn { font-size: 0; padding: 4px; }")
+            ],
+            margin=0,
+            active=mode == "sidebar",
+            width=32,
+            height=32,
+            visible=False,
+            name=f"details_layout_{mode}",
+            html_attributes={"title": title, "aria-label": title},
+        )
+        for mode, path, title in (
+            ("sidebar", "M14 2h4v16h-4z", "Right sidebar"),
+            ("bottom", "M2 11h16v7H2z", "Bottom"),
+            ("right", "M10 2h8v16h-8z", "Right (half width)"),
+        )
+    }
+    details_header = row(right_toggle, *detail_layouts.values(), spacing=2)
+    right = column(details_header, right_controls, width=38, spacing=4)
     right_controls.visible = False
     center_plots = column(sizing_mode="stretch_width", spacing=0)
     center = column(
@@ -272,8 +306,10 @@ def create_controls(
         spacing=2,
         css_classes=["explorer-center"],
     )
+    workspace = row(center, right, sizing_mode="stretch_width", spacing=6)
+    body = row(left, workspace, sizing_mode="stretch_width", spacing=6)
     frame = column(
-        row(left, center, right, sizing_mode="stretch_width", spacing=6),
+        body,
         detail_bridge,
         fullscreen_state,
         viewport_width,
@@ -314,11 +350,26 @@ def create_controls(
     doc.js_on_event(
         DocumentReady,
         CustomJS(
-            args=dict(width=viewport_width),
+            args=dict(width=viewport_width, frame=frame, bridge=detail_bridge),
             code="""
         const update = () => { width.text = `${window.innerWidth},${window.innerHeight}`; };
         update();
         window.addEventListener('resize', update);
+        // Layout changes rebuild the details view, so delegate from the stable frame.
+        const view = Bokeh.index.find_one(frame);
+        view.el.addEventListener('click', event => {
+            const path = event.composedPath().filter(node => node instanceof Element);
+            if (path.some(node => node.matches('#clear-selection'))) {
+                bridge.text = 'clear';
+                return;
+            }
+            const row = path.find(node => node.matches('.explorer-event, .explorer-choice'));
+            if (row) {
+                bridge.text = row.dataset.realization
+                    ? `choose:${row.dataset.realization}:${row.dataset.event}`
+                    : row.dataset.event;
+            }
+        });
     """,
         ),
     )
@@ -326,21 +377,11 @@ def create_controls(
     details.js_on_change(
         "text",
         CustomJS(
-            args=dict(bridge=detail_bridge),
             code="""
         setTimeout(() => {
             const view = Bokeh.index.find_one(cb_obj);
             const root = view?.shadow_el ?? view?.el?.shadowRoot ?? view?.el;
             if (!root) return;
-            root.querySelectorAll('.explorer-event, .explorer-choice').forEach(row => {
-                row.onclick = () => {
-                    bridge.text = row.dataset.realization
-                        ? `choose:${row.dataset.realization}:${row.dataset.event}`
-                        : row.dataset.event;
-                };
-            });
-            const clear = root.querySelector('#clear-selection');
-            if (clear) clear.onclick = () => { bridge.text = 'clear'; };
             const active = root.querySelector('.explorer-event[style*="fde68a"]');
             if (active) active.scrollIntoView({block: 'nearest'});
         }, 0);
@@ -379,8 +420,12 @@ def create_controls(
         right_controls=right_controls,
         left_toggle=left_toggle,
         right_toggle=right_toggle,
+        detail_layouts=detail_layouts,
         left=left,
         right=right,
+        center=center,
+        workspace=workspace,
+        body=body,
         center_plots=center_plots,
         frame=frame,
     )

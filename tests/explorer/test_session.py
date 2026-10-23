@@ -205,7 +205,8 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         ):
             toggle.active = [0]
     frame = doc.roots[0]
-    sidebars = frame.children[0].children
+    left, workspace = frame.children[0].children
+    sidebars = [left, *workspace.children]
     fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
     fullscreen.text = "full"
     assert not sidebars[0].children[1].visible and not sidebars[2].children[1].visible
@@ -214,7 +215,7 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert sidebars[0].children[1].visible and not sidebars[2].children[1].visible
     viewport = next(d for d in doc.select({"type": Div}) if d.text == "1440,900")
     viewport.text = "533,900"
-    sidebars[2].children[0].active = True
+    sidebars[2].children[0].children[0].active = True
     assert not sidebars[0].children[1].visible
     assert sidebars[2].width == 250
 
@@ -1219,3 +1220,52 @@ def test_beeswarm_reuses_preparation_until_cohort_or_coordinates_change(monkeypa
     assert len(preparations) == 3
     assert preparations[-1].slots is None
     assert packs[-1] is preparations[-1]
+
+
+@pytest.mark.parametrize("mode", ["bottom", "right"])
+def test_details_layout_transitions(monkeypatch, mode):
+    frames = cohort([1], event(1, "escape", 1, 1, 5))
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    body = doc.roots[0].children[0]
+    left, workspace = body.children
+    center, right = workspace.children
+    toggle = right.children[0].children[0]
+    layouts = {
+        m: doc.select_one({"name": f"details_layout_{m}"})
+        for m in ("sidebar", "bottom", "right")
+    }
+    fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
+    chart = doc.select_one({"name": "events"})
+    chart.x_range.start, chart.x_range.end = 1, 2
+
+    toggle.active = True
+    assert layouts["sidebar"].active
+    layouts[mode].active = True
+    assert not left.children[1].visible
+    assert right.sizing_mode == "stretch_width" and right.width is None
+    assert type(body.children[1]).__name__ == ("Column" if mode == "bottom" else "Row")
+    assert ("max-height" in right.children[1].styles) == (mode != "bottom")
+    # Clicking the selected layout again keeps it selected.
+    layouts[mode].active = False
+    assert layouts[mode].active
+    fullscreen.text = "full"
+    assert not toggle.active and layouts["sidebar"].active
+    toggle.active = True
+    layouts["right" if mode == "bottom" else "bottom"].active = True
+    fullscreen.text = "normal"
+    assert toggle.active and layouts[mode].active
+    assert doc.select_one({"name": "events"}) is chart
+    assert (chart.x_range.start, chart.x_range.end) == (1, 2)
+
+    toggle.active = False
+    assert layouts["sidebar"].active
+    assert all(not button.visible for button in layouts.values())
+    toggle.active = True
+    assert right.width == 300 and layouts["sidebar"].active
+    layouts[mode].active = True
+    left.children[0].active = True
+    assert left.children[1].visible and layouts["sidebar"].active
+    assert right.width == 300
+    assert body.children[1].children == [center, right]

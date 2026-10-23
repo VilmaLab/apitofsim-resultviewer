@@ -5,7 +5,8 @@ import json
 from math import isfinite
 
 import polars as pl
-from bokeh.models import Div, FixedTicker, Range1d
+from bokeh.layouts import column, row
+from bokeh.models import Column, Div, FixedTicker, Range1d
 
 from .aggregation import cumulative_areas, regional_fractions
 from .controls import CHECKBOX_CSS, create_controls, enabled, prepare_toolbar
@@ -76,6 +77,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         "auto_cdf": False,
         "syncing_sidebar": False,
         "sidebar": {False: [True, False], True: [False, False]},
+        "details_layout": {False: "sidebar", True: "sidebar"},
         "widths": schematic_widths("chambers"),
         "setting_sizing": False,
     }
@@ -124,6 +126,8 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     def apply_sidebars(full):
         left_open, right_open = state["sidebar"][full]
+        mode = state["details_layout"][full]
+        bottom = right_open and mode == "bottom"
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
         if narrow and left_open and right_open:
             left_open = False
@@ -131,27 +135,71 @@ def build_document(db, doc, experiment: int, cluster: int):
         state["syncing_sidebar"] = True
         try:
             ui.left_toggle.active, ui.right_toggle.active = left_open, right_open
+            for layout, button in ui.detail_layouts.items():
+                button.active = layout == mode
+                button.visible = right_open
         finally:
             state["syncing_sidebar"] = False
         ui.left_controls.visible, ui.right_controls.visible = left_open, right_open
         ui.left.width = 205 if left_open else 38
         ui.right.width = (250 if narrow else 300) if right_open else 38
+        ui.right.sizing_mode = (
+            "stretch_width" if right_open and mode != "sidebar" else "fixed"
+        )
+        if right_open and mode != "sidebar":
+            ui.right.width = None
+        if bottom != isinstance(ui.workspace, Column):
+            layout = column if bottom else row
+            ui.workspace = layout(
+                ui.center, ui.right, sizing_mode="stretch_width", spacing=6
+            )
+            ui.body.children = [ui.left, ui.workspace]
+        ui.right_controls.styles = (
+            {}
+            if bottom
+            else {
+                "max-height": "calc(100vh - 46px)" if full else "calc(100vh - 295px)",
+                "overflow-y": "auto",
+            }
+        )
         ui.left_toggle.width, ui.right_toggle.width = (
             (100 if left_open else 32),
             (110 if right_open else 32),
         )
         ui.left_toggle.label = "« Controls" if left_open else "»"
-        ui.right_toggle.label = "Hide details »" if right_open else "☷"
+        ui.right_toggle.label = (
+            ("Hide details ↓" if bottom else "Hide details »") if right_open else "☷"
+        )
         resize_plots()
 
     def sidebar_changed(index, active):
         if state["syncing_sidebar"]:
             return
-        state["sidebar"][ui.fullscreen_state.text == "full"][index] = active
-        apply_sidebars(ui.fullscreen_state.text == "full")
+        full = ui.fullscreen_state.text == "full"
+        state["sidebar"][full][index] = active
+        if (index == 0 and active) or index == 1:
+            state["details_layout"][full] = "sidebar"
+        # On narrow screens, opening controls should keep them visible.
+        if index == 0 and active and int(ui.viewport_width.text.split(",")[0]) < 900:
+            state["sidebar"][full][1] = False
+        apply_sidebars(full)
 
     ui.left_toggle.on_change("active", lambda attr, old, new: sidebar_changed(0, new))
     ui.right_toggle.on_change("active", lambda attr, old, new: sidebar_changed(1, new))
+
+    def layout_changed(mode):
+        if state["syncing_sidebar"]:
+            return
+        full = ui.fullscreen_state.text == "full"
+        state["details_layout"][full] = mode
+        if mode != "sidebar":
+            state["sidebar"][full][0] = False
+        apply_sidebars(full)
+
+    for mode, button in ui.detail_layouts.items():
+        button.on_change(
+            "active", lambda attr, old, new, mode=mode: layout_changed(mode)
+        )
 
     def full_changed(attr, old, new):
         sidebar_height = (
@@ -159,10 +207,6 @@ def build_document(db, doc, experiment: int, cluster: int):
         )
         ui.left_controls.styles = {
             **ui.left_controls.styles,
-            "max-height": sidebar_height,
-        }
-        ui.right_controls.styles = {
-            **ui.right_controls.styles,
             "max-height": sidebar_height,
         }
         apply_sidebars(new == "full")
@@ -438,7 +482,15 @@ def build_document(db, doc, experiment: int, cluster: int):
         if right_edge <= left_edge:
             right_edge = left_edge + 1
         screen_width = int(ui.viewport_width.text.split(",")[0])
-        available_width = screen_width - ui.left.width - ui.right.width
+        available_width = screen_width - ui.left.width
+        if state["sidebar"][ui.fullscreen_state.text == "full"][1]:
+            mode = state["details_layout"][ui.fullscreen_state.text == "full"]
+            if mode == "right":
+                available_width /= 2
+            elif mode == "sidebar":
+                available_width -= ui.right.width
+        else:
+            available_width -= ui.right.width
         plot_height = event_plot_height()
         margin = (right_edge - left_edge) * 0.015
         shared_x = Range1d(

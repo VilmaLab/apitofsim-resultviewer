@@ -118,7 +118,10 @@ def overlap_server(monkeypatch):
         yield url
 
 
-def test_live_inspection_preserves_plot_and_zoom(page, explorer_server):
+@pytest.mark.parametrize(
+    "details_layout", ["Right sidebar", "Right (half width)", "Bottom"]
+)
+def test_live_inspection_preserves_plot_and_zoom(page, explorer_server, details_layout):
     page.set_viewport_size({"width": 1280, "height": 900})
     page.goto(explorer_server)
     page.wait_for_function("""() => {
@@ -141,13 +144,25 @@ def test_live_inspection_preserves_plot_and_zoom(page, explorer_server):
     expect(
         page.get_by_role("button", name="Inspect event #2", exact=True)
     ).to_be_visible()
-    page.get_by_role("button", name="Inspect event #2", exact=True).click()
-    page.wait_for_function("""() => {
-        const plot = Bokeh.documents[0].get_model_by_name('events');
-        const clicked = plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data;
-        const source = plot.renderers.find(r => r.data_source?.data.id?.includes(2)).data_source.data;
-        return clicked.position.length === 1 && clicked.position[0] === source.x[source.id.indexOf(2)];
-    }""")
+    for layout in (details_layout, "Right sidebar", "Bottom", "Right (half width)"):
+        page.get_by_role("button", name=layout, exact=True).click()
+        for event_id in (2, 1):
+            if event_id == 2:
+                page.get_by_role("button", name="Inspect event #2", exact=True).click()
+            else:
+                # Clicking an ordinary cell must select its row too.
+                page.locator('.explorer-event[data-event="1"] td').nth(1).click()
+            page.wait_for_function(
+                """eventId => {
+                    const plot = Bokeh.documents[0].get_model_by_name('events');
+                    const clicked = plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data;
+                    const source = plot.renderers.find(r => r.data_source?.data.id?.includes(eventId)).data_source.data;
+                    const index = source.id.indexOf(eventId);
+                    return clicked.position.length === 1 && clicked.position[0] === source.x[index] &&
+                        clicked.plot_y[0] === source.y[index];
+                }""",
+                arg=event_id,
+            )
     assert page.evaluate("""() => {
         const plot = Bokeh.documents[0].get_model_by_name('events');
         return {plot: plot.id, range: plot.x_range.id, start: plot.x_range.start, end: plot.x_range.end};
@@ -312,7 +327,7 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
         page.wait_for_function(
             """beeswarm => {
             try {
-                const center = Bokeh.documents[0].roots()[0].children[0].children[1];
+                const center = Bokeh.documents[0].roots()[0].children[0].children[1].children[0];
                 const plot = center.children[2].children.find(p => p.name === 'events');
                 const source = plot?.renderers.find(r => r.data_source?.data.id?.includes(1))?.data_source;
                 return plot?.inner_width > 0 && plot?.inner_height > 0 && source &&
@@ -325,7 +340,7 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
         )
         return page.evaluate(
             """event_id => {
-            const center = Bokeh.documents[0].roots()[0].children[0].children[1];
+            const center = Bokeh.documents[0].roots()[0].children[0].children[1].children[0];
             const plot = center.children[2].children.find(p => p.name === 'events');
             const source = plot.renderers.find(r => r.data_source?.data.id?.includes(event_id)).data_source;
             const view = Bokeh.index.find_one(plot);
@@ -355,6 +370,7 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
         const wrapper = row.closest('table').parentElement;
         return wrapper.getBoundingClientRect().right <= window.innerWidth + 1;
     }""")
+    page.get_by_role("button", name="Bottom", exact=True).click()
     page.get_by_role("button", name="Inspect event #3 in realization #2").click()
     expect(page.get_by_text("Realization #2", exact=True)).to_be_visible()
     expect(
@@ -371,3 +387,72 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
     page.mouse.click(point["x"], point["y"])
     expect(page.get_by_text("Realization #1", exact=True)).to_be_visible()
     expect(page.get_by_text("Choose an event", exact=True)).to_have_count(0)
+
+
+@pytest.mark.parametrize("width", [640, 1280])
+def test_details_layout_geometry(page, explorer_server, width, tmp_path):
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(explorer_server)
+    page.get_by_role("button", name="☷", exact=True).click()
+    page.evaluate("""() => {
+        const plot = Bokeh.documents[0].get_model_by_name('events');
+        const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+        source.selected.indices = [source.data.id.indexOf(1)];
+    }""")
+    expect(page.get_by_text("Realization #1", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Right (half width)", exact=True).click()
+
+    def bounds():
+        return page.evaluate("""() => {
+            const body = Bokeh.documents[0].roots()[0].children[0];
+            const [center, right] = body.children[1].children;
+            const rect = model => {
+                const r = Bokeh.index.find_one(model).el.getBoundingClientRect();
+                return {x: r.x, y: r.y, width: r.width, height: r.height};
+            };
+            return {center: rect(center), right: rect(right),
+                    controls: body.children[0].children[1].visible};
+        }""")
+
+    page.wait_for_function("""() => {
+        const [center, right] = Bokeh.documents[0].roots()[0].children[0].children[1].children;
+        return right.width == null && Bokeh.index.find_one(right).el.getBoundingClientRect().width > 100;
+    }""")
+    geometry = bounds()
+    assert not geometry["controls"]
+    assert geometry["center"]["width"] == pytest.approx(
+        geometry["right"]["width"], abs=2
+    )
+    assert (
+        geometry["right"]["x"] >= geometry["center"]["x"] + geometry["center"]["width"]
+    )
+    page.screenshot(path=str(tmp_path / f"details-right-{width}.png"))
+    page.get_by_role("button", name="Bottom", exact=True).click()
+    page.wait_for_function("""() => {
+        const workspace = Bokeh.documents[0].roots()[0].children[0].children[1];
+        if (workspace.type !== 'Column') return false;
+        const [center, right] = workspace.children.map(m => Bokeh.index.find_one(m)?.el?.getBoundingClientRect());
+        return center && right && right.top >= center.bottom;
+    }""")
+    geometry = bounds()
+    assert geometry["center"]["width"] == pytest.approx(
+        geometry["right"]["width"], abs=2
+    )
+    assert geometry["right"]["height"] < geometry["center"]["height"]
+    expect(page.get_by_text("Realization #1", exact=True)).to_be_visible()
+    page.screenshot(path=str(tmp_path / f"details-bottom-{width}.png"), full_page=True)
+    page.get_by_role("button", name="Hide details ↓", exact=True).click()
+    page.get_by_role("button", name="☷", exact=True).click()
+    expect(page.get_by_role("button", name="Right sidebar", exact=True)).to_have_class(
+        "bk-btn bk-btn-default bk-active"
+    )
+    page.get_by_role("button", name="Right (half width)", exact=True).click()
+    page.get_by_role("button", name="»", exact=True).click()
+    expect(page.get_by_label("X coordinate")).to_be_visible()
+    if width >= 900:
+        expect(page.get_by_role("button", name="Bottom", exact=True)).to_be_visible()
+    else:
+        expect(page.get_by_role("button", name="☷", exact=True)).to_be_visible()
+    assert not errors

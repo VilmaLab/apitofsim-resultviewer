@@ -97,7 +97,7 @@ def render_details(realization, events, selected_event, radial=True):
         )
     return (
         "<button id='clear-selection'>Clear selection</button>"
-        f"<h3>Realization #{member['id']}</h3>"
+        f"<h3>Realization #{member['realization_number']}</h3>"
         f"<p><em>{escape(member['fate'])}</em></p>"
         '<div style="overflow-x:auto"><table><thead><tr>'
         + "".join(f"<th>{heading}</th>" for heading in headings)
@@ -115,7 +115,7 @@ def render_choices(events, radial=True):
             f'<tr class="explorer-choice" data-realization="{event["realization_id"]}" '
             f'data-event="{event["id"]}">'
             f'<td><button type="button" aria-label="Inspect event #{event["id"]} '
-            f'in realization #{event["realization_id"]}">{event["realization_id"]}</button></td>'
+            f'in realization #{event["realization_number"]}">{event["realization_number"]}</button></td>'
             + _cells(event, radial, motion_columns, detail_columns)
             + "</tr>"
         )

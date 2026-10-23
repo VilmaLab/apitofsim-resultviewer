@@ -7,7 +7,7 @@ from apitofresview.plotting.explorer.details import render_choices, render_detai
 from .helpers import cohort, event
 
 
-def test_details_use_database_id_and_convert_units():
+def test_details_use_cohort_number_and_convert_units():
     realizations, events, _, _ = cohort(
         [16052], event(42, "collision", 16052, 2e-9, 0.003)
     )
@@ -18,7 +18,7 @@ def test_details_use_database_id_and_convert_units():
     )
     selected = realizations.with_row_index("realization_number", offset=1)
     details = render_details(selected, events, 42)
-    assert "Realization #16052</h3>" in details
+    assert "Realization #1</h3>" in details
     assert "Result #" not in details and "disabled" not in details
     assert (
         "<td>2</td><td>3</td><td>5000</td><td>-12</td><td>5</td><td>7</td>" in details
@@ -74,19 +74,25 @@ def test_details_escape_fate_and_prompt_when_unselected():
     )
 
 
-def test_choices_share_detail_columns_and_show_database_ids():
+def test_choices_share_detail_columns_and_show_cohort_numbers():
     _, events, _, _ = cohort(
         [16052, 16053],
         event(42, "collision", 16052, 2e-9, 0.003),
         event(43, "escape", 16053, 3e-9, 0.004),
     )
-    events = events.with_columns(pl.Series("accepted", [False, None]))
+    events = events.with_columns(
+        pl.Series("accepted", [False, None]),
+        pl.Series("realization_number", [1, 2]),
+    )
     html = render_choices(events)
     assert "<th>#</th><th>Type</th><th>Time (ns)</th>" in html
     assert "<th>Axial dist. (mm)</th>" in html
     assert "<th>Collision accepted</th>" in html
     assert 'data-realization="16052" data-event="42"' in html
     assert 'data-realization="16053" data-event="43"' in html
+    assert 'in realization #1">1</button>' in html
+    assert 'in realization #2">2</button>' in html
+    assert "16052</button>" not in html
     assert "<td>2</td><td>3</td><td>5000</td><td>No</td>" in html
     cartesian = render_choices(events, radial=False)
     assert all(f"<th>{axis} (mm)</th>" in cartesian for axis in "xyz")

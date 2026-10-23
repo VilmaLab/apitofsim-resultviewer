@@ -53,6 +53,16 @@ def test_realization_coordinate(monkeypatch):
             )
         }
         assert points == expected
+        labels = {
+            id: number
+            for renderer in events.renderers
+            if hasattr(renderer, "data_source") and "id" in renderer.data_source.data
+            for id, number in zip(
+                renderer.data_source.data["id"],
+                renderer.data_source.data["realization"],
+            )
+        }
+        assert labels == expected
         axis = events.yaxis[0]
         assert axis.axis_label == "Realization #"
         assert axis.ticker.ticks == endpoints
@@ -66,16 +76,26 @@ def test_realization_coordinate(monkeypatch):
         for w in doc.select({"type": CheckboxGroup})
         if w.labels == ["Realizations pager"]
     )
+    source = next(
+        r.data_source
+        for r in doc.select_one({"name": "events"}).renderers
+        if "id" in r.data_source.data
+    )
+    source.selected.indices = [source.data["id"].index(2)]
+    details = next(
+        d for d in doc.select({"type": Div}) if "Realization #2</h3>" in d.text
+    )
     pager.active = [0]
     next(iter(doc.select({"type": RangeSlider}))).value = (2, 4)
-    check({2: 1, 3: 1, 4: 2}, [1, 3])
+    check({2: 2, 3: 2, 4: 3}, [2, 4])
+    assert "Realization #2</h3>" in details.text
     pager.active = []
     check({1: 1, 2: 2, 3: 2, 4: 3}, [1, 4])
     fate = next(
         w for w in doc.select({"type": CheckboxGroup}) if "Incomplete" in w.labels
     )
     fate.active = [fate.labels.index("Parent → Parent")]
-    check({4: 1}, [1])
+    check({4: 3}, [3])
 
 
 def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
@@ -97,7 +117,8 @@ def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
         if isinstance(tool, HoverTool) and tool.renderers[0].data_source is source
     )
     assert "<span>@realization</span>" in hover.tooltips
-    assert source.data["realization"] == [100, 101, 101]
+    assert source.data["realization"] == [1, 2, 2]
+    assert source.data["realization_id"] == [100, 101, 101]
     assert source.data["time_text"] == ["2"] * 3
     assert source.data["axial_text"] == ["3"] * 3
 
@@ -108,7 +129,7 @@ def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
     assert "<th>#</th><th>Type</th>" in details.text
     bridge = doc.roots[0].children[1]
     bridge.text = "choose:101:3"
-    assert "Realization #101</h3>" in details.text
+    assert "Realization #2</h3>" in details.text
     assert 'id="event-3" style="background:#fde68a' in details.text
 
     source.selected.indices = [0, 1]
@@ -123,7 +144,7 @@ def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
     chart = doc.select_one({"name": "events"})
     source = next(r.data_source for r in chart.renderers if "id" in r.data_source.data)
     source.selected.indices = [source.data["id"].index(2)]
-    assert "Realization #101</h3>" in details.text
+    assert "Realization #2</h3>" in details.text
 
 
 def test_bokeh_document_modes_and_views(monkeypatch):

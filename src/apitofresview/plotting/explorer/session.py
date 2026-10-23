@@ -38,6 +38,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         doc.add_root(Div(text=f"Explorer data unavailable: {escape(str(exc))}"))
         return
 
+    # Match the pager's full experiment/cluster order before applying filters.
+    realizations = realizations.with_row_index("realization_number", offset=1)
     fate_names = realizations["fate"].unique().sort().to_list()
     fate_counts = dict(realizations.group_by("fate").len().iter_rows())
     escaped_fates = (
@@ -257,8 +259,8 @@ def build_document(db, doc, experiment: int, cluster: int):
     ui.detail_bridge.on_change("text", sidebar_event)
 
     def prepare_cohort():
-        """Filter and number the cohort, then update its details and summary."""
-        chosen = selected_cohort().with_row_index("realization_number", offset=1)
+        """Filter the cohort, then update its details and summary."""
+        chosen = selected_cohort()
         chosen_ids = chosen["id"]
         if state["selected"] not in chosen_ids:
             state["selected"] = state["event"] = None
@@ -462,14 +464,14 @@ def build_document(db, doc, experiment: int, cluster: int):
                     if len(new) > 1 and ui.layout.value != "beeswarm":
                         set_candidates(
                             {
-                                source.data["id"][i]: source.data["realization"][i]
+                                source.data["id"][i]: source.data["realization_id"][i]
                                 for i in new
                             }
                         )
                     else:
                         i = new[0]
                         set_selection(
-                            source.data["realization"][i], source.data["id"][i]
+                            source.data["realization_id"][i], source.data["id"][i]
                         )
                     source.selected.indices = []
 

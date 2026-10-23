@@ -340,6 +340,9 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
     point = point_for(1)
     page.mouse.move(point["x"], point["y"])
     expect(page.locator(".explorer-hover-row")).to_have_count(3)
+    assert page.locator(".explorer-hover-row").evaluate_all(
+        "rows => rows.map(row => row.querySelector('span').textContent)"
+    ) == ["1", "2", "2"]
     expect(page.locator(".explorer-hover-head:visible")).to_have_count(1)
     assert page.locator(".explorer-hover-row").first.evaluate("""row => {
         const bounds = row.getRootNode().host.getBoundingClientRect();
@@ -352,8 +355,8 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
         const wrapper = row.closest('table').parentElement;
         return wrapper.getBoundingClientRect().right <= window.innerWidth + 1;
     }""")
-    page.get_by_role("button", name="Inspect event #3 in realization #101").click()
-    expect(page.get_by_text("Realization #101", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Inspect event #3 in realization #2").click()
+    expect(page.get_by_text("Realization #2", exact=True)).to_be_visible()
     expect(
         page.get_by_role("button", name="Inspect event #3", exact=True)
     ).to_be_visible()
@@ -366,5 +369,5 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
     }""")
     point = point_for(1, beeswarm=True)
     page.mouse.click(point["x"], point["y"])
-    expect(page.get_by_text("Realization #100", exact=True)).to_be_visible()
+    expect(page.get_by_text("Realization #1", exact=True)).to_be_visible()
     expect(page.get_by_text("Choose an event", exact=True)).to_have_count(0)

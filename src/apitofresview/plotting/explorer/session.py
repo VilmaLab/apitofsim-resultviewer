@@ -801,6 +801,7 @@ def build_document(db, doc, experiment: int, cluster: int):
     ui.show_rates.on_change("active", show_rates_changed)
     ui.collision_rates.on_change("active", collision_changed)
     ui.log_rates.on_change("active", rate_scale_changed)
+    ui.show_readoffs.on_change("active", lambda attr, old, new: update_selection())
     ui.detail_log_rates.on_change(
         "active", lambda attr, old, new: setattr(ui.log_rates, "active", list(new))
     )

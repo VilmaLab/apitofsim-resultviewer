@@ -58,6 +58,16 @@ class Controls:
     selector: RangeSlider
     details: Div
     summarise_motion: CheckboxGroup
+    summarise_energy: CheckboxGroup
+    show_rates: CheckboxGroup
+    share_rates: CheckboxGroup
+    all_pathways: CheckboxGroup
+    log_rates: CheckboxGroup
+    detail_log_rates: CheckboxGroup
+    rate_separator: Div
+    collision_rates: CheckboxGroup
+    rate_controls: Column
+    rate_plots: Column
     detail_bridge: Div
     fullscreen_state: Div
     viewport_width: Div
@@ -215,6 +225,34 @@ def create_controls(
     )
     summarise_motion = checkbox("Summarise non-axial motion", True)
     summarise_motion.visible = False
+    summarise_energy = checkbox("Summarise energy", True)
+    summarise_energy.visible = False
+    show_rates = checkbox("Show rate constants")
+    show_rates.visible = False
+    share_rates = checkbox("Share plot", True)
+    all_pathways = checkbox("Show all pathways")
+    log_rates = checkbox("Logarithmic rates", True)
+    log_rates.name = "log_rates"
+    detail_log_rates = checkbox("Logarithmic rates", True)
+    detail_log_rates.name = "detail_log_rates"
+    rate_separator = Div(
+        height=1,
+        sizing_mode="stretch_width",
+        visible=False,
+        margin=(8, 0),
+        styles={"border-top": "1px solid #cbd5e1"},
+        html_attributes={"role": "separator"},
+    )
+    collision_rates = checkbox("Gas collision rate")
+    rate_plots = column(Div(), sizing_mode="stretch_width", name="rate_plots")
+    rate_controls = column(
+        detail_log_rates,
+        share_rates,
+        all_pathways,
+        rate_plots,
+        sizing_mode="stretch_width",
+        visible=False,
+    )
     detail_bridge = Div(text="", visible=False)
     fullscreen_state = Div(text="normal", visible=False)
     viewport_width = Div(text="1440,900", visible=False)
@@ -232,7 +270,12 @@ def create_controls(
             "Elements",
             column(
                 schematic,
-                group("Views", column(show_events, show_cdf, show_bars, spacing=4)),
+                group(
+                    "Views",
+                    column(
+                        collision_rates, show_events, show_cdf, show_bars, spacing=4
+                    ),
+                ),
                 show_pager,
                 spacing=4,
             ),
@@ -249,12 +292,17 @@ def create_controls(
                 spacing=4,
             ),
         ),
+        group("Rates", column(log_rates, spacing=4)),
         spacing=4,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
     right_controls = column(
         details,
         summarise_motion,
+        summarise_energy,
+        rate_separator,
+        show_rates,
+        rate_controls,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
     left_toggle = Toggle(label="« Controls", active=True, width=100, height=32)
@@ -296,7 +344,7 @@ def create_controls(
     details_header = row(right_toggle, *detail_layouts.values(), spacing=2)
     right = column(details_header, right_controls, width=38, spacing=4)
     right_controls.visible = False
-    center_plots = column(sizing_mode="stretch_width", spacing=0)
+    center_plots = column(sizing_mode="stretch_width", spacing=0, name="explorer_plots")
     center = column(
         counts,
         quality,
@@ -412,6 +460,16 @@ def create_controls(
         selector=selector,
         details=details,
         summarise_motion=summarise_motion,
+        summarise_energy=summarise_energy,
+        show_rates=show_rates,
+        share_rates=share_rates,
+        all_pathways=all_pathways,
+        log_rates=log_rates,
+        detail_log_rates=detail_log_rates,
+        rate_separator=rate_separator,
+        collision_rates=collision_rates,
+        rate_controls=rate_controls,
+        rate_plots=rate_plots,
         detail_bridge=detail_bridge,
         fullscreen_state=fullscreen_state,
         viewport_width=viewport_width,

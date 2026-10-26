@@ -12,7 +12,7 @@ def format_value(value):
     return f"{value:.6g}"
 
 
-def _columns(events, radial):
+def _columns(events, radial, summarise_energy):
     headings = ["Type", "Time (ns)"] + (
         ["Axial dist. (mm)", "Radial dist. (mm)"]
         if radial
@@ -45,8 +45,17 @@ def _columns(events, radial):
         ("u_norm", "Collision u_norm (m/s)"),
         ("accepted", "Collision accepted"),
     ]
+    if summarise_energy and any(
+        key in events.columns for key in ("rot_energy", "vibrational_energy")
+    ):
+        detail_columns = [
+            ("internal_energy", "Internal energy (J)"),
+            *detail_columns[2:],
+        ]
     detail_columns = [
-        (key, label) for key, label in detail_columns if key in events.columns
+        (key, label)
+        for key, label in detail_columns
+        if key == "internal_energy" or key in events.columns
     ]
     headings += [label for _, label in detail_columns]
 
@@ -78,15 +87,27 @@ def _cells(event, radial, motion_columns, detail_columns, clickable=False):
     return (
         f"<td>{kind}</td>"
         + "".join(f"<td>{format_value(value)}</td>" for value in values)
-        + "".join(f"<td>{format_value(event[key])}</td>" for key, _ in detail_columns)
+        + "".join(
+            f"<td>{format_value(_energy(event) if key == 'internal_energy' else event[key])}</td>"
+            for key, _ in detail_columns
+        )
     )
 
 
-def render_details(realization, events, selected_event, radial=True):
+def _energy(event):
+    rot, vib = event.get("rot_energy"), event.get("vibrational_energy")
+    return None if rot is None or vib is None else rot + vib
+
+
+def render_details(
+    realization, events, selected_event, radial=True, summarise_energy=True
+):
     if realization.is_empty():
         return "<p><em>Click an event to inspect its realization.</em></p>"
     member = realization.row(0, named=True)
-    headings, motion_columns, detail_columns = _columns(events, radial)
+    headings, motion_columns, detail_columns = _columns(
+        events, radial, summarise_energy
+    )
     rows = []
     for event in events.iter_rows(named=True):
         rows.append(
@@ -107,8 +128,10 @@ def render_details(realization, events, selected_event, radial=True):
     )
 
 
-def render_choices(events, radial=True):
-    headings, motion_columns, detail_columns = _columns(events, radial)
+def render_choices(events, radial=True, summarise_energy=True):
+    headings, motion_columns, detail_columns = _columns(
+        events, radial, summarise_energy
+    )
     rows = []
     for event in events.iter_rows(named=True):
         rows.append(

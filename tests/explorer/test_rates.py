@@ -296,16 +296,32 @@ def test_bottom_layout_and_rate_controls(rate_doc):
     doc, _ = rate_doc
     sidebar_log = doc.select_one({"name": "log_rates"})
     detail_log = doc.select_one({"name": "detail_log_rates"})
+    sidebar_values = doc.select_one({"name": "show_readoffs"})
+    detail_values = doc.select_one({"name": "detail_show_readoffs"})
+    separator = doc.select_one({"name": "rate_separator"})
     assert detail_log.disabled
+    assert detail_values.disabled and not separator.visible
     views = next(
         group for group in doc.select({"type": GroupBox}) if group.title == "Views"
     )
     assert views.child.children[0] is check(doc, "Gas collision rate")
     select(doc, 1)
+    assert not separator.visible
     doc.select_one({"name": "details_layout_bottom"}).active = True
     check(doc, "Show rate constants").active = [0]
     assert doc.select_one({"name": "details_layout_bottom"}).active
     assert not detail_log.disabled
+    assert not detail_values.disabled and separator.visible
+    assert [
+        w.labels for w in doc.select_one({"name": "sidebar_rates"}).child.children
+    ] == [w.labels for w in doc.select_one({"name": "detail_rates"}).child.children]
+    assert [
+        w.labels for w in doc.select_one({"name": "detail_pathways"}).child.children
+    ] == [["Share plot"], ["Show all pathways"]]
+    detail_values.active = []
+    assert sidebar_values.active == detail_values.active == []
+    sidebar_values.active = [0]
+    assert sidebar_values.active == detail_values.active == [0]
     assert sidebar_log.active == detail_log.active == [0]
     detail_log.active = []
     assert sidebar_log.active == detail_log.active == []
@@ -313,6 +329,7 @@ def test_bottom_layout_and_rate_controls(rate_doc):
     assert sidebar_log.active == detail_log.active == [0]
     check(doc, "Show rate constants").active = []
     assert detail_log.disabled
+    assert detail_values.disabled and not separator.visible
 
 
 def test_chooser_hides_rates_until_realization_selected(rate_doc):

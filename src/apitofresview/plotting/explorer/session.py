@@ -280,9 +280,10 @@ def build_document(db, doc, experiment: int, cluster: int):
         )
         ui.summarise_energy.visible = ui.summarise_motion.visible
         ui.show_rates.visible = not selected.is_empty()
-        ui.rate_separator.visible = ui.show_rates.visible
         ui.rate_controls.visible = ui.show_rates.visible and enabled(ui.show_rates)
+        ui.rate_separator.visible = ui.rate_controls.visible
         ui.detail_log_rates.disabled = not ui.rate_controls.visible
+        ui.detail_show_readoffs.disabled = not ui.rate_controls.visible
         selected_event = (
             selected_events.filter(pl.col("id") == state["event"])
             if state["event"] is not None
@@ -796,7 +797,6 @@ def build_document(db, doc, experiment: int, cluster: int):
         update_selection()
 
     def rate_scale_changed(attr, old, new):
-        ui.detail_log_rates.active = list(new)
         rates.change_scale()
         sync_collision_panels()
         update_selection()
@@ -805,9 +805,20 @@ def build_document(db, doc, experiment: int, cluster: int):
     ui.collision_rates.on_change("active", collision_changed)
     ui.log_rates.on_change("active", rate_scale_changed)
     ui.show_readoffs.on_change("active", lambda attr, old, new: update_selection())
-    ui.detail_log_rates.on_change(
-        "active", lambda attr, old, new: setattr(ui.log_rates, "active", list(new))
-    )
+    for sidebar, detail in (
+        (ui.log_rates, ui.detail_log_rates),
+        (ui.show_readoffs, ui.detail_show_readoffs),
+    ):
+        sidebar.on_change(
+            "active",
+            lambda attr, old, new, detail=detail: setattr(detail, "active", list(new)),
+        )
+        detail.on_change(
+            "active",
+            lambda attr, old, new, sidebar=sidebar: setattr(
+                sidebar, "active", list(new)
+            ),
+        )
     for widget in (ui.share_rates, ui.all_pathways):
         widget.on_change("active", lambda attr, old, new: update_selection())
     ui.show_cdf.on_change("active", cdf_changed)

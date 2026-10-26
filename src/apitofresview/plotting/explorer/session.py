@@ -673,6 +673,7 @@ def build_document(db, doc, experiment: int, cluster: int):
                     text="<p>No realizations in this cohort. Adjust the range or pathway filters.</p>"
                 ),
             )
+        sync_collision_spacing(panels)
         ui.center_plots.children = [selection_notice, *panels]
 
     def render():
@@ -768,7 +769,22 @@ def build_document(db, doc, experiment: int, cluster: int):
         collision_panels = (
             list(rates.collision.children) if rates.collision.visible else []
         )
-        ui.center_plots.children = [*panels[:index], *collision_panels, *panels[index:]]
+        panels = [*panels[:index], *collision_panels, *panels[index:]]
+        sync_collision_spacing(panels)
+        ui.center_plots.children = panels
+
+    def sync_collision_spacing(panels):
+        tight = rates.collision_plot in panels and not enabled(ui.fate_facets)
+        first = next(
+            (panel for panel in panels if panel.name in ("events", "cdf", "bars")), None
+        )
+        if first is not None:
+            first.margin = 0 if tight else None
+        if rates.collision_plot is not None:
+            rates.collision_plot.margin = 0 if tight else None
+            rates.collision_plot.min_border_top = (
+                rates.collision_plot.min_border_bottom
+            ) = 0 if tight else 5
 
     def collision_changed(attr, old, new):
         if collision_coordinates is not None:

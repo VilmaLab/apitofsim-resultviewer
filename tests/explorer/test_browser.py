@@ -201,6 +201,24 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
             return doc.get_model_by_name('details_layout_right').active &&
                 doc.get_model_by_name('rate_plots').children[0]?.inner_width > 0;
         }""")
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
+            const label = plot.center.find(m => m.name === 'fragmentation_readout');
+            return label?.visible && Math.abs(label.y - 10) < 1e-10 && label.text === '10 s⁻¹';
+        }""")
+        for show in (False, True):
+            page.evaluate(
+                "show => Bokeh.documents[0].get_model_by_name('show_readoffs').active = show ? [0] : []",
+                show,
+            )
+            page.wait_for_function(
+                """show => {
+                const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
+                return plot.center.find(m => m.name === 'fragmentation_readout').visible === show &&
+                    plot.center.find(m => m.type === 'Span').visible;
+            }""",
+                arg=show,
+            )
         page.get_by_text("Show all pathways", exact=True).click()
         page.wait_for_function(
             "() => Bokeh.documents[0].get_model_by_name('rate_plots').children[0].renderers.length === 2"
@@ -318,6 +336,19 @@ def test_gas_rate_alignment_and_repeat_selection(
             const label = plot.center.find(m => m.name === 'collision_event_readout');
             return marker.visible && marker.location === 0 && label.visible && label.x === 0 && label.y > 1e8;
         }""")
+        for show in (False, True):
+            page.evaluate(
+                "show => Bokeh.documents[0].get_model_by_name('show_readoffs').active = show ? [0] : []",
+                show,
+            )
+            page.wait_for_function(
+                """show => {
+                const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates');
+                return plot.center.find(m => m.name === 'collision_event_readout').visible === show &&
+                    plot.center.find(m => m.name === 'collision_event_marker').visible;
+            }""",
+                arg=show,
+            )
 
         def bounds():
             return page.evaluate("""() => {

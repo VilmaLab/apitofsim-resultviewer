@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import pytest
 from apitofsim.api import Histogram, Q_
+from apitofsim.workflow.db import PathwayRateCurve
 from bokeh.document import Document
 from bokeh.models import (
     CheckboxGroup,
@@ -24,6 +25,10 @@ from apitofresview.plotting.explorer.details import render_choices, render_detai
 from .helpers import cohort, event
 
 
+class CachedCurve(SimpleNamespace):
+    rate_at = PathwayRateCurve.rate_at
+
+
 class RateDatabase:
     def __init__(self):
         self.reads = []
@@ -31,7 +36,7 @@ class RateDatabase:
     def pathway_rate_curves(self, run, parent, *, result_id, all_pathways):
         self.reads.append((run, parent, result_id, all_pathways))
         return [
-            SimpleNamespace(
+            CachedCurve(
                 pathway_id=id,
                 bonding_energy=Q_(bond, "J"),
                 histogram=Histogram(
@@ -202,7 +207,22 @@ def test_collision_velocity_scales_and_coordinates(rate_doc, monkeypatch):
     readout = doc.select_one({"name": "collision_event_readout"})
     assert readout.visible and readout.y == 13 and readout.text == "13 s⁻¹"
     check(doc, "Show rate constants").active = [0]
+    fragmentation = doc.select_one({"name": "fragmentation_readout"})
+    assert fragmentation.visible and fragmentation.y == pytest.approx(10)
+    assert fragmentation.x == pytest.approx(3e-20, abs=1e-32)
+    assert fragmentation.text == "10 s⁻¹"
+    show_values = check(doc, "Show readoff values")
+    assert show_values.active == [0]
+    show_values.active = []
+    assert not fragmentation.visible
+    assert not doc.select_one({"name": "collision_event_readout"}).visible
+    assert doc.select_one({"name": "collision_event_marker"}).visible
+    assert doc.select_one({"name": "pathway_rates"}).select_one({"type": Span}).visible
+    show_values.active = [0]
+    assert fragmentation.visible
+    assert doc.select_one({"name": "collision_event_readout"}).visible
     doc.roots[0].children[1].text = "2"
+    assert not fragmentation.visible  # Above the cached rate curve.
     assert calls[-1][1] == [6, 7, 8]
     bounds = (chart.y_range.start, chart.y_range.end)
     doc.roots[0].children[1].text = "2"
@@ -374,3 +394,31 @@ def test_shared_log_rates_use_largest_curve_minimum(rate_doc, monkeypatch):
     )
     check(doc, "Logarithmic rates").active = []
     assert all(p.y_range.start == 0 for p in doc.select({"name": "pathway_rates"}))
+
+
+def test_fragmentation_readouts_thresholds_and_coincident_values(rate_doc, monkeypatch):
+    doc, db = rate_doc
+    curves = db.pathway_rate_curves(1, 1, result_id=10, all_pathways=True)
+    monkeypatch.setattr(db, "pathway_rate_curves", lambda *args, **kwargs: curves)
+    select(doc, 1)
+    check(doc, "Show all pathways").active = [0]
+    check(doc, "Show rate constants").active = [0]
+    labels = list(doc.select({"name": "fragmentation_readout"}))
+    assert sum(label.visible for label in labels) == 1
+    check(doc, "Logarithmic rates").active = []
+    assert sorted(
+        label.y
+        for label in doc.select({"name": "fragmentation_readout"})
+        if label.visible
+    ) == pytest.approx([0, 10])
+    curves[1].bonding_energy = curves[0].bonding_energy
+    check(doc, "Logarithmic rates").active = [0]
+    labels = list(doc.select({"name": "fragmentation_readout"}))
+    assert all(label.visible for label in labels)
+    assert len({label.y_offset for label in labels}) == 2
+    check(doc, "Share plot").active = []
+    assert all(label.visible for label in doc.select({"name": "fragmentation_readout"}))
+    select(doc, 3)
+    assert not any(
+        label.visible for label in doc.select({"name": "fragmentation_readout"})
+    )

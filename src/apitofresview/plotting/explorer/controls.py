@@ -63,6 +63,7 @@ class Controls:
     share_rates: CheckboxGroup
     all_pathways: CheckboxGroup
     log_rates: CheckboxGroup
+    show_readoffs: CheckboxGroup
     detail_log_rates: CheckboxGroup
     rate_separator: Div
     collision_rates: CheckboxGroup
@@ -233,6 +234,8 @@ def create_controls(
     all_pathways = checkbox("Show all pathways")
     log_rates = checkbox("Logarithmic rates", True)
     log_rates.name = "log_rates"
+    show_readoffs = checkbox("Show readoff values", True)
+    show_readoffs.name = "show_readoffs"
     detail_log_rates = checkbox("Logarithmic rates", True)
     detail_log_rates.name = "detail_log_rates"
     rate_separator = Div(
@@ -292,7 +295,7 @@ def create_controls(
                 spacing=4,
             ),
         ),
-        group("Rates", column(log_rates, spacing=4)),
+        group("Rates", column(log_rates, show_readoffs, spacing=4)),
         spacing=4,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
@@ -465,6 +468,7 @@ def create_controls(
         share_rates=share_rates,
         all_pathways=all_pathways,
         log_rates=log_rates,
+        show_readoffs=show_readoffs,
         detail_log_rates=detail_log_rates,
         rate_separator=rate_separator,
         collision_rates=collision_rates,

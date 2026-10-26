@@ -5,7 +5,7 @@ from html import escape
 import numpy as np
 import polars as pl
 from apitofsim import collision_profile, skimmer
-from apitofsim.api import internal_energy
+from apitofsim.api import ApiTofRateConstantOverflow, internal_energy
 from bokeh.layouts import column
 from bokeh.models import (
     BasicTickFormatter,
@@ -68,6 +68,40 @@ def responsive_legend(chart, legend):
     )
 
 
+def readout_label(name, color="#111827"):
+    return Label(
+        x=0,
+        y=0,
+        text_font_size="9pt",
+        text_color=color,
+        background_fill_color="white",
+        background_fill_alpha=0.85,
+        visible=False,
+        name=name,
+    )
+
+
+def place_readout(label, chart, x, y, logarithmic, offset=0):
+    right = x > (chart.x_range.start + chart.x_range.end) / 2
+    bounds = chart.y_range
+    middle = (
+        np.sqrt(bounds.start * bounds.end)
+        if logarithmic
+        else (bounds.start + bounds.end) / 2
+    )
+    above = y > middle
+    label.update(
+        x=x,
+        y=y,
+        text=f"{y:.4g} s⁻¹",
+        visible=True,
+        text_align="right" if right else "left",
+        x_offset=-6 if right else 6,
+        y_offset=-(6 + offset) if above else 6 + offset,
+        text_baseline="top" if above else "bottom",
+    )
+
+
 class RateViews:
     def __init__(self, db, run, cluster, pathways, fate_names, colors, ui):
         self.db, self.run, self.cluster, self.ui = db, run, cluster, ui
@@ -84,6 +118,7 @@ class RateViews:
         self.curve_cache = {}
         self.signature = None
         self.markers = []
+        self.readouts = []
         self.energy_range = None
         self.profile = None
         self.profile_error = None
@@ -133,9 +168,35 @@ class RateViews:
                     self.energy_range.start = value - padding
                 if value >= self.energy_range.end:
                     self.energy_range.end = value + padding
+        placed = {}
+        for curve, chart, label in self.readouts:
+            label.visible = False
+            if (
+                not enabled(self.ui.show_readoffs)
+                or value is None
+                or not np.isfinite(value)
+            ):
+                continue
+            try:
+                rate = float(
+                    curve.rate_at(energy - curve.bonding_energy).to("1/s").magnitude
+                )
+            except ValueError, ApiTofRateConstantOverflow:
+                continue
+            if (
+                not np.isfinite(rate)
+                or not chart.y_range.start <= rate <= chart.y_range.end
+            ):
+                continue
+            # Stack equal-value readouts so coincident pathways remain readable.
+            key = (chart.id, rate)
+            offset = placed.get(key, 0)
+            place_readout(label, chart, value, rate, enabled(self.ui.log_rates), offset)
+            placed[key] = offset + 14
 
     def build_rates(self, result):
         self.markers = []
+        self.readouts = []
         curves = self.curves(result)
         if isinstance(curves, str):
             self.ui.rate_plots.children = [
@@ -208,6 +269,9 @@ class RateViews:
                     line_width=2,
                     **({"legend_label": name} if shared else {}),
                 )
+                label = readout_label("fragmentation_readout", color)
+                chart.add_layout(label)
+                self.readouts.append((curve, chart, label))
                 if not valid.any():
                     notices.append(
                         message(f"No {'positive ' if logarithmic else ''}rates: {name}")
@@ -318,15 +382,7 @@ class RateViews:
             visible=False,
             name="collision_event_marker",
         )
-        self.collision_readout = Label(
-            x=0,
-            y=0,
-            text_font_size="9pt",
-            background_fill_color="white",
-            background_fill_alpha=0.85,
-            visible=False,
-            name="collision_event_readout",
-        )
+        self.collision_readout = readout_label("collision_event_readout")
         self.collision_plot.add_layout(self.collision_marker)
         self.collision_plot.add_layout(self.collision_readout)
         prepare_toolbar(self.collision_plot)
@@ -370,25 +426,13 @@ class RateViews:
             if index is not None:
                 self.collision_marker.location = mapped[index]
                 self.collision_marker.visible = True
-                if valid[index]:
-                    right = (
-                        mapped[index] > (self.shared_x.start + self.shared_x.end) / 2
-                    )
-                    middle = (
-                        np.sqrt(bounds.start * bounds.end)
-                        if logarithmic
-                        else bounds.end / 2
-                    )
-                    above = rates[index] > middle
-                    self.collision_readout.update(
-                        x=mapped[index],
-                        y=rates[index],
-                        text=f"{rates[index]:.4g} s⁻¹",
-                        visible=True,
-                        text_align="right" if right else "left",
-                        x_offset=-6 if right else 6,
-                        y_offset=-6 if above else 6,
-                        text_baseline="top" if above else "bottom",
+                if valid[index] and enabled(self.ui.show_readoffs):
+                    place_readout(
+                        self.collision_readout,
+                        self.collision_plot,
+                        mapped[index],
+                        rates[index],
+                        logarithmic,
                     )
             self.collision_notice.text = (
                 ""

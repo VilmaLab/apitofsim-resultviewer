@@ -212,6 +212,15 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
             const legendView = view?.renderer_views.get(legend);
             return legendView?.bbox.top >= view.frame.bbox.bottom;
         }""")
+        for viewport in (width, 1920 if width == 640 else 640, width):
+            page.set_viewport_size({"width": viewport, "height": 900})
+            page.wait_for_function(
+                """columns => {
+                const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
+                return plot.below.find(m => m.type === 'Legend').ncols === columns;
+            }""",
+                arg=1 if viewport == 640 else 2,
+            )
         page.locator('.explorer-event[data-event="2"] td').first.click()
         page.wait_for_function("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];

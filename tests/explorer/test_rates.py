@@ -309,3 +309,24 @@ def test_zero_and_missing_curves(rate_doc, monkeypatch):
     assert list(
         doc.select_one({"name": "pathway_rates"}).renderers[0].data_source.data["y"]
     ) == [0, 0, 0]
+
+
+def test_shared_log_rates_use_largest_curve_minimum(rate_doc, monkeypatch):
+    doc, db = rate_doc
+    curves = db.pathway_rate_curves(1, 1, result_id=10, all_pathways=True)
+    curves[0].histogram.y = np.array([0.0, 1e-6, 100.0])
+    curves[1].histogram.y = np.array([0.0, 10.0, 200.0])
+    monkeypatch.setattr(db, "pathway_rate_curves", lambda *args, **kwargs: curves)
+    select(doc, 1)
+    check(doc, "Show all pathways").active = [0]
+    check(doc, "Show rate constants").active = [0]
+    chart = doc.select_one({"name": "pathway_rates"})
+    assert chart.y_range.start == pytest.approx(10 / 1.2)
+    assert chart.y_range.end == pytest.approx(200 * 1.2)
+    check(doc, "Share plot").active = []
+    assert all(
+        p.y_range.start == pytest.approx(1e-6 / 1.2)
+        for p in doc.select({"name": "pathway_rates"})
+    )
+    check(doc, "Logarithmic rates").active = []
+    assert all(p.y_range.start == 0 for p in doc.select({"name": "pathway_rates"}))

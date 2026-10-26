@@ -10,6 +10,7 @@ from bokeh.models import (
     BasicTickFormatter,
     BasicTicker,
     ColumnDataSource,
+    CustomJS,
     Div,
     Label,
     Range1d,
@@ -34,6 +35,35 @@ def rate_range(values, logarithmic):
     if logarithmic:
         return Range1d(lo / 1.2, hi * 1.2)
     return Range1d(0, hi * 1.05 if hi else 1)
+
+
+def responsive_legend(chart, legend):
+    """Fit row-major legend columns to the current frame using actual text widths."""
+    legend.orientation = "horizontal"
+    legend.ncols = 1
+    chart.js_on_change(
+        "inner_width",
+        CustomJS(
+            args=dict(chart=chart, legend=legend),
+            code="""
+        if (!(chart.inner_width > 0)) return;
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = `${legend.label_text_font_style} ${legend.label_text_font_size} ${legend.label_text_font}`;
+        const widths = legend.items.map(item => legend.glyph_width + legend.label_standoff +
+            Math.max(legend.label_width, ctx.measureText(item.label.value).width));
+        const available = chart.inner_width - 2 * (legend.padding + legend.margin + 1);
+        let columns = widths.length;
+        for (; columns > 1; columns--) {
+            const sizes = Array(columns).fill(0);
+            widths.forEach((width, i) => sizes[i % columns] = Math.max(sizes[i % columns], width));
+            if (sizes.reduce((sum, width) => sum + width, 0) + (columns - 1) * legend.spacing <= available)
+                break;
+        }
+        legend.ncols = Math.max(columns, 1);
+        chart.height = 260 + 25 * Math.ceil(widths.length / legend.ncols);
+    """,
+        ),
+    )
 
 
 class RateViews:
@@ -121,11 +151,15 @@ class RateViews:
             return
         logarithmic = enabled(self.ui.log_rates)
         shared = enabled(self.ui.share_rates)
-        xs, ys = [], []
+        xs, ys, minima = [], [], []
         for curve in curves:
             if curve.histogram is not None:
                 xs.extend(self.internal_energies(curve))
                 ys.extend(curve.histogram.y)
+                positive = np.asarray(curve.histogram.y)
+                positive = positive[np.isfinite(positive) & (positive > 0)]
+                if len(positive):
+                    minima.append(float(positive.min()))
         finite_x = np.asarray(xs, dtype=float)
         finite_x = finite_x[np.isfinite(finite_x)]
         maximum = float(finite_x.max()) if len(finite_x) else 1e-20
@@ -134,6 +168,8 @@ class RateViews:
             minimum, maximum if maximum > minimum else minimum + 1e-20
         )
         y_range = rate_range(ys, logarithmic)
+        if shared and logarithmic and len(minima) > 1:
+            y_range.start = max(minima) / 1.2
         plots, notices = [], []
         for curve in curves:
             name = self.names.get(curve.pathway_id, f"Pathway {curve.pathway_id}")
@@ -190,6 +226,7 @@ class RateViews:
                 chart.center.remove(legend)
                 chart.add_layout(legend, "below")
                 chart.height += 25 * len(legend.items)
+                responsive_legend(chart, legend)
         self.ui.rate_plots.children = [*plots, *notices]
 
     @staticmethod

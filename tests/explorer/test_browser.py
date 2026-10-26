@@ -585,6 +585,10 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
         return wrapper.getBoundingClientRect().right <= window.innerWidth + 1;
     }""")
     page.get_by_role("button", name="Bottom", exact=True).click()
+    page.wait_for_function("""() => {
+        const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+        return getComputedStyle(Bokeh.index.find_one(right).el).borderTopWidth === '1px';
+    }""")
     page.get_by_role("button", name="Inspect event #3 in realization #2").click()
     expect(page.get_by_text("Realization #2", exact=True)).to_be_visible()
     expect(
@@ -627,6 +631,7 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
                 return {x: r.x, y: r.y, width: r.width, height: r.height};
             };
             return {center: rect(center), right: rect(right),
+                    border: getComputedStyle(Bokeh.index.find_one(right).el).borderTopWidth,
                     controls: body.children[0].children[1].visible};
         }""")
 
@@ -635,6 +640,7 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
         return right.width == null && Bokeh.index.find_one(right).el.getBoundingClientRect().width > 100;
     }""")
     geometry = bounds()
+    assert geometry["border"] == "0px"
     assert not geometry["controls"]
     assert geometry["center"]["width"] == pytest.approx(
         geometry["right"]["width"], abs=2
@@ -651,6 +657,7 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
         return center && right && right.top >= center.bottom;
     }""")
     geometry = bounds()
+    assert geometry["border"] == "1px"
     assert geometry["center"]["width"] == pytest.approx(
         geometry["right"]["width"], abs=2
     )

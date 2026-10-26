@@ -134,6 +134,9 @@ def build_document(db, doc, experiment: int, cluster: int):
         if mode == "sidebar":
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
+        ui.right.styles = (
+            {"border-top": "1px solid #cbd5e1", "padding-top": "8px"} if bottom else {}
+        )
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
         if narrow and left_open and right_open:
             left_open = False

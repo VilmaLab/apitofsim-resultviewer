@@ -192,9 +192,15 @@ def test_collision_velocity_scales_and_coordinates(rate_doc, monkeypatch):
     assert isinstance(chart.y_range, Range1d)
     assert calls[-1][1] == [0, 0, 0]
     assert doc.select_one({"name": "collision_velocity"}).text == "v = 0 m/s"
+    assert not doc.select_one({"name": "collision_event_marker"}).visible
+    assert not doc.select_one({"name": "collision_event_readout"}).visible
     assert isinstance(chart.y_scale, LogScale)
     select(doc, 1)
     assert calls[-1][1] == [3, 4, 5]
+    assert doc.select_one({"name": "collision_event_marker"}).visible
+    assert doc.select_one({"name": "collision_event_marker"}).location == 0
+    readout = doc.select_one({"name": "collision_event_readout"})
+    assert readout.visible and readout.y == 13 and readout.text == "13 s⁻¹"
     check(doc, "Show rate constants").active = [0]
     doc.roots[0].children[1].text = "2"
     assert calls[-1][1] == [6, 7, 8]
@@ -226,6 +232,44 @@ def test_collision_velocity_scales_and_coordinates(rate_doc, monkeypatch):
     mode.value = "schematic"
     assert not check(doc, "Gas collision rate").disabled
     assert len(prepared) == 1
+
+
+def test_collision_exact_readout_and_facet_spacing(monkeypatch):
+    members, events, pathways, regions = rate_frames()
+    position = 2.12345
+    events = events.with_columns(
+        pl.when(pl.col("id") == 2).then(position).otherwise(pl.col("z")).alias("z")
+    )
+    monkeypatch.setattr(
+        session, "load_data", lambda *args: (members, events, pathways, regions)
+    )
+    doc = Document()
+    build_document(RateDatabase(), doc, 1, 1)
+    monkeypatch.setattr(rates, "skimmer", lambda config: None)
+    monkeypatch.setattr(
+        rates,
+        "collision_profile",
+        lambda *args, **kwargs: SimpleNamespace(
+            frequency=lambda z, velocity, **kwargs: Q_(z**2 + 1, "1/s"),
+        ),
+    )
+    check(doc, "Gas collision rate").active = [0]
+    chart = doc.select_one({"name": "collision_rates"})
+    main = doc.select_one({"name": "events"})
+    assert chart.margin == main.margin == 0
+    select(doc, 1)
+    doc.roots[0].children[1].text = "2"
+    readout = doc.select_one({"name": "collision_event_readout"})
+    assert readout.y == pytest.approx(position**2 + 1)
+    assert readout.text == f"{position**2 + 1:.4g} s⁻¹"
+    source = doc.select_one({"name": "collision_rates_source"})
+    assert source.data["rate"][list(source.data["x"]).index(readout.x)] == readout.y
+    check(doc, "Facet pathways").active = [0]
+    assert doc.select_one({"name": "collision_rates"}).margin is None
+    assert all(p.margin is None for p in doc.select({"name": "events"}))
+    doc.roots[0].children[1].text = "clear"
+    assert not doc.select_one({"name": "collision_event_marker"}).visible
+    assert not doc.select_one({"name": "collision_event_readout"}).visible
 
 
 def test_bottom_layout_and_rate_controls(rate_doc):

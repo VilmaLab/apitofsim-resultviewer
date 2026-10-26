@@ -296,6 +296,14 @@ def test_gas_rate_alignment_and_repeat_selection(
         page.wait_for_function(
             "() => Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates').center.find(m => m.name === 'collision_velocity').text === 'v = 0 m/s'"
         )
+        page.wait_for_function("""() => {
+            const panels = Bokeh.documents[0].get_model_by_name('explorer_plots').children;
+            const gas = Bokeh.index.find_one(panels.find(p => p.name === 'collision_rates'));
+            const events = Bokeh.index.find_one(panels.find(p => p.name === 'events'));
+            const bottom = gas.canvas_view.events_el.getBoundingClientRect().top + gas.frame.bbox.bottom;
+            const top = events.canvas_view.events_el.getBoundingClientRect().top + events.frame.bbox.top;
+            return Math.abs(top - bottom) < 1;
+        }""")
         page.evaluate("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('events');
             const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
@@ -304,6 +312,12 @@ def test_gas_rate_alignment_and_repeat_selection(
         page.wait_for_function(
             "() => Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates').center.find(m => m.name === 'collision_velocity').text === 'v = 7.07107 m/s'"
         )
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates');
+            const marker = plot.center.find(m => m.name === 'collision_event_marker');
+            const label = plot.center.find(m => m.name === 'collision_event_readout');
+            return marker.visible && marker.location === 0 && label.visible && label.x === 0 && label.y > 1e8;
+        }""")
 
         def bounds():
             return page.evaluate("""() => {
@@ -326,6 +340,18 @@ def test_gas_rate_alignment_and_repeat_selection(
                 arg=fitted,
             )
         assert bounds() == fitted
+        page.evaluate("""() => {
+            const widgets = [...Bokeh.documents[0]._all_models.values()];
+            widgets.find(m => m.type === 'CheckboxGroup' && m.labels[0] === 'Facet pathways').active = [0];
+        }""")
+        page.wait_for_function("""() => {
+            const panels = Bokeh.documents[0].get_model_by_name('explorer_plots').children;
+            const gas = Bokeh.index.find_one(panels.find(p => p.name === 'collision_rates'));
+            const events = Bokeh.index.find_one(panels.find(p => p.name === 'events'));
+            const bottom = gas.canvas_view.events_el.getBoundingClientRect().top + gas.frame.bbox.bottom;
+            const top = events.canvas_view.events_el.getBoundingClientRect().top + events.frame.bbox.top;
+            return top - bottom > 10;
+        }""")
         page.screenshot(
             path=str(tmp_path / f"gas-rate-{width}-{logarithmic}.png"), full_page=True
         )

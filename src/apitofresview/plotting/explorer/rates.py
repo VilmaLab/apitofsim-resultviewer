@@ -3,6 +3,7 @@
 from html import escape
 
 import numpy as np
+import polars as pl
 from apitofsim import collision_profile, skimmer
 from apitofsim.api import internal_energy
 from bokeh.layouts import column
@@ -19,6 +20,7 @@ from bokeh.models import (
 from bokeh.plotting import figure
 
 from .controls import enabled, prepare_toolbar
+from .layout import position_events
 from .plot import COLORS, PATHWAY_COLORS
 
 
@@ -267,6 +269,7 @@ class RateViews:
             mapped.extend(left + (z - lo) * (right - left) / (hi - lo))
         self.positions = np.asarray(positions)
         self.mapped = mapped
+        self.mapped_regions = mapped_regions
         self.shared_x = shared_x
         self.build_collision()
 
@@ -308,6 +311,24 @@ class RateViews:
             name="collision_velocity",
         )
         self.collision_plot.add_layout(self.velocity_label)
+        self.collision_marker = Span(
+            dimension="height",
+            line_color="#111827",
+            line_width=1,
+            visible=False,
+            name="collision_event_marker",
+        )
+        self.collision_readout = Label(
+            x=0,
+            y=0,
+            text_font_size="9pt",
+            background_fill_color="white",
+            background_fill_alpha=0.85,
+            visible=False,
+            name="collision_event_readout",
+        )
+        self.collision_plot.add_layout(self.collision_marker)
+        self.collision_plot.add_layout(self.collision_readout)
         prepare_toolbar(self.collision_plot)
         self.collision.children = [self.collision_plot, self.collision_notice]
         self.update_collision()
@@ -320,13 +341,15 @@ class RateViews:
         if not self.collision.visible or self.collision_source is None:
             return
         velocity = self.event.get("velocity") if self.event else dict(x=0, y=0, z=0)
+        self.collision_marker.visible = self.collision_readout.visible = False
         try:
             if velocity is None or any(velocity.get(axis) is None for axis in "xyz"):
                 raise ValueError("Selected event has no velocity")
             vector = [velocity[axis] for axis in "xyz"]
+            positions, mapped, index = self.collision_positions()
             rates = np.asarray(
                 self.profile.frequency(
-                    self.positions,
+                    positions,
                     vector,
                     quantities_strict=False,
                 )
@@ -337,13 +360,36 @@ class RateViews:
             logarithmic = enabled(self.ui.log_rates)
             valid = np.isfinite(rates) & (rates > 0 if logarithmic else rates >= 0)
             rates[~valid] = np.nan
-            self.collision_source.data = dict(x=self.mapped, rate=rates)
+            self.collision_source.data = dict(x=mapped, rate=rates)
             bounds = rate_range(rates, logarithmic)
             self.collision_plot.y_range.start = bounds.start
             self.collision_plot.y_range.end = bounds.end
             self.collision_plot.y_range.reset_start = bounds.start
             self.collision_plot.y_range.reset_end = bounds.end
             self.velocity_label.text = f"v = {np.linalg.norm(vector):.6g} m/s"
+            if index is not None:
+                self.collision_marker.location = mapped[index]
+                self.collision_marker.visible = True
+                if valid[index]:
+                    right = (
+                        mapped[index] > (self.shared_x.start + self.shared_x.end) / 2
+                    )
+                    middle = (
+                        np.sqrt(bounds.start * bounds.end)
+                        if logarithmic
+                        else bounds.end / 2
+                    )
+                    above = rates[index] > middle
+                    self.collision_readout.update(
+                        x=mapped[index],
+                        y=rates[index],
+                        text=f"{rates[index]:.4g} s⁻¹",
+                        visible=True,
+                        text_align="right" if right else "left",
+                        x_offset=-6 if right else 6,
+                        y_offset=-6 if above else 6,
+                        text_baseline="top" if above else "bottom",
+                    )
             self.collision_notice.text = (
                 ""
                 if valid.any()
@@ -357,3 +403,30 @@ class RateViews:
             self.collision_notice.text = (
                 f"Collision rates unavailable: {escape(str(exc))}"
             )
+        self.collision_notice.visible = bool(self.collision_notice.text) or enabled(
+            self.ui.fate_facets
+        )
+
+    def collision_positions(self):
+        """Include the selected physical position in the plotted profile and readout."""
+        z = self.event.get("z") if self.event else None
+        if (
+            z is None
+            or not np.isfinite(z)
+            or not 0 <= z <= self.mapped_regions["physical_right"][-1]
+        ):
+            return self.positions, self.mapped, None
+        index = int(np.searchsorted(self.positions, z))
+        if index < len(self.positions) and self.positions[index] == z:
+            return self.positions, self.mapped, index
+        x = position_events(
+            pl.DataFrame(dict(z=[z], t=[0.0], type=["collision"])),
+            self.mapped_regions,
+            self.ui.mode.value,
+            own_zones=False,
+        )["position"][0]
+        return (
+            np.insert(self.positions, index, z),
+            np.insert(self.mapped, index, x),
+            index,
+        )

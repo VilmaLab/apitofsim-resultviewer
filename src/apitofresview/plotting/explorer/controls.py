@@ -65,6 +65,7 @@ class Controls:
     log_rates: CheckboxGroup
     show_readoffs: CheckboxGroup
     detail_log_rates: CheckboxGroup
+    detail_show_readoffs: CheckboxGroup
     rate_separator: Div
     collision_rates: CheckboxGroup
     rate_controls: Column
@@ -99,11 +100,12 @@ def enabled(widget):
     return bool(widget.active)
 
 
-def group(title, child):
+def group(title, child, *, name=None):
     child.width_policy = "max"
     child.height_policy = "min"
     return GroupBox(
         title=title,
+        name=name,
         child=child,
         width_policy="max",
         height_policy="min",
@@ -238,6 +240,8 @@ def create_controls(
     show_readoffs.name = "show_readoffs"
     detail_log_rates = checkbox("Logarithmic rates", True)
     detail_log_rates.name = "detail_log_rates"
+    detail_show_readoffs = checkbox("Show readoff values", True)
+    detail_show_readoffs.name = "detail_show_readoffs"
     rate_separator = Div(
         height=1,
         sizing_mode="stretch_width",
@@ -245,13 +249,27 @@ def create_controls(
         margin=(8, 0),
         styles={"border-top": "1px solid #cbd5e1"},
         html_attributes={"role": "separator"},
+        name="rate_separator",
     )
     collision_rates = checkbox("Gas collision rate")
     rate_plots = column(Div(), sizing_mode="stretch_width", name="rate_plots")
     rate_controls = column(
-        detail_log_rates,
-        share_rates,
-        all_pathways,
+        rate_separator,
+        row(
+            group(
+                "Rates",
+                column(detail_log_rates, detail_show_readoffs, spacing=4),
+                name="detail_rates",
+            ),
+            group(
+                "Pathways",
+                column(share_rates, all_pathways, spacing=4),
+                name="detail_pathways",
+            ),
+            sizing_mode="stretch_width",
+            spacing=8,
+            name="detail_rate_groups",
+        ),
         rate_plots,
         sizing_mode="stretch_width",
         visible=False,
@@ -267,7 +285,9 @@ def create_controls(
 
     left_controls = column(
         fullscreen_button,
-        group("Pathways", column(fate, fate_facets, spacing=4)),
+        group(
+            "Pathways", column(fate, fate_facets, spacing=4), name="sidebar_pathways"
+        ),
         group("X-axis", column(mode, sizing, guides, spacing=4)),
         group(
             "Elements",
@@ -295,7 +315,9 @@ def create_controls(
                 spacing=4,
             ),
         ),
-        group("Rates", column(log_rates, show_readoffs, spacing=4)),
+        group(
+            "Rates", column(log_rates, show_readoffs, spacing=4), name="sidebar_rates"
+        ),
         spacing=4,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
     )
@@ -303,7 +325,6 @@ def create_controls(
         details,
         summarise_motion,
         summarise_energy,
-        rate_separator,
         show_rates,
         rate_controls,
         styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
@@ -470,6 +491,7 @@ def create_controls(
         log_rates=log_rates,
         show_readoffs=show_readoffs,
         detail_log_rates=detail_log_rates,
+        detail_show_readoffs=detail_show_readoffs,
         rate_separator=rate_separator,
         collision_rates=collision_rates,
         rate_controls=rate_controls,

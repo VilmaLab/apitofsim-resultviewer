@@ -372,7 +372,7 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     fates = next(
         g.child.children[0]
         for g in doc.select({"type": GroupBox})
-        if g.title == "Pathways"
+        if g.name == "sidebar_pathways"
     )
     assert set(fates.labels) == {"Parent → A + B", "Parent → Parent", "Incomplete"}
     source = next(
@@ -615,7 +615,7 @@ def test_cumulative_pathway_areas(monkeypatch, mode, sizing):
     fates = next(
         g.child.children[0]
         for g in doc.select({"type": GroupBox})
-        if g.title == "Pathways"
+        if g.name == "sidebar_pathways"
     )
     colors = plot._pathway_colors(fates.labels, "Parent → Parent")
     assert colors["Parent → Parent"] == plot.COLORS["escape"]
@@ -717,7 +717,7 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
         )
 
     pathway_group = next(
-        g for g in doc.select({"type": GroupBox}) if g.title == "Pathways"
+        g for g in doc.select({"type": GroupBox}) if g.name == "sidebar_pathways"
     )
     fates = pathway_group.child.children[0]
     options = next(

@@ -23,14 +23,14 @@ def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, heigh
     html.write_text(file_html(doc, INLINE, "Explorer"))
     page.set_viewport_size({"width": width, "height": height})
     page.goto(html.as_uri())
-    groups = page.locator(".bk-GroupBox")
+    groups = page.locator(".bk-GroupBox").filter(visible=True)
     expect(groups).to_have_count(8)
     # A shrinking flex item can be shorter than its fieldset, which then
     # paints over the next group even though all controls remain in the DOM.
     page.wait_for_function("""() => {
         function check(root) {
             for (const element of root.querySelectorAll('*')) {
-                if (element.matches('.bk-GroupBox')) {
+                if (element.matches('.bk-GroupBox') && element.checkVisibility()) {
                     const fieldset = element.shadowRoot.querySelector('fieldset');
                     const outer = element.getBoundingClientRect();
                     const inner = fieldset.getBoundingClientRect();
@@ -193,9 +193,31 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
         }""")
         expect(page.get_by_text("Internal energy (J)", exact=True)).to_be_visible()
         separator = page.get_by_role("separator")
+        expect(separator).to_be_hidden()
+        page.get_by_text("Show rate constants", exact=True).click()
         expect(separator).to_be_visible()
         assert separator.evaluate("el => el.getBoundingClientRect().width") > 100
-        page.get_by_text("Show rate constants", exact=True).click()
+        assert (
+            separator.bounding_box()["y"]
+            > page.get_by_text("Show rate constants", exact=True).bounding_box()["y"]
+        )
+        page.wait_for_function("""() => {
+            const doc = Bokeh.documents[0];
+            const rect = name => Bokeh.index.find_one(doc.get_model_by_name(name)).el.getBoundingClientRect();
+            const rates = rect('detail_rates'), pathways = rect('detail_pathways');
+            return rates.width > 0 && pathways.left >= rates.right && Math.abs(rates.top - pathways.top) < 1;
+        }""")
+        for expected in ([], [0]):
+            page.get_by_text("Show readoff values", exact=True).filter(
+                visible=True
+            ).click()
+            page.wait_for_function(
+                """expected => {
+                const doc = Bokeh.documents[0];
+                return JSON.stringify(doc.get_model_by_name('show_readoffs').active) === JSON.stringify(expected);
+            }""",
+                arg=expected,
+            )
         page.wait_for_function("""() => {
             const doc = Bokeh.documents[0];
             return doc.get_model_by_name('details_layout_right').active &&

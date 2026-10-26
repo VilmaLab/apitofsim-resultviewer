@@ -24,7 +24,7 @@ def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, heigh
     page.set_viewport_size({"width": width, "height": height})
     page.goto(html.as_uri())
     groups = page.locator(".bk-GroupBox")
-    expect(groups).to_have_count(7)
+    expect(groups).to_have_count(8)
     # A shrinking flex item can be shorter than its fieldset, which then
     # paints over the next group even though all controls remain in the DOM.
     page.wait_for_function("""() => {
@@ -52,7 +52,7 @@ def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, heigh
 
 
 @contextmanager
-def serve_explorer(monkeypatch, frames):
+def serve_explorer(monkeypatch, frames, db=None):
     """Serve a synthetic cohort with real Bokeh session callbacks."""
     from queue import Queue
     from threading import Thread
@@ -67,7 +67,7 @@ def serve_explorer(monkeypatch, frames):
         loop = IOLoop()
         try:
             server = Server(
-                {"/": lambda doc: build_document(None, doc, 1, 1)},
+                {"/": lambda doc: build_document(db, doc, 1, 1)},
                 io_loop=loop,
                 port=0,
                 address="127.0.0.1",
@@ -172,6 +172,154 @@ def test_live_inspection_preserves_plot_and_zoom(page, explorer_server, details_
         const plot = Bokeh.documents[0].get_model_by_name('events');
         return plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data.position.length === 0;
     }""")
+
+
+@pytest.mark.parametrize("width", [640, 1280])
+def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
+    from .test_rates import RateDatabase, rate_frames
+
+    with serve_explorer(monkeypatch, rate_frames(), RateDatabase()) as url:
+        page.set_viewport_size({"width": width, "height": 900})
+        page.goto(url)
+        page.wait_for_function(
+            "() => window.Bokeh?.documents[0]?.get_model_by_name('events')?.inner_width > 0"
+        )
+        initial = page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('events');
+            plot.x_range.start = 1; plot.x_range.end = 2;
+            const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+            source.selected.indices = [source.data.id.indexOf(1)];
+            return plot.id;
+        }""")
+        expect(page.get_by_text("Internal energy (J)", exact=True)).to_be_visible()
+        separator = page.get_by_role("separator")
+        expect(separator).to_be_visible()
+        assert separator.evaluate("el => el.getBoundingClientRect().width") > 100
+        page.get_by_text("Show rate constants", exact=True).click()
+        page.wait_for_function("""() => {
+            const doc = Bokeh.documents[0];
+            return doc.get_model_by_name('details_layout_right').active &&
+                doc.get_model_by_name('rate_plots').children[0]?.inner_width > 0;
+        }""")
+        page.get_by_text("Show all pathways", exact=True).click()
+        page.wait_for_function(
+            "() => Bokeh.documents[0].get_model_by_name('rate_plots').children[0].renderers.length === 2"
+        )
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
+            const legend = plot.below.find(m => m.type === 'Legend');
+            const view = Bokeh.index.find_one(plot);
+            const legendView = view?.renderer_views.get(legend);
+            return legendView?.bbox.top >= view.frame.bbox.bottom;
+        }""")
+        page.locator('.explorer-event[data-event="2"] td').first.click()
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
+            return plot.center.some(m => m.type === 'Span' && Math.abs(m.location - 5e-20) < 1e-30);
+        }""")
+        page.get_by_text("Share plot", exact=True).click()
+        page.wait_for_function("""() => {
+            const plots = Bokeh.documents[0].get_model_by_name('rate_plots').children.filter(m => m.name === 'pathway_rates');
+            return plots.length === 2 && plots.every(p => p.inner_width > 0) && plots[0].x_range === plots[1].x_range;
+        }""")
+        assert page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('events');
+            return [plot.id, plot.x_range.start, plot.x_range.end];
+        }""") == [initial, 1, 2]
+        page.screenshot(path=str(tmp_path / f"rates-{width}.png"), full_page=True)
+        page.get_by_role("button", name="Right sidebar", exact=True).click()
+        expect(page.get_by_text("Share plot", exact=True)).not_to_be_visible()
+        page.get_by_role("button", name="Bottom", exact=True).click()
+        page.get_by_text("Show rate constants", exact=True).click()
+        page.wait_for_function(
+            "() => Bokeh.documents[0].get_model_by_name('details_layout_bottom').active"
+        )
+
+
+@pytest.mark.parametrize("width", [640, 1280])
+@pytest.mark.parametrize("logarithmic", [True, False])
+def test_gas_rate_alignment_and_repeat_selection(
+    monkeypatch, page, width, logarithmic, tmp_path
+):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from apitofsim.api import Q_
+
+    from apitofresview.plotting.explorer import rates
+
+    from .test_rates import RateDatabase, rate_frames
+
+    monkeypatch.setattr(rates, "skimmer", lambda config: None)
+    monkeypatch.setattr(
+        rates,
+        "collision_profile",
+        lambda *args, **kwargs: SimpleNamespace(
+            frequency=lambda z, velocity, **kwargs: Q_(
+                np.where(z < 2, 1e8, 1e4) * (1 + np.linalg.norm(velocity)), "1/s"
+            )
+        ),
+    )
+    with serve_explorer(monkeypatch, rate_frames(), RateDatabase()) as url:
+        page.set_viewport_size({"width": width, "height": 900})
+        page.goto(url)
+        page.get_by_text("Gas collision rate", exact=True).click()
+        if not logarithmic:
+            page.get_by_text("Logarithmic rates", exact=True).filter(
+                visible=True
+            ).click()
+        page.wait_for_function("""() => {
+            const panels = Bokeh.documents[0].get_model_by_name('explorer_plots').children;
+            const plots = panels.filter(p => ['collision_rates', 'schematic', 'events'].includes(p.name));
+            if (plots.length !== 3) return false;
+            const boxes = plots.map(p => {
+                const view = Bokeh.index.find_one(p);
+                if (!view?.frame?.bbox || !p.inner_width) return null;
+                const rect = view.canvas_view.events_el.getBoundingClientRect();
+                return [rect.left + view.frame.bbox.left, rect.left + view.frame.bbox.right];
+            });
+            return boxes.every(b => b && Math.abs(b[0] - boxes[0][0]) < 1 && Math.abs(b[1] - boxes[0][1]) < 1);
+        }""")
+        assert page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('schematic');
+            return plot.renderers[0].data_source.data.right.at(-1) === plot.x_range.end;
+        }""")
+        page.wait_for_function(
+            "() => Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates').center.find(m => m.name === 'collision_velocity').text === 'v = 0 m/s'"
+        )
+        page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('events');
+            const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+            source.selected.indices = [source.data.id.indexOf(1)];
+        }""")
+        page.wait_for_function(
+            "() => Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates').center.find(m => m.name === 'collision_velocity').text === 'v = 7.07107 m/s'"
+        )
+
+        def bounds():
+            return page.evaluate("""() => {
+                const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates');
+                return [plot.y_range.start, plot.y_range.end];
+            }""")
+
+        fitted = bounds()
+        page.evaluate("""() => {
+            const range = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates').y_range;
+            range.start -= 100; range.end *= 10;
+        }""")
+        for _ in range(3):
+            page.get_by_role("button", name="Inspect event #1", exact=True).click()
+            page.wait_for_function(
+                """expected => {
+                const range = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'collision_rates').y_range;
+                return range.start === expected[0] && range.end === expected[1];
+            }""",
+                arg=fitted,
+            )
+        assert bounds() == fitted
+        page.screenshot(
+            path=str(tmp_path / f"gas-rate-{width}-{logarithmic}.png"), full_page=True
+        )
 
 
 def test_schematic_edges_drag_and_update_events(page, explorer_server):

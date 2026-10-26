@@ -28,6 +28,7 @@ from .plot import (
     _pathway_colors,
     _schematic_plot,
 )
+from .rates import RateViews
 
 
 def build_document(db, doc, experiment: int, cluster: int):
@@ -98,6 +99,9 @@ def build_document(db, doc, experiment: int, cluster: int):
     selection_events = events.head(0)
     active_groups = set()
     selection_notice = Div(visible=False)
+    rates = RateViews(db, experiment, cluster, pathways, fate_names, fate_colors, ui)
+    collision_coordinates = None
+    collision_panels = []
     drag_bridge = Div(text="", visible=False, name="schematic_drag_bridge")
     ui.frame.children.append(drag_bridge)
 
@@ -127,6 +131,8 @@ def build_document(db, doc, experiment: int, cluster: int):
     def apply_sidebars(full):
         left_open, right_open = state["sidebar"][full]
         mode = state["details_layout"][full]
+        if mode == "sidebar":
+            ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
         if narrow and left_open and right_open:
@@ -255,13 +261,35 @@ def build_document(db, doc, experiment: int, cluster: int):
             candidates = selection_events.filter(
                 pl.col("id").is_in(state["candidates"])
             ).sort("realization_id", "t", "id")
-            ui.details.text = render_choices(candidates, enabled(ui.summarise_motion))
+            ui.details.text = render_choices(
+                candidates, enabled(ui.summarise_motion), enabled(ui.summarise_energy)
+            )
         else:
             ui.details.text = render_details(
-                selected, selected_events, state["event"], enabled(ui.summarise_motion)
+                selected,
+                selected_events,
+                state["event"],
+                enabled(ui.summarise_motion),
+                enabled(ui.summarise_energy),
             )
         ui.summarise_motion.visible = not selected.is_empty() or bool(
             state["candidates"]
+        )
+        ui.summarise_energy.visible = ui.summarise_motion.visible
+        ui.show_rates.visible = not selected.is_empty()
+        ui.rate_separator.visible = ui.show_rates.visible
+        ui.rate_controls.visible = ui.show_rates.visible and enabled(ui.show_rates)
+        ui.detail_log_rates.disabled = not ui.rate_controls.visible
+        selected_event = (
+            selected_events.filter(pl.col("id") == state["event"])
+            if state["event"] is not None
+            else selected_events.head(0)
+        )
+        rates.update(
+            selected,
+            selected_event.row(0, named=True)
+            if not selected_event.is_empty()
+            else None,
         )
         hidden = (
             selected_events.head(0)
@@ -426,7 +454,7 @@ def build_document(db, doc, experiment: int, cluster: int):
 
     def assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups):
         """Position the cohort and assemble shared-axis plots and selection notices."""
-        nonlocal selection_events
+        nonlocal selection_events, collision_coordinates, collision_panels
         chosen_events = chosen_events.with_columns(
             pl.when(pl.col("type") == "fragmentation")
             .then(pl.lit("fragmentation") if grouped else pl.col("event_pathway"))
@@ -495,7 +523,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         margin = (right_edge - left_edge) * 0.015
         shared_x = Range1d(
             left_edge - margin if ui.layout.value == "beeswarm" else left_edge,
-            right_edge + margin,
+            right_edge if regional else right_edge + margin,
         )
         panels = []
         if enabled(ui.schematic) and spatial and regional and not chosen.is_empty():
@@ -509,6 +537,14 @@ def build_document(db, doc, experiment: int, cluster: int):
                     escaped=dedicated_zones or enabled(ui.show_bars),
                 )
             )
+
+        collision_coordinates = (mapped_regions, shared_x, spatial)
+        rates.configure_collision(*collision_coordinates)
+        # Direct siblings let Bokeh align all frames to the widest axis labels.
+        collision_panels = (
+            list(rates.collision.children) if rates.collision.visible else []
+        )
+        panels.extend(collision_panels)
 
         def selection_callback(source):
             def on_selected(attr, old, new):
@@ -713,5 +749,46 @@ def build_document(db, doc, experiment: int, cluster: int):
     ]:
         widget.on_change(property_name, control_changed)
     ui.summarise_motion.on_change("active", lambda attr, old, new: update_selection())
+    ui.summarise_energy.on_change("active", lambda attr, old, new: update_selection())
+
+    def show_rates_changed(attr, old, new):
+        full = ui.fullscreen_state.text == "full"
+        if new and state["details_layout"][full] == "sidebar":
+            layout_changed("right")
+        update_selection()
+
+    def sync_collision_panels():
+        nonlocal collision_panels
+        panels = [
+            panel for panel in ui.center_plots.children if panel not in collision_panels
+        ]
+        index = next(
+            (i + 1 for i, panel in enumerate(panels) if panel.name == "schematic"), 1
+        )
+        collision_panels = (
+            list(rates.collision.children) if rates.collision.visible else []
+        )
+        ui.center_plots.children = [*panels[:index], *collision_panels, *panels[index:]]
+
+    def collision_changed(attr, old, new):
+        if collision_coordinates is not None:
+            rates.configure_collision(*collision_coordinates)
+            sync_collision_panels()
+        update_selection()
+
+    def rate_scale_changed(attr, old, new):
+        ui.detail_log_rates.active = list(new)
+        rates.change_scale()
+        sync_collision_panels()
+        update_selection()
+
+    ui.show_rates.on_change("active", show_rates_changed)
+    ui.collision_rates.on_change("active", collision_changed)
+    ui.log_rates.on_change("active", rate_scale_changed)
+    ui.detail_log_rates.on_change(
+        "active", lambda attr, old, new: setattr(ui.log_rates, "active", list(new))
+    )
+    for widget in (ui.share_rates, ui.all_pathways):
+        widget.on_change("active", lambda attr, old, new: update_selection())
     ui.show_cdf.on_change("active", cdf_changed)
     render()

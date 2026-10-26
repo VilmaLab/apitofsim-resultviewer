@@ -249,6 +249,7 @@ def test_bokeh_document_modes_and_views(monkeypatch):
         "X-axis",
         "Elements",
         "Realizations",
+        "Rates",
     ]
     assert controls[2].child.children[1] is sizing
     assert controls[2].child.children[2].labels == ["Guides"]
@@ -888,7 +889,7 @@ def test_terminal_zone_controls_and_bar_only_slot(monkeypatch, sizing):
     assert "Escaped" in labels() and "Initial" not in labels()
     assert (
         doc.select_one({"name": "events"}).x_range.end
-        > event_layout.escape_slot(mapped)[1]
+        == event_layout.escape_slot(mapped)[1]
     )
     assert coordinates()[2] == mapped["right"][-1]
     bars = doc.select_one({"name": "bars"})

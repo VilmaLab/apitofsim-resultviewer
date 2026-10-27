@@ -1,6 +1,9 @@
 """Explorer details behavior."""
 
+from xml.etree import ElementTree
+
 import polars as pl
+import pytest
 
 from apitofresview.plotting.explorer.details import render_choices, render_details
 
@@ -97,3 +100,37 @@ def test_choices_share_detail_columns_and_show_cohort_numbers():
     cartesian = render_choices(events, radial=False)
     assert all(f"<th>{axis} (mm)</th>" in cartesian for axis in "xyz")
     assert "Axial dist." not in cartesian
+
+
+@pytest.mark.parametrize("radial", [True, False])
+@pytest.mark.parametrize("summarise_energy", [True, False])
+def test_collision_rows_share_only_common_cells(radial, summarise_energy):
+    from .helpers import collision_cohort
+
+    members, events, _, _ = collision_cohort()
+    html = render_details(
+        members.with_row_index("realization_number", offset=1),
+        events,
+        2,
+        radial=radial,
+        summarise_energy=summarise_energy,
+    )
+    table = ElementTree.fromstring("<div>" + html + "</div>")
+    before, after = (table.find(f".//tr[@id='event-{id}']") for id in (1, 2))
+    shared = before.findall('td[@rowspan="2"]')
+    assert len(shared) == (7 if radial else 8)
+    assert ["".join(cell.itertext()) for cell in shared][-3:] == ["0.5", "-100", "Yes"]
+    assert before.get("style") == "background:white"
+    assert after.get("style") == "background:#fde68a"
+    assert after.find(".//button").get("aria-label") == "Inspect event #2"
+    assert len(before.findall("td")) == len(table.findall(".//th"))
+    assert len(after.findall("td")) == len(table.findall(".//th")) - len(shared)
+    assert (
+        "3e-20" in "".join(after.itertext())
+        if summarise_energy
+        else "2e-20" in "".join(after.itertext())
+    )
+    assert not table.find(".//tr[@id='event-4']").findall(
+        "td[@rowspan]"
+    )  # Older/unknown acceptance.
+    assert table.find(".//tr[@id='event-5']").find(".//button").text == "postcollision"

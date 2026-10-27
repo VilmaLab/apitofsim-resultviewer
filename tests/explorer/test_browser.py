@@ -699,3 +699,50 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
     else:
         expect(page.get_by_role("button", name="☷", exact=True)).to_be_visible()
     assert not errors
+
+
+def test_paired_collision_rows_and_split_controls(monkeypatch, page):
+    from .helpers import collision_cohort
+
+    with serve_explorer(monkeypatch, collision_cohort()) as url:
+        page.set_viewport_size({"width": 1280, "height": 900})
+        page.goto(url)
+        page.get_by_text("Separate rejected collisions", exact=True).click()
+        expect(page.get_by_text("Accepted collisions", exact=True)).to_be_visible()
+        expect(page.get_by_text("Rejected collisions", exact=True)).to_be_visible()
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            const source = plot?.renderers.find(r => r.data_source?.data.id?.includes(1))?.data_source;
+            if (!source || !plot.inner_width) return false;
+            source.selected.indices = [source.data.id.indexOf(1)];
+            return true;
+        }""")
+        before = page.locator("#event-1")
+        after = page.locator("#event-2")
+        expect(before.locator('td[rowspan="2"]')).to_have_count(7)
+        expect(
+            after.get_by_role("button", name="Inspect event #2", exact=True)
+        ).to_be_visible()
+        highlight = page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            return plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data;
+        }""")
+        # Exercise the actual delegated click handler on an ordinary after-state cell.
+        after.locator("td").last.click()
+        expect(after).to_have_attribute("style", "background:#fde68a")
+        expect(before).to_have_attribute("style", "background:white")
+        assert (
+            page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            return plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data;
+        }""")
+            == highlight
+        )
+        page.get_by_role("button", name="Inspect event #1", exact=True).click()
+        expect(before).to_have_attribute("style", "background:#fde68a")
+        page.get_by_text("Rejected collisions", exact=True).click()
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            return !plot.renderers.some(r => r.data_source?.data.id?.includes(3));
+        }""")
+        expect(page.locator("#event-3")).to_have_count(1)

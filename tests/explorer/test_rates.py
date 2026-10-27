@@ -439,3 +439,60 @@ def test_fragmentation_readouts_thresholds_and_coincident_values(rate_doc, monke
     assert not any(
         label.visible for label in doc.select({"name": "fragmentation_readout"})
     )
+
+
+def test_collision_before_after_selection_keeps_spatial_highlight(monkeypatch):
+    from .helpers import collision_cohort
+
+    monkeypatch.setattr(session, "load_data", lambda *args: collision_cohort())
+    monkeypatch.setattr(rates, "skimmer", lambda config: None)
+    monkeypatch.setattr(
+        rates,
+        "collision_profile",
+        lambda *args, **kwargs: SimpleNamespace(
+            frequency=lambda z, velocity, **kwargs: Q_(
+                np.full(len(z), sum(velocity)), "1/s"
+            )
+        ),
+    )
+    doc = Document()
+    build_document(RateDatabase(), doc, 1, 1)
+    check(doc, "Gas collision rate").active = [0]
+    select(doc, 1)
+    check(doc, "Show all pathways").active = [0]
+    check(doc, "Show rate constants").active = [0]
+    main = doc.select_one({"name": "events"})
+    highlight = next(
+        r.data_source
+        for r in main.renderers
+        if getattr(r.glyph, "line_color", None) == "#f59e0b"
+    )
+    before_highlight = dict(highlight.data)
+    before_position = doc.select_one({"name": "collision_event_marker"}).location
+    before_rates = (
+        doc.select_one({"name": "collision_rates_source"}).data["rate"].copy()
+    )
+    before_energy = (
+        doc.select_one({"name": "pathway_rates"}).select_one({"type": Span}).location
+    )
+    assert before_energy == pytest.approx(2e-20, abs=1e-32)
+    doc.roots[0].children[1].text = "2"
+    assert highlight.data == before_highlight
+    assert (
+        doc.select_one({"name": "collision_event_marker"}).location == before_position
+    )
+    after_rates = doc.select_one({"name": "collision_rates_source"}).data["rate"]
+    np.testing.assert_allclose(after_rates, before_rates + 1)
+    assert doc.select_one({"name": "pathway_rates"}).select_one(
+        {"type": Span}
+    ).location == pytest.approx(3e-20, abs=1e-32)
+    doc.roots[0].children[1].text = "1"
+    assert highlight.data == before_highlight
+    assert (
+        doc.select_one({"name": "pathway_rates"}).select_one({"type": Span}).location
+        == before_energy
+    )
+    assert not any(
+        d.visible and "Selected hidden event" in d.text
+        for d in doc.select({"type": Div})
+    )

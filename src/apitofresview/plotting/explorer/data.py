@@ -87,6 +87,22 @@ def load_data(db, experiment: int, cluster: int):
     )
 
 
+def pair_collisions(events):
+    """Link only adjacent accepted before/after states at the same spacetime point."""
+    events = events.sort("realization_id", "t", "id")
+    accepted = pl.col("accepted") if "accepted" in events.columns else pl.lit(False)
+    paired = (
+        (pl.col("type") == "postcollision")
+        & (pl.col("type").shift() == "collision")
+        & accepted.shift().fill_null(False)
+    )
+    for key in ("realization_id", "t", "x", "y", "z"):
+        paired &= pl.col(key) == pl.col(key).shift()
+    return events.with_columns(
+        pl.when(paired).then(pl.col("id").shift()).alias("collision_id")
+    )
+
+
 def preprocess_events(events, regions):
     """Assign half-open regions, including the machine's final endpoint."""
     region = pl.lit(None, dtype=pl.Int64)
@@ -96,10 +112,14 @@ def preprocess_events(events, regions):
             (pl.col("z") < hi) | ((index == last) & (pl.col("z") == hi))
         )
         region = pl.when(inside).then(pl.lit(index)).otherwise(region)
-    return events.with_columns(
-        region.alias("region"),
-        (pl.col("x").pow(2) + pl.col("y").pow(2)).sqrt().alias("radial"),
-    ).sort("realization_id", "t", "id")
+    return (
+        pair_collisions(events)
+        .with_columns(
+            region.alias("region"),
+            (pl.col("x").pow(2) + pl.col("y").pow(2)).sqrt().alias("radial"),
+        )
+        .sort("realization_id", "t", "id")
+    )
 
 
 def classify(realizations, events, pathways, cluster_name):

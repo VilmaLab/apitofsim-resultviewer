@@ -51,3 +51,29 @@ def outcome_cohort():
         event(6, "fragmentation", 5, 2, 2, 7),
         event(7, "escape", 5, 3, 5),
     )
+
+
+def collision_cohort():
+    members, events, pathways, regions = cohort(
+        [1],
+        event(1, "collision", 1, 1, 1),
+        event(2, "postcollision", 1, 1, 1),
+        event(3, "collision", 1, 2, 2),
+        event(4, "collision", 1, 3, 3),
+        event(5, "postcollision", 1, 4, 4),  # Unmatched.
+        event(6, "escape", 1, 5, 5),
+    )
+    events = data.pair_collisions(
+        events.with_columns(
+            pl.Series(
+                "accepted", [True, None, False, None, None, None], dtype=pl.Boolean
+            ),
+            pl.Series("theta", [0.5, None, 0.7, None, None, None]),
+            pl.Series("u_norm", [-100.0, None, -200.0, None, None, None]),
+            pl.Series("rot_energy", [1e-20, 2e-20, None, None, None, None]),
+            pl.Series("vibrational_energy", [1e-20, 1e-20, None, None, None, None]),
+            pl.Series("velocity", [dict(x=3.0, y=4.0, z=v) for v in range(1, 7)]),
+            pl.Series("omega", [dict(x=0.0, y=0.0, z=v) for v in range(1, 7)]),
+        )
+    )
+    return members, events, pathways, regions

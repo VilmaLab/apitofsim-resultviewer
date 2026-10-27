@@ -257,11 +257,12 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert controls[3].child.children[1].title == "Views"
     assert controls[4].child.children[0].labels == ["Use x markers"]
     assert controls[4].child.children[1].labels == ["Group fragmentations"]
-    assert controls[4].child.children[2].labels == [
+    assert controls[4].child.children[2].labels == ["Separate rejected collisions"]
+    assert controls[4].child.children[3].labels == [
         "Place initial/escape in their own zones"
     ]
-    assert controls[4].child.children[3].labels == ["Spread initial/escape X"]
-    assert [g.title for g in controls[4].child.children[4:]] == ["Events", "Y-axis"]
+    assert controls[4].child.children[4].labels == ["Spread initial/escape X"]
+    assert [g.title for g in controls[4].child.children[5:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
 
@@ -1272,3 +1273,77 @@ def test_details_layout_transitions(monkeypatch, mode):
     assert left.children[1].visible and layouts["sidebar"].active
     assert right.width == 300
     assert body.children[1].children == [center, right]
+
+
+def test_separate_rejected_collisions_and_visibility_transitions(monkeypatch):
+    from .helpers import collision_cohort
+
+    monkeypatch.setattr(session, "load_data", lambda *args: collision_cohort())
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    split = next(
+        w
+        for w in doc.select({"type": CheckboxGroup})
+        if w.labels == ["Separate rejected collisions"]
+    )
+    accepted = doc.select_one({"name": "event:collision"})
+
+    def points():
+        return {
+            id: color
+            for renderer in doc.select_one({"name": "events"}).renderers
+            if "id" in renderer.data_source.data
+            for id, color in zip(
+                renderer.data_source.data["id"], renderer.data_source.data["color"]
+            )
+        }
+
+    assert not split.active
+    assert points() == {1: "#1f77b4", 3: "#1f77b4", 4: "#1f77b4", 6: "#2ca02c"}
+    split.active = [0]
+    rejected = doc.select_one({"name": "event:rejected_collision"})
+    assert accepted.labels == ["Accepted collisions"]
+    assert rejected.labels == ["Rejected collisions"]
+    assert points() == {1: "#1f77b4", 3: "#aec7e8", 4: "#1f77b4", 6: "#2ca02c"}
+    rejected.active = []
+    assert set(points()) == {1, 4, 6}
+    split.active = []
+    assert accepted.labels == ["Collision"]
+    assert set(points()) == {1, 3, 4, 6}
+    split.active = [0]
+    assert rejected.active == [0]
+    accepted.active = []
+    assert set(points()) == {3, 6}
+    split.active = []
+    assert set(points()) == {6}  # Merging follows accepted visibility.
+    split.active = [0]
+    assert not rejected.active
+    rejected.active = [0]
+    # Detail history still includes hidden collisions and both postcollision records.
+    source = next(
+        r.data_source
+        for r in doc.select_one({"name": "events"}).renderers
+        if 3 in r.data_source.data.get("id", [])
+    )
+    source.selected.indices = [source.data["id"].index(3)]
+    details = next(
+        d for d in doc.select({"type": Div}) if "Realization #1</h3>" in d.text
+    )
+    assert all(f'id="event-{id}"' in details.text for id in range(1, 7))
+    doc.roots[0].children[1].text = "2"
+    assert any("Selected hidden event #1" in d.text for d in doc.select({"type": Div}))
+
+
+@pytest.mark.parametrize("layout", ["realization", "radial", "strip", "beeswarm"])
+def test_postcollision_never_enters_explorer_sources(monkeypatch, layout):
+    from .helpers import collision_cohort
+
+    monkeypatch.setattr(session, "load_data", lambda *args: collision_cohort())
+    doc = Document()
+    build_document(None, doc, 1, 1)
+    next(
+        w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
+    ).value = layout
+    for source in doc.select({"type": ColumnDataSource}):
+        if "id" in source.data:
+            assert set(source.data["id"]).isdisjoint({2, 5})

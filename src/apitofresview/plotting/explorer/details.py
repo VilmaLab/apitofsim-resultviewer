@@ -62,7 +62,16 @@ def _columns(events, radial, summarise_energy):
     return headings, motion_columns, detail_columns
 
 
-def _cells(event, radial, motion_columns, detail_columns, clickable=False):
+def _cells(
+    event,
+    radial,
+    motion_columns,
+    detail_columns,
+    clickable=False,
+    *,
+    rowspan=1,
+    after=False,
+):
     kind = escape(event["type"])
     if clickable:
         kind = (
@@ -75,6 +84,16 @@ def _cells(event, radial, motion_columns, detail_columns, clickable=False):
         else [event[axis] for axis in ("x", "y", "z")]
     )
     values = [event["t"] * 1e9, *(value * 1000 for value in coordinates)]
+    shared = f' rowspan="{rowspan}"' if rowspan > 1 else ""
+    cells = (
+        []
+        if after
+        else [
+            f"<td{shared}>{kind}</td>",
+            *(f"<td{shared}>{format_value(value)}</td>" for value in values),
+        ]
+    )
+    values = []
     for key, axes, _ in motion_columns:
         vector = event[key]
         values.append(
@@ -84,14 +103,25 @@ def _cells(event, radial, motion_columns, detail_columns, clickable=False):
             if len(axes) == 1
             else hypot(*(vector[axis] for axis in axes))
         )
-    return (
-        f"<td>{kind}</td>"
-        + "".join(f"<td>{format_value(value)}</td>" for value in values)
-        + "".join(
-            f"<td>{format_value(_energy(event) if key == 'internal_energy' else event[key])}</td>"
+    for key, _ in detail_columns:
+        if key in ("theta", "u_norm", "accepted"):
+            continue
+        values.append(_energy(event) if key == "internal_energy" else event[key])
+    for index, value in enumerate(values):
+        text = format_value(value)
+        if after and clickable and index == 0:
+            text = (
+                f'<button type="button" aria-label="Inspect event #{event["id"]}">'
+                f"{text}</button>"
+            )
+        cells.append(f"<td>{text}</td>")
+    if not after:
+        cells.extend(
+            f"<td{shared}>{format_value(event[key])}</td>"
             for key, _ in detail_columns
+            if key in ("theta", "u_norm", "accepted")
         )
-    )
+    return "".join(cells)
 
 
 def _energy(event):
@@ -109,11 +139,26 @@ def render_details(
         events, radial, summarise_energy
     )
     rows = []
+    paired = (
+        set(events["collision_id"].drop_nulls())
+        if "collision_id" in events.columns
+        else set()
+    )
     for event in events.iter_rows(named=True):
+        after = event.get("collision_id") is not None
+        row_class = "explorer-event explorer-after" if after else "explorer-event"
         rows.append(
-            f'<tr class="explorer-event" data-event="{event["id"]}" id="event-{event["id"]}" '
+            f'<tr class="{row_class}" data-event="{event["id"]}" id="event-{event["id"]}" '
             f'style="background:{"#fde68a" if event["id"] == selected_event else "white"}">'
-            + _cells(event, radial, motion_columns, detail_columns, clickable=True)
+            + _cells(
+                event,
+                radial,
+                motion_columns,
+                detail_columns,
+                clickable=True,
+                rowspan=2 if event["id"] in paired else 1,
+                after=after,
+            )
             + "</tr>"
         )
     return (

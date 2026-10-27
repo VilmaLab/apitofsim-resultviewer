@@ -75,6 +75,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         "candidates": {},
         "updating": False,
         "grouped": True,
+        "separated": False,
+        "plot_event": None,
         "auto_cdf": False,
         "syncing_sidebar": False,
         "sidebar": {False: [True, False], True: [False, False]},
@@ -295,11 +297,16 @@ def build_document(db, doc, experiment: int, cluster: int):
             if not selected_event.is_empty()
             else None,
         )
+        state["plot_event"] = (
+            selected_event["collision_id"][0] or state["event"]
+            if not selected_event.is_empty()
+            else None
+        )
         hidden = (
             selected_events.head(0)
             if state["event"] is None
             else selected_events.filter(
-                (pl.col("id") == state["event"])
+                (pl.col("id") == state["plot_event"])
                 & ~pl.col("event_group").is_in(active_groups)
             )
         )
@@ -389,6 +396,15 @@ def build_document(db, doc, experiment: int, cluster: int):
                         [0] if enabled(ui.event_options["fragmentation"]) else []
                     )
             state["grouped"] = grouped
+        separated = enabled(ui.separate_rejected)
+        if separated and not state["separated"]:
+            ui.event_options["rejected_collision"].active = list(
+                ui.event_options["collision"].active
+            )
+        state["separated"] = separated
+        ui.event_options["collision"].labels = [
+            "Accepted collisions" if separated else "Collision"
+        ]
         selected_fates = {fate_names[i] for i in ui.fate.active}
         available_events = events_for(
             events, realizations.filter(pl.col("fate").is_in(selected_fates))
@@ -398,13 +414,27 @@ def build_document(db, doc, experiment: int, cluster: int):
             if grouped
             else ["init", "collision", *fragmentation_names, "escape"]
         )
+        if separated:
+            kinds.insert(kinds.index("collision") + 1, "rejected_collision")
         event_colors = {
-            kind: COLORS[kind] if kind in EVENT_TYPES else fate_colors[kind]
+            kind: COLORS[kind] if kind in COLORS else fate_colors[kind]
             for kind in kinds
         }
         for kind, widget in ui.event_options.items():
             if kind == "escape":
                 available = escape_name in selected_fates
+            elif kind in ("collision", "rejected_collision"):
+                rejected = (
+                    pl.col("accepted").eq(False).fill_null(False)
+                    if "accepted" in available_events.columns
+                    else pl.lit(False)
+                )
+                matches = pl.col("type") == "collision"
+                if kind == "rejected_collision":
+                    matches &= rejected
+                elif separated:
+                    matches &= ~rejected
+                available = not available_events.filter(matches).is_empty()
             elif kind in EVENT_TYPES:
                 available = not available_events.filter(
                     pl.col("type") == kind
@@ -459,8 +489,19 @@ def build_document(db, doc, experiment: int, cluster: int):
     def assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups):
         """Position the cohort and assemble shared-axis plots and selection notices."""
         nonlocal selection_events, collision_coordinates, collision_panels
+        rejected = (
+            pl.col("accepted").eq(False).fill_null(False)
+            if "accepted" in chosen_events.columns
+            else pl.lit(False)
+        )
         chosen_events = chosen_events.with_columns(
-            pl.when(pl.col("type") == "fragmentation")
+            pl.when(
+                pl.lit(enabled(ui.separate_rejected))
+                & (pl.col("type") == "collision")
+                & rejected
+            )
+            .then(pl.lit("rejected_collision"))
+            .when(pl.col("type") == "fragmentation")
             .then(pl.lit("fragmentation") if grouped else pl.col("event_pathway"))
             .otherwise(pl.col("type"))
             .alias("event_group")
@@ -476,7 +517,10 @@ def build_document(db, doc, experiment: int, cluster: int):
         dedicated_zones = regional and enabled(ui.own_zones)
         spread_terminals = enabled(ui.spread_x) and not ui.spread_x.disabled
         positioned = position_events(
-            chosen_events, mapped_regions, ui.mode.value, dedicated_zones
+            chosen_events.filter(pl.col("type") != "postcollision"),
+            mapped_regions,
+            ui.mode.value,
+            dedicated_zones,
         )
         slot = escape_slot(mapped_regions)
         use_x_markers = enabled(ui.x_markers) and not ui.x_markers.disabled
@@ -739,6 +783,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         (ui.fate, "active"),
         (ui.fate_facets, "active"),
         (ui.group_fragmentations, "active"),
+        (ui.separate_rejected, "active"),
         (ui.own_zones, "active"),
         (ui.spread_x, "active"),
         (ui.mode, "value"),

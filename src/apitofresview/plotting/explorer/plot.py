@@ -32,6 +32,7 @@ from .layout import (
 COLORS = {
     "init": "#a16207",
     "collision": Category10[10][0],
+    "rejected_collision": Category20[20][1],
     "fragmentation": Category10[10][3],
     "escape": Category10[10][2],
 }
@@ -397,8 +398,10 @@ def _highlight(plot, get_events, selection):
         )
         clicked = (
             visible.head(0)
-            if selection["event"] is None
-            else visible.filter(pl.col("id") == selection["event"])
+            if selection.get("plot_event", selection["event"]) is None
+            else visible.filter(
+                pl.col("id") == selection.get("plot_event", selection["event"])
+            )
         )
         source.data = visible.select("position", "plot_y").to_dict(as_series=False)
         clicked_source.data = clicked.select("position", "plot_y").to_dict(

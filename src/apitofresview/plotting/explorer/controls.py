@@ -39,6 +39,7 @@ class Controls:
     quality: Div
     fate: CheckboxGroup
     fate_facets: CheckboxGroup
+    separate_rejected: CheckboxGroup
     group_fragmentations: CheckboxGroup
     own_zones: CheckboxGroup
     spread_x: CheckboxGroup
@@ -147,13 +148,18 @@ def create_controls(
     )
 
     fate_facets = checkbox("Facet pathways")
+    separate_rejected = checkbox("Separate rejected collisions")
     group_fragmentations = checkbox("Group fragmentations", True)
     own_zones = checkbox("Place initial/escape in their own zones", True)
     spread_x = checkbox("Spread initial/escape X", True)
-    event_options = {
-        kind: checkbox("Initial" if kind == "init" else kind.title(), True)
-        for kind in EVENT_TYPES
-    } | {name: checkbox(name, True) for name in fragmentation_names}
+    event_options = (
+        {
+            kind: checkbox("Initial" if kind == "init" else kind.title(), True)
+            for kind in EVENT_TYPES
+        }
+        | {"rejected_collision": checkbox("Rejected collisions", True)}
+        | {name: checkbox(name, True) for name in fragmentation_names}
+    )
     for kind, widget in event_options.items():
         widget.name = f"event:{kind}"
         widget.sizing_mode = "stretch_width"
@@ -216,6 +222,7 @@ def create_controls(
                 th, td { padding: 6px 4px; border-bottom: 1px solid #ddd; }
                 th { text-align: left; }
                 td:not(:first-child) { text-align: right; white-space: nowrap; }
+                .explorer-after td { text-align: right; white-space: nowrap; }
                 .explorer-choice td:nth-child(2) { text-align: left; }
                 .explorer-event, .explorer-choice { cursor: pointer; }
                 .explorer-event button, .explorer-choice button {
@@ -308,6 +315,7 @@ def create_controls(
             column(
                 x_markers,
                 group_fragmentations,
+                separate_rejected,
                 own_zones,
                 spread_x,
                 group("Events", event_controls),
@@ -466,6 +474,7 @@ def create_controls(
         fate=fate,
         fate_facets=fate_facets,
         group_fragmentations=group_fragmentations,
+        separate_rejected=separate_rejected,
         own_zones=own_zones,
         spread_x=spread_x,
         event_options=event_options,

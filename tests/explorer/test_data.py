@@ -218,3 +218,52 @@ def test_initial_event_fate():
     )
     assert members["terminal_event_id"].to_list() == [2]
     assert members["fate"].to_list() == ["Parent → Parent"]
+
+
+@pytest.mark.parametrize(
+    "accepted,next_kind,next_rid,next_time,next_z,expected",
+    [
+        (True, "postcollision", 1, 1, 1, 1),
+        (False, "postcollision", 1, 1, 1, None),
+        (None, "postcollision", 1, 1, 1, None),
+        (True, "collision", 1, 1, 1, None),
+        (True, "postcollision", 2, 1, 1, None),
+        (True, "postcollision", 1, 2, 1, None),
+        (True, "postcollision", 1, 1, 2, None),
+    ],
+)
+def test_collision_pairing(accepted, next_kind, next_rid, next_time, next_z, expected):
+    _, events, _, _ = cohort(
+        [1, 2],
+        event(1, "collision", 1, 1, 1),
+        event(2, next_kind, next_rid, next_time, next_z),
+    )
+    events = data.pair_collisions(
+        events.with_columns(pl.Series("accepted", [accepted, None], dtype=pl.Boolean))
+    )
+    assert events["collision_id"].to_list() == [None, expected]
+
+
+def test_pairing_does_not_skip_records_or_reuse_a_collision():
+    _, events, _, _ = cohort(
+        [1],
+        event(1, "collision", 1, 1, 1),
+        event(2, "postcollision", 1, 1, 1),
+        event(3, "postcollision", 1, 1, 1),
+        event(4, "collision", 1, 1, 1),
+        event(5, "init", 1, 1, 1),
+        event(6, "postcollision", 1, 1, 1),
+        event(7, "collision", 1, 1, 1),
+        event(8, "postcollision", 1, 1, 1),
+    )
+    events = data.pair_collisions(events.with_columns(pl.lit(True).alias("accepted")))
+    assert events["collision_id"].to_list() == [
+        None,
+        1,
+        None,
+        None,
+        None,
+        None,
+        None,
+        7,
+    ]

@@ -104,14 +104,17 @@ def test_choices_share_detail_columns_and_show_cohort_numbers():
 
 @pytest.mark.parametrize("radial", [True, False])
 @pytest.mark.parametrize("summarise_energy", [True, False])
-def test_collision_rows_share_only_common_cells(radial, summarise_energy):
+@pytest.mark.parametrize("selected_event", [1, 2, 3, None])
+def test_collision_rows_share_only_common_cells(
+    radial, summarise_energy, selected_event
+):
     from .helpers import collision_cohort
 
     members, events, _, _ = collision_cohort()
     html = render_details(
         members.with_row_index("realization_number", offset=1),
         events,
-        2,
+        selected_event,
         radial=radial,
         summarise_energy=summarise_energy,
     )
@@ -120,8 +123,17 @@ def test_collision_rows_share_only_common_cells(radial, summarise_energy):
     shared = before.findall('td[@rowspan="2"]')
     assert len(shared) == (7 if radial else 8)
     assert ["".join(cell.itertext()) for cell in shared][-3:] == ["0.5", "-100", "Yes"]
-    assert before.get("style") == "background:white"
-    assert after.get("style") == "background:#fde68a"
+    assert before.get("style") == (
+        "background:#fde68a" if selected_event == 1 else "background:white"
+    )
+    assert after.get("style") == (
+        "background:#fde68a" if selected_event == 2 else "background:white"
+    )
+    assert all(
+        cell.get("style")
+        == ("background:#fde68a" if selected_event in (1, 2) else None)
+        for cell in shared
+    )
     assert after.find(".//button").get("aria-label") == "Inspect event #2"
     assert len(before.findall("td")) == len(table.findall(".//th"))
     assert len(after.findall("td")) == len(table.findall(".//th")) - len(shared)

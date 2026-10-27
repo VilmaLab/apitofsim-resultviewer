@@ -731,6 +731,8 @@ def test_paired_collision_rows_and_split_controls(monkeypatch, page):
         after.locator("td").last.click()
         expect(after).to_have_attribute("style", "background:#fde68a")
         expect(before).to_have_attribute("style", "background:white")
+        for cell in before.locator('td[rowspan="2"]').all():
+            expect(cell).to_have_css("background-color", "rgb(253, 230, 138)")
         assert (
             page.evaluate("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
@@ -740,6 +742,9 @@ def test_paired_collision_rows_and_split_controls(monkeypatch, page):
         )
         page.get_by_role("button", name="Inspect event #1", exact=True).click()
         expect(before).to_have_attribute("style", "background:#fde68a")
+        page.get_by_role("button", name="Inspect event #3", exact=True).click()
+        expect(before).to_have_attribute("style", "background:white")
+        expect(before.locator('td[rowspan="2"][style]')).to_have_count(0)
         page.get_by_text("Rejected collisions", exact=True).click()
         page.wait_for_function("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');

@@ -71,6 +71,7 @@ def _cells(
     *,
     rowspan=1,
     after=False,
+    shared_selected=False,
 ):
     kind = escape(event["type"])
     if clickable:
@@ -85,6 +86,8 @@ def _cells(
     )
     values = [event["t"] * 1e9, *(value * 1000 for value in coordinates)]
     shared = f' rowspan="{rowspan}"' if rowspan > 1 else ""
+    if rowspan > 1 and shared_selected:
+        shared += ' style="background:#fde68a"'
     cells = (
         []
         if after
@@ -144,6 +147,11 @@ def render_details(
         if "collision_id" in events.columns
         else set()
     )
+    selected_collision = selected_event
+    if selected_event is not None and "collision_id" in events.columns:
+        selected = events.filter(events["id"] == selected_event)
+        if not selected.is_empty() and selected["collision_id"][0] is not None:
+            selected_collision = selected["collision_id"][0]
     for event in events.iter_rows(named=True):
         after = event.get("collision_id") is not None
         row_class = "explorer-event explorer-after" if after else "explorer-event"
@@ -158,6 +166,7 @@ def render_details(
                 clickable=True,
                 rowspan=2 if event["id"] in paired else 1,
                 after=after,
+                shared_selected=event["id"] == selected_collision,
             )
             + "</tr>"
         )

@@ -217,7 +217,9 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     viewport.text = "533,900"
     sidebars[2].children[0].children[0].active = True
     assert not sidebars[0].children[1].visible
-    assert sidebars[2].width == 250
+    assert sidebars[2].width is None
+    assert type(frame.children[0]).__name__ == "Column"
+    assert type(frame.children[0].children[1]).__name__ == "Column"
 
     plots = list(doc.select({"type": type(figure())}))
     event_plots = [p for p in plots if p.name == "events"]

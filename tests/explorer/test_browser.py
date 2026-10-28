@@ -6,7 +6,7 @@ import pytest
 from bokeh.document import Document
 from bokeh.embed import file_html
 from bokeh.resources import INLINE
-from playwright.sync_api import expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect
 
 from apitofresview.plotting.explorer import build_document, session
 
@@ -252,15 +252,16 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
             const legendView = view?.renderer_views.get(legend);
             return legendView?.bbox.top >= view.frame.bbox.bottom;
         }""")
-        for viewport in (width, 1920 if width == 640 else 640, width):
+        for viewport in (width, 320, 1920, width):
             page.set_viewport_size({"width": viewport, "height": 900})
             page.wait_for_function(
                 """columns => {
                 const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
                 return plot.below.find(m => m.type === 'Legend').ncols === columns;
             }""",
-                arg=1 if viewport == 640 else 2,
+                arg=1 if viewport == 320 else 2,
             )
+            assert_horizontal_fit(page)
         page.locator('.explorer-event[data-event="2"] td').first.click()
         page.wait_for_function("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
@@ -662,14 +663,21 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
         return right.width == null && Bokeh.index.find_one(right).el.getBoundingClientRect().width > 100;
     }""")
     geometry = bounds()
-    assert geometry["border"] == "0px"
+    assert geometry["border"] == ("1px" if width < 900 else "0px")
     assert not geometry["controls"]
     assert geometry["center"]["width"] == pytest.approx(
         geometry["right"]["width"], abs=2
     )
-    assert (
-        geometry["right"]["x"] >= geometry["center"]["x"] + geometry["center"]["width"]
-    )
+    if width < 900:
+        assert (
+            geometry["right"]["y"]
+            >= geometry["center"]["y"] + geometry["center"]["height"]
+        )
+    else:
+        assert (
+            geometry["right"]["x"]
+            >= geometry["center"]["x"] + geometry["center"]["width"]
+        )
     page.screenshot(path=str(tmp_path / f"details-right-{width}.png"))
     page.get_by_role("button", name="Bottom", exact=True).click()
     page.wait_for_function("""() => {
@@ -751,3 +759,109 @@ def test_paired_collision_rows_and_split_controls(monkeypatch, page):
             return !plot.renderers.some(r => r.data_source?.data.id?.includes(3));
         }""")
         expect(page.locator("#event-3")).to_have_count(1)
+
+
+def assert_horizontal_fit(page):
+    script = """() => {
+        const overflow = [];
+        function check(root) {
+            for (const el of root.querySelectorAll('*')) {
+                if (!el.checkVisibility()) continue;
+                // Canvas annotations and slider handles extend beyond internal anchors.
+                // Details tables intentionally scroll within their own wrapper.
+                if (!el.matches('.bk-CartesianFrame, .noUi-target, .noUi-base, .noUi-origin, [style="overflow-x:auto"]') &&
+                    el.clientWidth && el.scrollWidth > el.clientWidth + 1)
+                    overflow.push([el.tagName, el.className, el.clientWidth, el.scrollWidth]);
+                if (el.shadowRoot) check(el.shadowRoot);
+            }
+        }
+        check(document);
+        return overflow;
+    }"""
+    try:
+        page.wait_for_function(f"() => ({script})().length === 0", timeout=5000)
+    except PlaywrightTimeoutError:
+        pytest.fail(str(page.evaluate(script)))
+    page.wait_for_function("""() => {
+        const plots = Bokeh.documents[0].get_model_by_name('explorer_plots').children;
+        return plots.filter(p => p.name === 'events').every(p => p.inner_width >= 180);
+    }""")
+
+
+@pytest.mark.parametrize("width", [1440, 920, 704, 533, 375])
+def test_horizontal_fit(page, explorer_server, width, tmp_path):
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(explorer_server)
+    page.get_by_label("X coordinate").wait_for()
+    page.evaluate(
+        """width => {
+        const frame = Bokeh.index.find_one(Bokeh.documents[0].roots()[0]).el;
+        frame.parentElement.style.display = "block";
+        frame.parentElement.style.width = `${width - 32}px`;
+        frame.parentElement.style.margin = '0 16px';
+    }""",
+        width,
+    )
+
+    page.wait_for_function(
+        """width =>
+        Bokeh.documents[0].get_model_by_name('explorer_viewport').text.split(',')[0] === String(width - 32)
+    """,
+        arg=width,
+    )
+    assert_horizontal_fit(page)
+    if width == 1440:
+        page.get_by_role("button", name="Fullscreen", exact=True).click()
+        page.wait_for_function("() => document.fullscreenElement != null")
+        assert_horizontal_fit(page)
+        page.get_by_role("button", name="☷", exact=True).click()
+        page.get_by_role("button", name="Right (half width)", exact=True).click()
+        assert_horizontal_fit(page)
+        page.evaluate("() => document.exitFullscreen()")
+        page.wait_for_function("() => document.fullscreenElement == null")
+        expect(page.get_by_label("X coordinate")).to_be_visible()
+        assert_horizontal_fit(page)
+    page.get_by_text("Realizations pager", exact=True).click()
+    expect(
+        page.get_by_text("2 selected / 2 total realizations", exact=True)
+    ).to_be_visible()
+    assert_horizontal_fit(page)
+    page.get_by_text("Facet pathways", exact=True).click()
+    page.wait_for_function("""() => {
+        const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+        return plot?.title?.text.includes('(N=') && plot.inner_width > 0;
+    }""")
+    assert_horizontal_fit(page)
+    page.get_by_role("button", name="☷", exact=True).click()
+    page.evaluate("""() => {
+        const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+        const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+        source.selected.indices = [source.data.id.indexOf(1)];
+    }""")
+    expect(page.get_by_text("Realization #1", exact=True)).to_be_visible()
+    assert_horizontal_fit(page)
+    for layout in ("Right (half width)", "Bottom", "Right sidebar"):
+        page.get_by_role("button", name=layout, exact=True).click()
+        assert_horizontal_fit(page)
+    # Resize only the embedding container: the browser viewport stays wide.
+    for resized in (343, 1408, width - 32):
+        page.evaluate(
+            """width => {
+            const frame = Bokeh.index.find_one(Bokeh.documents[0].roots()[0]).el;
+            frame.parentElement.style.width = `${width}px`;
+        }""",
+            resized,
+        )
+        page.wait_for_function(
+            """width =>
+            Bokeh.documents[0].get_model_by_name('explorer_viewport').text.split(',')[0] === String(width)
+        """,
+            arg=resized,
+        )
+        assert_horizontal_fit(page)
+    page.get_by_role("button", name="»", exact=True).click()
+    expect(page.get_by_label("X coordinate")).to_be_visible()
+    assert_horizontal_fit(page)
+    page.get_by_role("button", name="« Controls", exact=True).click()
+    assert_horizontal_fit(page)
+    page.screenshot(path=str(tmp_path / f"responsive-{width}.png"), full_page=True)

@@ -77,7 +77,8 @@ def test_adapter_resolves_results_and_preserves_ids(
         (1,'5A_5SA_negative'),(2,'4A_5SA_negative'),(3,'1A_neutral');
         insert into pathway values (7,1,2,3);
         insert into experiment_config (id) values (1);
-        insert into experiment_run (id, experiment_config_id) values (1,1),(2,1);
+        insert into experiment_run (id, experiment_config_id, simulation_mode)
+        values (1,1,'SINGLE_CLUSTER'),(2,1,'SINGLE_CLUSTER');
         insert into multi_pathway_experiment_result (id,experiment_run_id,cluster_id)
         values (10,1,1),(11,2,1);
         insert into single_pathway_experiment_result (id,experiment_run_id,pathway_id)

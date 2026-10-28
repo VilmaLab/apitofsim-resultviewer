@@ -36,13 +36,19 @@ def browser_database(tmp_path_factory):
         db.db.execute("insert into experiment_config values (2, 'Other run', '{}')")
         db.db.execute(
             """
-            insert into experiment_run values
-            (1, 1, '{"simulation_mode": "SINGLE_CLUSTER", "label": "run"}',
+            insert into experiment_run
+            (id, experiment_config_id, simulation_mode, run_config, start_time) values
+            (1, 1, 'PATHWAY_AT_A_TIME',
+             '{"simulation_mode": "SINGLE_CLUSTER", "label": "run"}',
              '2026-01-02 03:04:05')
             """
         )
         db.db.execute(
-            "insert into experiment_run values (2, 2, '{}', '2026-01-03 03:04:05')"
+            """
+            insert into experiment_run
+            (id, experiment_config_id, simulation_mode, run_config, start_time) values
+            (2, 2, 'PATHWAY_AT_A_TIME', '{}', '2026-01-03 03:04:05')
+            """
         )
         db.db.execute(
             """

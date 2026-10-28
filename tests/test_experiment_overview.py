@@ -100,7 +100,9 @@ def test_multi_pathway_metadata_keeps_display_sorting_local():
             (1,'Heavy',100),(2,'Light Z',40),(3,'Light A',40);
             insert into pathway values (1,1,2,3),(2,2,1,3),(3,3,1,2);
             insert into experiment_config (id, name, config) values (1,'Multi','{}');
-            insert into experiment_run values (1,1,'{}','2026-01-02 03:04:05');
+            insert into experiment_run
+            (id, experiment_config_id, simulation_mode, run_config, start_time) values
+            (1,1,'SINGLE_CLUSTER','{}','2026-01-02 03:04:05');
             insert into multi_pathway_experiment_result (id,experiment_run_id,cluster_id)
             values (1,1,1),(2,1,2),(3,1,3);
             insert into pathway_fragmentation values (1,1,1,2),(2,2,2,2),(3,3,3,2);

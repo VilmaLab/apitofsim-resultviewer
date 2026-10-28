@@ -96,12 +96,12 @@ region annotations, and schematic. Preserve physical coordinates for details.
 Connecting a selected realization follows event-time order, even if its z
 coordinate reverses direction.
 
-| X mode | Mapping | Machine depiction | Regional bars | Escaped treatment |
-| --- | --- | --- | --- | --- |
-| Schematic (default) | Piecewise linear within fixed readable region widths | Aligned block diagram | Enabled | Shared terminal slot and CDF brace |
-| Equal regions | Piecewise linear, one unit per region | Aligned block diagram | Enabled | Shared terminal slot and CDF brace |
-| Physical distance | Raw axial z with physical units | Labeled boundary ticks; no block diagram | Disabled | Raw escape position; brace at right edge |
-| Elapsed time | Recorded event time relative to realization start | Disabled | Disabled | Raw escape time; no CDF escaped indicator |
+| X mode              | Mapping                                              | Machine depiction                        | Regional bars | Escaped treatment                         |
+| ------------------- | ---------------------------------------------------- | ---------------------------------------- | ------------- | ----------------------------------------- |
+| Schematic (default) | Piecewise linear within fixed readable region widths | Aligned block diagram                    | Enabled       | Shared terminal slot and CDF brace        |
+| Equal regions       | Piecewise linear, one unit per region                | Aligned block diagram                    | Enabled       | Shared terminal slot and CDF brace        |
+| Physical distance   | Raw axial z with physical units                      | Labeled boundary ticks; no block diagram | Disabled      | Raw escape position; brace at right edge  |
+| Elapsed time        | Recorded event time relative to realization start    | Disabled                                 | Disabled      | Raw escape time; no CDF escaped indicator |
 
 Choose explicit schematic width weights in one constant (initially
 `[2, 1, 1, 3, 2]` for the five existing geometry intervals). Obtain region names

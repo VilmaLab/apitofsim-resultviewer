@@ -6,9 +6,9 @@ import "@alenaksu/json-viewer";
 import { TabulatorFull as Tabulator } from "tabulator-tables";
 
 declare global {
-    var Alpine: typeof AlpineModule;
-    var htmx: typeof HtmxModule;
-    var Tabulator: typeof import("tabulator-tables").TabulatorFull;
+  var Alpine: typeof AlpineModule;
+  var htmx: typeof HtmxModule;
+  var Tabulator: typeof import("tabulator-tables").TabulatorFull;
 }
 
 window.htmx = HtmxModule;
@@ -21,20 +21,20 @@ AlpineModule.start();
 // Report rows are loaded a page at a time; the server applies sorting before
 // returning each page so column sorting always covers the complete report.
 window.addEventListener("DOMContentLoaded", () => {
-    const el = document.querySelector<HTMLElement>("#report-table");
-    if (el && el.dataset.url) {
-        new Tabulator(el, {
-            ajaxURL: el.dataset.url,
-            autoColumns: true,
-            columnDefaults: {
-                maxWidth: 320,
-                tooltip: true,
-            },
-            pagination: true,
-            paginationMode: "remote",
-            paginationSize: 40,
-            paginationCounter: "rows",
-            sortMode: "remote",
-        });
-    }
+  const el = document.querySelector<HTMLElement>("#report-table");
+  if (el && el.dataset.url) {
+    new Tabulator(el, {
+      ajaxURL: el.dataset.url,
+      autoColumns: true,
+      columnDefaults: {
+        maxWidth: 320,
+        tooltip: true,
+      },
+      pagination: true,
+      paginationMode: "remote",
+      paginationSize: 40,
+      paginationCounter: "rows",
+      sortMode: "remote",
+    });
+  }
 });

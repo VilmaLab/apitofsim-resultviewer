@@ -21,4 +21,4 @@
   full explorer (including controls and range selector) as the fullscreen target.
 - Browser checks were attempted through the project's Playwright suite. Its
   Chromium binary exits during sandbox initialization with `Operation not
-  permitted`, so interactive behavior remains unverified in this environment.
+permitted`, so interactive behavior remains unverified in this environment.

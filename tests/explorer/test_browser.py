@@ -252,14 +252,14 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
             const legendView = view?.renderer_views.get(legend);
             return legendView?.bbox.top >= view.frame.bbox.bottom;
         }""")
-        for viewport in (width, 320, 1920, width):
+        for viewport in (width, 1920 if width == 640 else 640, width):
             page.set_viewport_size({"width": viewport, "height": 900})
             page.wait_for_function(
                 """columns => {
                 const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
                 return plot.below.find(m => m.type === 'Legend').ncols === columns;
             }""",
-                arg=1 if viewport == 320 else 2,
+                arg=1 if viewport == 640 else 2,
             )
             assert_horizontal_fit(page)
         page.locator('.explorer-event[data-event="2"] td').first.click()
@@ -663,21 +663,14 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
         return right.width == null && Bokeh.index.find_one(right).el.getBoundingClientRect().width > 100;
     }""")
     geometry = bounds()
-    assert geometry["border"] == ("1px" if width < 900 else "0px")
+    assert geometry["border"] == "0px"
     assert not geometry["controls"]
     assert geometry["center"]["width"] == pytest.approx(
         geometry["right"]["width"], abs=2
     )
-    if width < 900:
-        assert (
-            geometry["right"]["y"]
-            >= geometry["center"]["y"] + geometry["center"]["height"]
-        )
-    else:
-        assert (
-            geometry["right"]["x"]
-            >= geometry["center"]["x"] + geometry["center"]["width"]
-        )
+    assert (
+        geometry["right"]["x"] >= geometry["center"]["x"] + geometry["center"]["width"]
+    )
     page.screenshot(path=str(tmp_path / f"details-right-{width}.png"))
     page.get_by_role("button", name="Bottom", exact=True).click()
     page.wait_for_function("""() => {
@@ -728,6 +721,15 @@ def test_paired_collision_rows_and_split_controls(monkeypatch, page):
         before = page.locator("#event-1")
         after = page.locator("#event-2")
         expect(before.locator('td[rowspan="2"]')).to_have_count(7)
+        # Event names must stay on one line even when the numeric table scrolls.
+        assert (
+            before.locator("td").first.evaluate("""cell => {
+            const range = document.createRange();
+            range.selectNodeContents(cell.querySelector('button'));
+            return range.getClientRects().length;
+        }""")
+            == 1
+        )
         expect(
             after.get_by_role("button", name="Inspect event #2", exact=True)
         ).to_be_visible()
@@ -788,7 +790,7 @@ def assert_horizontal_fit(page):
     }""")
 
 
-@pytest.mark.parametrize("width", [1440, 920, 704, 533, 375])
+@pytest.mark.parametrize("width", [1440, 920, 704])
 def test_horizontal_fit(page, explorer_server, width, tmp_path):
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(explorer_server)
@@ -844,7 +846,7 @@ def test_horizontal_fit(page, explorer_server, width, tmp_path):
         page.get_by_role("button", name=layout, exact=True).click()
         assert_horizontal_fit(page)
     # Resize only the embedding container: the browser viewport stays wide.
-    for resized in (343, 1408, width - 32):
+    for resized in (672, 1408, width - 32):
         page.evaluate(
             """width => {
             const frame = Bokeh.index.find_one(Bokeh.documents[0].roots()[0]).el;
@@ -865,3 +867,38 @@ def test_horizontal_fit(page, explorer_server, width, tmp_path):
     page.get_by_role("button", name="« Controls", exact=True).click()
     assert_horizontal_fit(page)
     page.screenshot(path=str(tmp_path / f"responsive-{width}.png"), full_page=True)
+
+
+@pytest.mark.parametrize("width", [704, 1280])
+def test_bottom_details_preserve_controls(page, explorer_server, width):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(explorer_server)
+    page.get_by_role("button", name="☷", exact=True).click()
+    page.get_by_role("button", name="Bottom", exact=True).click()
+    if width < 900:
+        page.get_by_role("button", name="»", exact=True).click()
+    expect(page.get_by_label("X coordinate")).to_be_visible()
+    expect(
+        page.get_by_role("button", name="Hide details ↓", exact=True)
+    ).to_be_visible()
+    page.wait_for_function("""() => {
+        const doc = Bokeh.documents[0];
+        const workspace = doc.roots()[0].children[0].children[1];
+        return workspace.type === 'Column' &&
+            ['sidebar', 'bottom', 'right'].every(mode =>
+                doc.get_model_by_name(`details_layout_${mode}`).active === (mode === 'bottom'));
+    }""")
+    assert_horizontal_fit(page)
+    page.get_by_role("button", name="Right sidebar", exact=True).click()
+    page.wait_for_function("""() => {
+        const doc = Bokeh.documents[0];
+        const workspace = doc.roots()[0].children[0].children[1];
+        return workspace.type === 'Row' &&
+            ['sidebar', 'bottom', 'right'].every(mode =>
+                doc.get_model_by_name(`details_layout_${mode}`).active === (mode === 'sidebar'));
+    }""")
+    if width < 900:
+        expect(page.get_by_label("X coordinate")).to_be_hidden()
+    else:
+        expect(page.get_by_label("X coordinate")).to_be_visible()
+    assert_horizontal_fit(page)

@@ -135,15 +135,12 @@ def build_document(db, doc, experiment: int, cluster: int):
         mode = state["details_layout"][full]
         if mode == "sidebar":
             ui.show_rates.active = []
-        width = int(ui.viewport_width.text.split(",")[0])
-        narrow = width < 900
-        stacked = width < 600
-        # Keep a usable plot beside the details, or put details below it.
-        bottom = right_open and (mode == "bottom" or narrow)
+        bottom = right_open and mode == "bottom"
         ui.right.styles = (
             {"border-top": "1px solid #cbd5e1", "padding-top": "8px"} if bottom else {}
         )
-        if narrow and left_open and right_open:
+        narrow = int(ui.viewport_width.text.split(",")[0]) < 900
+        if narrow and left_open and right_open and not bottom:
             left_open = False
             state["sidebar"][full][0] = False
         state["syncing_sidebar"] = True
@@ -155,19 +152,12 @@ def build_document(db, doc, experiment: int, cluster: int):
         finally:
             state["syncing_sidebar"] = False
         ui.left_controls.visible, ui.right_controls.visible = left_open, right_open
-        ui.left.sizing_mode = "stretch_width" if stacked else "fixed"
-        ui.left.width = None if stacked else (205 if left_open else 38)
-        if stacked != isinstance(ui.body, Column):
-            layout = column if stacked else row
-            ui.body = layout(
-                ui.left, ui.workspace, sizing_mode="stretch_width", spacing=6
-            )
-            ui.frame.children[0] = ui.body
-        ui.right.width = 300 if right_open else 38
+        ui.left.width = 205 if left_open else 38
+        ui.right.width = (250 if narrow else 300) if right_open else 38
         ui.right.sizing_mode = (
-            "stretch_width" if right_open and (bottom or mode != "sidebar") else "fixed"
+            "stretch_width" if right_open and mode != "sidebar" else "fixed"
         )
-        if right_open and (bottom or mode != "sidebar"):
+        if right_open and mode != "sidebar":
             ui.right.width = None
         if bottom != isinstance(ui.workspace, Column):
             layout = column if bottom else row
@@ -198,10 +188,17 @@ def build_document(db, doc, experiment: int, cluster: int):
             return
         full = ui.fullscreen_state.text == "full"
         state["sidebar"][full][index] = active
-        if (index == 0 and active) or index == 1:
+        if (
+            index == 0 and active and state["details_layout"][full] != "bottom"
+        ) or index == 1:
             state["details_layout"][full] = "sidebar"
         # On narrow screens, opening controls should keep them visible.
-        if index == 0 and active and int(ui.viewport_width.text.split(",")[0]) < 900:
+        if (
+            index == 0
+            and active
+            and state["details_layout"][full] != "bottom"
+            and int(ui.viewport_width.text.split(",")[0]) < 900
+        ):
             state["sidebar"][full][1] = False
         apply_sidebars(full)
 
@@ -213,7 +210,7 @@ def build_document(db, doc, experiment: int, cluster: int):
             return
         full = ui.fullscreen_state.text == "full"
         state["details_layout"][full] = mode
-        if mode != "sidebar":
+        if mode == "right":
             state["sidebar"][full][0] = False
         apply_sidebars(full)
 
@@ -568,12 +565,15 @@ def build_document(db, doc, experiment: int, cluster: int):
         if right_edge <= left_edge:
             right_edge = left_edge + 1
         screen_width = int(ui.viewport_width.text.split(",")[0])
-        available_width = screen_width - (ui.left.width or 0)
-        if not isinstance(ui.workspace, Column):
-            if ui.right.sizing_mode == "stretch_width":
+        available_width = screen_width - ui.left.width
+        if state["sidebar"][ui.fullscreen_state.text == "full"][1]:
+            mode = state["details_layout"][ui.fullscreen_state.text == "full"]
+            if mode == "right":
                 available_width /= 2
-            else:
+            elif mode == "sidebar":
                 available_width -= ui.right.width
+        else:
+            available_width -= ui.right.width
         plot_height = event_plot_height()
         margin = (right_edge - left_edge) * 0.015
         shared_x = Range1d(

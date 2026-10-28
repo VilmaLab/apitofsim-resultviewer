@@ -31,6 +31,14 @@ CHECKBOX_CSS = """
 """
 
 
+SCROLL_STYLES = {
+    "min-height": "0",
+    "min-width": "0",
+    "overflow": "auto",
+    "overscroll-behavior": "contain",
+}
+
+
 @dataclass
 class Controls:
     """Widgets and containers shared with the session callbacks."""
@@ -217,6 +225,7 @@ def create_controls(
         disabled=total == 0,
         sizing_mode="stretch_width",
         height=50,
+        margin=(5, 10),
         visible=False,
     )
     details = Div(
@@ -337,7 +346,7 @@ def create_controls(
             "Rates", column(log_rates, show_readoffs, spacing=4), name="sidebar_rates"
         ),
         spacing=4,
-        styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
+        styles=SCROLL_STYLES,
     )
     right_controls = column(
         details,
@@ -345,7 +354,7 @@ def create_controls(
         summarise_energy,
         show_rates,
         rate_controls,
-        styles={"max-height": "calc(100vh - 295px)", "overflow-y": "auto"},
+        styles=SCROLL_STYLES,
     )
     left_toggle = Toggle(
         label="« Controls", active=True, width=100, height=32, margin=0
@@ -358,7 +367,9 @@ def create_controls(
         height=32,
         html_attributes={"title": "Show selected realization"},
     )
-    left = column(left_toggle, left_controls, width=205, spacing=4)
+    left = column(
+        left_toggle, left_controls, width=205, spacing=4, styles={"height": "100%"}
+    )
     detail_layouts = {
         mode: Toggle(
             label=title,
@@ -387,7 +398,13 @@ def create_controls(
         )
     }
     details_header = row(right_toggle, *detail_layouts.values(), spacing=2, margin=0)
-    right = column(details_header, right_controls, width=38, spacing=4)
+    right = column(
+        details_header,
+        right_controls,
+        width=38,
+        spacing=4,
+        styles={"height": "100%", "min-height": "0", "min-width": "0"},
+    )
     right_controls.visible = False
     center_plots = column(sizing_mode="stretch_width", spacing=0, name="explorer_plots")
     center = column(
@@ -398,9 +415,23 @@ def create_controls(
         sizing_mode="stretch_width",
         spacing=2,
         css_classes=["explorer-center"],
+        styles={**SCROLL_STYLES, "flex": "1"},
+        stylesheets=[InlineStyleSheet(css=":host > * { flex-shrink: 0; }")],
     )
-    workspace = row(center, right, sizing_mode="stretch_width", spacing=6)
-    body = row(left, workspace, sizing_mode="stretch_width", spacing=6)
+    workspace = row(
+        center,
+        right,
+        sizing_mode="stretch_width",
+        spacing=6,
+        styles={"height": "100%", "min-height": "0", "min-width": "0"},
+    )
+    body = row(
+        left,
+        workspace,
+        sizing_mode="stretch_width",
+        spacing=6,
+        styles={"height": "100%", "min-height": "0", "min-width": "0"},
+    )
     frame = column(
         body,
         detail_bridge,
@@ -409,13 +440,17 @@ def create_controls(
         sizing_mode="stretch_width",
         spacing=4,
         css_classes=["explorer-bokeh-frame"],
+        styles={
+            "height": "calc(100dvh - var(--explorer-top, 0px) - 6px)",
+            "overflow": "hidden",
+        },
         stylesheets=[
             InlineStyleSheet(
                 css="""
                        :host { background: white; }
                        :host(:fullscreen) {
                            width: 100vw !important; height: 100vh !important;
-                           overflow: auto; padding: 6px; box-sizing: border-box;
+                           overflow: hidden; padding: 6px; box-sizing: border-box;
                        }
                    """
             )
@@ -447,6 +482,7 @@ def create_controls(
             code="""
         const view = Bokeh.index.find_one(frame);
         const update = () => {
+            view.el.style.setProperty('--explorer-top', `${view.el.getBoundingClientRect().top}px`);
             const available = Math.floor(view.el.getBoundingClientRect().width);
             if (available > 0) width.text = `${available},${window.innerHeight}`;
         };
@@ -454,6 +490,8 @@ def create_controls(
         observer.observe(view.el);
         update();
         window.addEventListener('resize', update);
+        document.addEventListener('fullscreenchange', update);
+        observer.observe(document.getElementById('content') ?? document.body);
         // Layout changes rebuild the details view, so delegate from the stable frame.
         view.el.addEventListener('click', event => {
             const path = event.composedPath().filter(node => node instanceof Element);

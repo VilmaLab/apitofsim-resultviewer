@@ -137,7 +137,15 @@ def build_document(db, doc, experiment: int, cluster: int):
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
         ui.right.styles = (
-            {"border-top": "1px solid #cbd5e1", "padding-top": "8px"} if bottom else {}
+            {
+                "border-top": "1px solid #cbd5e1",
+                "padding-top": "8px",
+                "max-height": "50%",
+                "flex-shrink": "0",
+                "box-sizing": "border-box",
+            }
+            if bottom
+            else {"height": "100%", "min-height": "0", "min-width": "0"}
         )
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
         if narrow and left_open and right_open and not bottom:
@@ -162,17 +170,13 @@ def build_document(db, doc, experiment: int, cluster: int):
         if bottom != isinstance(ui.workspace, Column):
             layout = column if bottom else row
             ui.workspace = layout(
-                ui.center, ui.right, sizing_mode="stretch_width", spacing=6
+                ui.center,
+                ui.right,
+                sizing_mode="stretch_width",
+                spacing=6,
+                styles={"height": "100%", "min-height": "0", "min-width": "0"},
             )
             ui.body.children = [ui.left, ui.workspace]
-        ui.right_controls.styles = (
-            {}
-            if bottom
-            else {
-                "max-height": "calc(100vh - 46px)" if full else "calc(100vh - 295px)",
-                "overflow-y": "auto",
-            }
-        )
         ui.left_toggle.width, ui.right_toggle.width = (
             (100 if left_open else 38),
             (110 if right_open else 38),
@@ -220,13 +224,6 @@ def build_document(db, doc, experiment: int, cluster: int):
         )
 
     def full_changed(attr, old, new):
-        sidebar_height = (
-            "calc(100vh - 46px)" if new == "full" else "calc(100vh - 295px)"
-        )
-        ui.left_controls.styles = {
-            **ui.left_controls.styles,
-            "max-height": sidebar_height,
-        }
         apply_sidebars(new == "full")
 
     ui.fullscreen_state.on_change("text", full_changed)

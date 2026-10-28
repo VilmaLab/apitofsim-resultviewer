@@ -210,7 +210,7 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
     fullscreen.text = "full"
     assert not sidebars[0].children[1].visible and not sidebars[2].children[1].visible
-    assert "46px" in sidebars[0].children[1].styles["max-height"]
+    assert sidebars[0].styles["height"] == "100%"
     fullscreen.text = "normal"
     assert sidebars[0].children[1].visible and not sidebars[2].children[1].visible
     viewport = next(d for d in doc.select({"type": Div}) if d.text == "1440,900")
@@ -1249,7 +1249,10 @@ def test_details_layout_transitions(monkeypatch, mode):
     assert ("border-top" in right.styles) == (mode == "bottom")
     assert right.sizing_mode == "stretch_width" and right.width is None
     assert type(body.children[1]).__name__ == ("Column" if mode == "bottom" else "Row")
-    assert ("max-height" in right.children[1].styles) == (mode != "bottom")
+    if mode == "bottom":
+        assert right.styles["max-height"] == "50%"
+    else:
+        assert right.styles["height"] == "100%"
     # Clicking the selected layout again keeps it selected.
     layouts[mode].active = False
     assert layouts[mode].active

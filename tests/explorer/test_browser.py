@@ -751,3 +751,132 @@ def test_paired_collision_rows_and_split_controls(monkeypatch, page):
             return !plot.renderers.some(r => r.data_source?.data.id?.includes(3));
         }""")
         expect(page.locator("#event-3")).to_have_count(1)
+
+
+@pytest.mark.parametrize(
+    "width,fullscreen", [(640, False), (1280, False), (1280, True)]
+)
+def test_explorer_panels_scroll_independently(page, explorer_server, width, fullscreen):
+    page.set_viewport_size({"width": width, "height": 700})
+    page.goto(explorer_server)
+    if fullscreen:
+        page.get_by_role("button", name="Fullscreen", exact=True).click()
+        page.get_by_role("button", name="»", exact=True).click()
+    else:
+        # Account for the application's navigation above the embedded explorer.
+        page.evaluate("""document.body.style.cssText =
+            'margin: 0; padding: 120px 6px 6px; box-sizing: border-box;'""")
+    page.get_by_text("Cumulative", exact=True).click()
+    page.get_by_text("Bar chart", exact=True).click()
+    page.get_by_role("button", name="☷", exact=True).click()
+
+    geometry = """() => {
+        const frame = Bokeh.documents[0].roots()[0];
+        const [left, workspace] = frame.children[0].children;
+        const [center, right] = workspace.children;
+        const el = model => Bokeh.index.find_one(model).el;
+        const rect = model => el(model).getBoundingClientRect();
+        return {frameBottom: rect(frame).bottom, workspaceHeight: rect(workspace).height,
+            workspaceBottom: rect(workspace).bottom,
+            bottom: rect(right).bottom, height: rect(right).height,
+            centerBottom: rect(center).bottom, centerHeight: el(center).clientHeight,
+            centerContent: el(center).scrollHeight, plotScroll: el(center).scrollTop,
+            detailHeight: el(right.children[1]).clientHeight,
+            detailContent: el(right.children[1]).scrollHeight,
+            detailScroll: el(right.children[1]).scrollTop,
+            leftTop: rect(left).top, pageScroll: window.scrollY};
+    }"""
+
+    def set_details(html):
+        page.evaluate(
+            """html => {
+            const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+            right.children[1].children[0].text = html;
+        }""",
+            html,
+        )
+
+    set_details('<div style="height: 1600px; width: 1200px">Long details</div>')
+    for layout in ("Right sidebar", "Right (half width)", "Bottom"):
+        page.get_by_role("button", name=layout, exact=True).click()
+        page.wait_for_function(
+            """layout => {
+                const workspace = Bokeh.documents[0].roots()[0].children[0].children[1];
+                const [center, right] = workspace.children;
+                const el = model => Bokeh.index.find_one(model)?.el;
+                const bottom = layout === 'Bottom';
+                if ((workspace.type === 'Column') !== bottom) return false;
+                if ((right.width != null) !== (layout === 'Right sidebar')) return false;
+                if (!el(center) || !el(right)) return false;
+                return el(center).scrollHeight > el(center).clientHeight &&
+                    (!bottom || Math.abs(el(right).getBoundingClientRect().bottom -
+                        el(workspace).getBoundingClientRect().bottom) <= 1);
+            }""",
+            arg=layout,
+        )
+        page.wait_for_function("""() => {
+            const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+            const el = Bokeh.index.find_one(right.children[1]).el;
+            return el.scrollHeight > el.clientHeight;
+        }""")
+        before = page.evaluate(geometry)
+        assert before["frameBottom"] <= 700
+        assert before["centerBottom"] <= before["frameBottom"] + 1
+        page.evaluate("""() => {
+            const center = Bokeh.documents[0].roots()[0].children[0].children[1].children[0];
+            Bokeh.index.find_one(center).el.scrollTop = 20;
+        }""")
+        after = page.evaluate(geometry)
+        assert after["plotScroll"] == 20
+        for key in ("bottom", "leftTop", "detailScroll", "pageScroll"):
+            assert after[key] == before[key]
+
+        page.evaluate("""() => {
+            const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+            Bokeh.index.find_one(right.children[1]).el.scrollTop = 40;
+        }""")
+        details_scrolled = page.evaluate(geometry)
+        assert details_scrolled["detailScroll"] == 40
+        assert details_scrolled["plotScroll"] == after["plotScroll"]
+        assert details_scrolled["pageScroll"] == after["pageScroll"]
+        assert page.evaluate("""() => {
+            const root = document.scrollingElement;
+            return root.scrollHeight <= innerHeight && root.scrollWidth <= innerWidth;
+        }""")
+
+    set_details("Short details")
+    page.wait_for_function("""() => {
+        const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+        return Bokeh.index.find_one(right).el.getBoundingClientRect().height < 150;
+    }""")
+    short = page.evaluate(geometry)
+    assert short["bottom"] == pytest.approx(short["workspaceBottom"], abs=1)
+    set_details('<div style="height: 1600px">Long details</div>')
+    page.wait_for_function("""() => {
+        const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+        const el = Bokeh.index.find_one(right.children[1]).el;
+        return el.scrollHeight > el.clientHeight;
+    }""")
+    long = page.evaluate(geometry)
+    assert long["height"] == pytest.approx(long["workspaceHeight"] / 2, abs=1)
+    assert long["bottom"] == pytest.approx(short["bottom"], abs=1)
+    page.evaluate("""() => {
+        const right = Bokeh.documents[0].roots()[0].children[0].children[1].children[1];
+        Bokeh.index.find_one(right.children[1]).el.scrollTop = 20;
+    }""")
+    scrolled = page.evaluate(geometry)
+    assert scrolled["detailScroll"] == 20
+    assert scrolled["plotScroll"] == long["plotScroll"]
+    assert scrolled["pageScroll"] == long["pageScroll"]
+    if fullscreen:
+        page.evaluate("document.exitFullscreen()")
+        page.wait_for_function("document.fullscreenElement === null")
+        page.get_by_role("button", name="☷", exact=True).click()
+        page.get_by_role("button", name="Bottom", exact=True).click()
+    page.set_viewport_size({"width": width, "height": 600})
+    page.wait_for_function("""() => {
+        const frame = Bokeh.documents[0].roots()[0];
+        const right = frame.children[0].children[1].children[1];
+        const rect = model => Bokeh.index.find_one(model).el.getBoundingClientRect();
+        return rect(frame).bottom <= 600 && Math.abs(rect(right).bottom - rect(frame.children[0].children[1]).bottom) <= 1;
+    }""")

@@ -217,6 +217,7 @@ def create_controls(
         disabled=total == 0,
         sizing_mode="stretch_width",
         height=50,
+        margin=(5, 10),
         visible=False,
     )
     details = Div(

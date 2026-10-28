@@ -84,7 +84,7 @@ class Controls:
     right: Column
     center: Column
     workspace: Row | Column
-    body: Row | Column
+    body: Row
     center_plots: Column
     frame: Column
 
@@ -225,10 +225,12 @@ def create_controls(
         stylesheets=[
             InlineStyleSheet(
                 css="""
-                :host { color: #1f2937; overflow-wrap: anywhere; }
+                :host { color: #1f2937; }
+                .bk-clearfix { width: 100%; }
                 table { width: 100%; border-collapse: collapse; }
                 th, td { padding: 6px 4px; border-bottom: 1px solid #ddd; }
                 th { text-align: left; }
+                td:first-child { white-space: nowrap; }
                 td:not(:first-child) { text-align: right; white-space: nowrap; }
                 .explorer-after td { text-align: right; white-space: nowrap; }
                 .explorer-choice td:nth-child(2) { text-align: left; }

@@ -148,7 +148,7 @@ def build_document(db, doc, experiment: int, cluster: int):
             else {"height": "100%", "min-height": "0", "min-width": "0"}
         )
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
-        if narrow and left_open and right_open:
+        if narrow and left_open and right_open and not bottom:
             left_open = False
             state["sidebar"][full][0] = False
         state["syncing_sidebar"] = True
@@ -178,8 +178,8 @@ def build_document(db, doc, experiment: int, cluster: int):
             )
             ui.body.children = [ui.left, ui.workspace]
         ui.left_toggle.width, ui.right_toggle.width = (
-            (100 if left_open else 32),
-            (110 if right_open else 32),
+            (100 if left_open else 38),
+            (110 if right_open else 38),
         )
         ui.left_toggle.label = "« Controls" if left_open else "»"
         ui.right_toggle.label = (
@@ -192,10 +192,17 @@ def build_document(db, doc, experiment: int, cluster: int):
             return
         full = ui.fullscreen_state.text == "full"
         state["sidebar"][full][index] = active
-        if (index == 0 and active) or index == 1:
+        if (
+            index == 0 and active and state["details_layout"][full] != "bottom"
+        ) or index == 1:
             state["details_layout"][full] = "sidebar"
         # On narrow screens, opening controls should keep them visible.
-        if index == 0 and active and int(ui.viewport_width.text.split(",")[0]) < 900:
+        if (
+            index == 0
+            and active
+            and state["details_layout"][full] != "bottom"
+            and int(ui.viewport_width.text.split(",")[0]) < 900
+        ):
             state["sidebar"][full][1] = False
         apply_sidebars(full)
 
@@ -207,7 +214,7 @@ def build_document(db, doc, experiment: int, cluster: int):
             return
         full = ui.fullscreen_state.text == "full"
         state["details_layout"][full] = mode
-        if mode != "sidebar":
+        if mode == "right":
             state["sidebar"][full][0] = False
         apply_sidebars(full)
 

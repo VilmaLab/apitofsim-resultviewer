@@ -1245,7 +1245,7 @@ def test_details_layout_transitions(monkeypatch, mode):
     toggle.active = True
     assert layouts["sidebar"].active
     layouts[mode].active = True
-    assert not left.children[1].visible
+    assert left.children[1].visible == (mode == "bottom")
     assert ("border-top" in right.styles) == (mode == "bottom")
     assert right.sizing_mode == "stretch_width" and right.width is None
     assert type(body.children[1]).__name__ == ("Column" if mode == "bottom" else "Row")
@@ -1273,8 +1273,9 @@ def test_details_layout_transitions(monkeypatch, mode):
     assert right.width == 300 and layouts["sidebar"].active
     layouts[mode].active = True
     left.children[0].active = True
-    assert left.children[1].visible and layouts["sidebar"].active
-    assert right.width == 300
+    assert left.children[1].visible
+    assert layouts["bottom" if mode == "bottom" else "sidebar"].active
+    assert right.width == (None if mode == "bottom" else 300)
     assert body.children[1].children == [center, right]
 
 

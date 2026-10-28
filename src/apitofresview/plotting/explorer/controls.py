@@ -144,8 +144,8 @@ def create_controls(
         f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
         for i, name in enumerate(fate_names)
     )
-    counts = Div(styles={"white-space": "nowrap"})
-    quality = Div()
+    counts = Div(sizing_mode="stretch_width", styles={"overflow-wrap": "anywhere"})
+    quality = Div(sizing_mode="stretch_width")
     fate = CheckboxGroup(
         labels=fate_names,
         active=list(range(len(fate_names))),
@@ -210,6 +210,14 @@ def create_controls(
     show_pager = checkbox("Realizations pager")
     selector = RangeSlider(
         title="Realization IDs (inclusive index range)",
+        stylesheets=[
+            InlineStyleSheet(
+                css="""
+            .bk-input-group { box-sizing: border-box; padding-inline: 8px; }
+            .bk-slider-title { white-space: normal; }
+        """
+            )
+        ],
         start=1,
         end=max(total, 1),
         step=1,
@@ -227,9 +235,11 @@ def create_controls(
             InlineStyleSheet(
                 css="""
                 :host { color: #1f2937; }
+                .bk-clearfix { width: 100%; }
                 table { width: 100%; border-collapse: collapse; }
                 th, td { padding: 6px 4px; border-bottom: 1px solid #ddd; }
                 th { text-align: left; }
+                td:first-child { white-space: nowrap; }
                 td:not(:first-child) { text-align: right; white-space: nowrap; }
                 .explorer-after td { text-align: right; white-space: nowrap; }
                 .explorer-choice td:nth-child(2) { text-align: left; }
@@ -292,7 +302,7 @@ def create_controls(
     )
     detail_bridge = Div(text="", visible=False)
     fullscreen_state = Div(text="normal", visible=False)
-    viewport_width = Div(text="1440,900", visible=False)
+    viewport_width = Div(text="1440,900", visible=False, name="explorer_viewport")
     fullscreen_button = Button(
         label="Fullscreen",
         icon=BuiltinIcon("fullscreen"),
@@ -346,9 +356,12 @@ def create_controls(
         rate_controls,
         styles=SCROLL_STYLES,
     )
-    left_toggle = Toggle(label="« Controls", active=True, width=100, height=32)
+    left_toggle = Toggle(
+        label="« Controls", active=True, width=100, height=32, margin=0
+    )
     right_toggle = Toggle(
         label="☷",
+        margin=0,
         active=False,
         width=36,
         height=32,
@@ -384,7 +397,7 @@ def create_controls(
             ("right", "M10 2h8v16h-8z", "Right (half width)"),
         )
     }
-    details_header = row(right_toggle, *detail_layouts.values(), spacing=2)
+    details_header = row(right_toggle, *detail_layouts.values(), spacing=2, margin=0)
     right = column(
         details_header,
         right_controls,
@@ -470,12 +483,15 @@ def create_controls(
         const view = Bokeh.index.find_one(frame);
         const update = () => {
             view.el.style.setProperty('--explorer-top', `${view.el.getBoundingClientRect().top}px`);
-            width.text = `${window.innerWidth},${window.innerHeight}`;
+            const available = Math.floor(view.el.getBoundingClientRect().width);
+            if (available > 0) width.text = `${available},${window.innerHeight}`;
         };
+        const observer = new ResizeObserver(update);
+        observer.observe(view.el);
         update();
         window.addEventListener('resize', update);
         document.addEventListener('fullscreenchange', update);
-        new ResizeObserver(update).observe(document.getElementById('content') ?? document.body);
+        observer.observe(document.getElementById('content') ?? document.body);
         // Layout changes rebuild the details view, so delegate from the stable frame.
         view.el.addEventListener('click', event => {
             const path = event.composedPath().filter(node => node instanceof Element);

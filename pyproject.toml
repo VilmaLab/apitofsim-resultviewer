@@ -1,6 +1,6 @@
 [project]
 name = "apitofsim-resultviewer"
-version = "0.2.0"
+version = "0.3.0"
 description = "Read-only web viewer for APi-ToF simulation results"
 readme = "README.md"
 requires-python = ">=3.14"

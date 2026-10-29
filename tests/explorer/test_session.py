@@ -1224,7 +1224,7 @@ def test_beeswarm_reuses_preparation_until_cohort_or_coordinates_change(monkeypa
     assert packs[-1] is preparations[-1]
 
 
-@pytest.mark.parametrize("layout", ["viewport", "page"])
+@pytest.mark.parametrize("layout", ["viewport", "page", "contained"])
 @pytest.mark.parametrize("mode", ["bottom", "right"])
 def test_details_layout_transitions(monkeypatch, mode, layout):
     frames = cohort([1], event(1, "escape", 1, 1, 5))
@@ -1266,6 +1266,8 @@ def test_details_layout_transitions(monkeypatch, mode, layout):
     toggle.active = True
     layouts["right" if mode == "bottom" else "bottom"].active = True
     fullscreen.text = "normal"
+    if layout == "contained":
+        assert doc.roots[0].styles["height"] == "100%"
     assert toggle.active and layouts[mode].active
     assert doc.select_one({"name": "events"}) is chart
     assert (chart.x_range.start, chart.x_range.end) == (1, 2)
@@ -1358,7 +1360,7 @@ def test_postcollision_never_enters_explorer_sources(monkeypatch, layout):
             assert set(source.data["id"]).isdisjoint({2, 5})
 
 
-@pytest.mark.parametrize("layout", ["viewport", "page"])
+@pytest.mark.parametrize("layout", ["viewport", "page", "contained"])
 def test_explorer_entry_point_passes_layout(monkeypatch, layout):
     from types import SimpleNamespace
 

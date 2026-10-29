@@ -52,18 +52,81 @@ apitofresview
 
 ## Embedding the Explorer
 
-Use `explorer_bokeh(db, doc, layout="page")` from `apitofresview.webapp` for an
-Explorer embedded in a page or an iframe that resizes to its content. The default
-`layout="viewport"` fits the standalone viewer to the viewport and scrolls its
-panels independently. Page layout uses intrinsic content height and lets controls,
-plots, and details grow in document flow. Fullscreen temporarily uses viewport
-layout and restores the chosen policy on exit.
+Both `explorer_bokeh(db, doc, layout=...)` from `apitofresview.webapp` and
+`build_document(db, doc, experiment, cluster, layout=...)` from
+`apitofresview.plotting.explorer` accept three policies:
 
-The same option is available on `build_document(db, doc, experiment, cluster,
-layout="page")` from `apitofresview.plotting.explorer`. Stable CSS classes identify
-`.explorer-bokeh-frame`, `.explorer-controls`, `.explorer-center`,
-`.explorer-plots`, and `.explorer-details`. Bokeh regions may be inside shadow
-roots. The embedding host remains responsible for resizing its iframe.
+- `"viewport"` (default): fills the remaining document viewport below the Explorer,
+  with independent scrolling for controls, plots, and details.
+- `"contained"`: fills a definitely sized parent region, with the same independent
+  scrolling. Adding content never enlarges the region.
+- `"page"`: controls, plots, and details grow in document flow. Use this for a
+  content-sized page or an iframe whose host resizes it to its content.
+
+Fullscreen temporarily fills the screen with bounded panel scrolling; exiting
+restores the selected policy and sidebar placement.
+
+### Parent-sized region in the same document
+
+Use `layout="contained"` when the Explorer follows a region inside its document.
+For example, in a Bokeh server template:
+
+```html
+{% extends base %} {% block contents %}
+<header>Content above the Explorer</header>
+<section id="explorer-host">
+  {% for root in roots %} {{ embed(root) }} {% endfor %}
+</section>
+<footer>Content below the Explorer</footer>
+<style>
+  #explorer-host {
+    height: clamp(320px, 60dvh, 720px);
+    min-height: 0;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  #explorer-host > div {
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+  }
+</style>
+{% endblock %}
+```
+
+The Explorer’s containing block must have a definite height. Any intervening
+box-generating wrappers need a resolvable height (for example `height: 100%` through a chain of
+explicitly sized ancestors). A constrained grid/flex region also works; allow
+its items to shrink with `min-height: 0; min-width: 0`. The Explorer uses
+`box-sizing: border-box`; use the same for a host with padding/borders, and avoid
+external margins on the Explorer root. The height fills the host's content box.
+Parent-only width and height changes remain responsive after fullscreen.
+
+### Bounded iframe
+
+An iframe already supplies its own viewport, so use `layout="viewport"` inside
+it. The outer page determines the iframe height:
+
+```html
+<iframe
+  src="https://viewer.example/explorer?experiment=1&cluster=1"
+  title="Simulation Explorer"
+  allow="fullscreen"
+  allowfullscreen
+  style="display: block; width: 100%; height: clamp(320px, 65dvh, 760px); border: 0; box-sizing: border-box;"
+></iframe>
+```
+
+Serve the Explorer with viewport layout at that URL. Disable content-driven
+iframe autosizing for this view (including resize-message handlers or iframe
+resizer integrations): panel content scrolls inside the fixed region and must
+not feed back into the iframe height. Fullscreen requires permission from the
+embedding page and any enclosing frames.
+
+Stable CSS classes identify `.explorer-bokeh-frame`, `.explorer-controls`,
+`.explorer-center`, `.explorer-plots`, and `.explorer-details`. Bokeh regions may
+be inside shadow roots. The embedding application owns the available region,
+iframe styling, and autosizing policy.
 
 ## Developing
 

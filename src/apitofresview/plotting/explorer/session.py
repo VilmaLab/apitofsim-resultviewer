@@ -39,7 +39,7 @@ from .rates import RateViews
 
 def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport"):
     """Build one Bokeh session; every control uses the same cohort and X mapping."""
-    if layout not in ("viewport", "page"):
+    if layout not in ("viewport", "page", "contained"):
         raise ValueError(f"Unknown Explorer layout: {layout!r}")
     try:
         realizations, events, pathways, regions = load_data(db, experiment, cluster)

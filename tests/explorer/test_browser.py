@@ -1122,3 +1122,204 @@ def test_page_layout_flows_and_restores_after_fullscreen(monkeypatch, page, widt
         expect(controls).to_be_visible()
         expect(controls).to_have_css("overflow", "visible")
         expect(frame).to_have_css("overflow", "visible")
+
+
+def set_long_details(target, height=1600):
+    target.evaluate(
+        """height => {
+        const details = [...Bokeh.documents[0].all_models]
+            .find(m => m.css_classes?.includes('explorer-details'));
+        details.children[0].text = `<div style="height:${height}px; width:1200px">Details</div>`;
+    }""",
+        height,
+    )
+
+
+def assert_region_scrolling(target):
+    """Each visible panel scrolls without shifting its siblings or the page."""
+    selectors = (".explorer-controls", ".explorer-center", ".explorer-details")
+    geometry = """() => {
+        const classes = ['explorer-controls', 'explorer-center', 'explorer-details'];
+        return classes.map(cls => {
+            const model = [...Bokeh.documents[0].all_models]
+                .find(m => m.css_classes?.includes(cls));
+            const el = Bokeh.index.find_one(model).el;
+            const rect = el.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height, el.scrollTop];
+        }).concat([[window.scrollX, window.scrollY]]);
+    }"""
+    for index, selector in enumerate(selectors):
+        region = target.locator(selector)
+        if not region.is_visible():
+            continue
+        expect(region).to_have_css("overflow", "auto")
+        try:
+            target.wait_for_function(
+                """selector => {
+                const model = [...Bokeh.documents[0].all_models]
+                    .find(m => m.css_classes?.includes(selector.slice(1)));
+                const el = Bokeh.index.find_one(model).el;
+                return el.checkVisibility() && el.scrollHeight > el.clientHeight + 25;
+            }""",
+                arg=selector,
+                timeout=5000,
+            )
+        except PlaywrightTimeoutError:
+            pytest.fail(f"{selector} does not overflow: {target.evaluate(geometry)}")
+        before = target.evaluate(geometry)
+        region.evaluate("el => el.scrollTop = 25")
+        assert region.evaluate("el => el.scrollTop") == 25
+        before[index][-1] = 25
+        assert target.evaluate(geometry) == before
+        region.evaluate("el => el.scrollTop = 0")
+
+
+@pytest.mark.parametrize("width", [640, 1100])
+def test_contained_layout_follows_host(monkeypatch, page, width):
+    frames = cohort([1], event(1, "escape", 1, 1, 5))
+    with serve_explorer(monkeypatch, frames, layout="contained") as url:
+        page.set_viewport_size({"width": 1280, "height": 700})
+        page.goto(url)
+        expect(page.get_by_label("X coordinate")).to_be_visible()
+        page.evaluate(
+            """width => {
+            document.body.style.cssText = 'margin:0; padding:20px;';
+            const frame = document.querySelector('.explorer-bokeh-frame');
+            const mount = frame.parentElement;
+            const host = document.createElement('section');
+            host.id = 'explorer-host';
+            host.style.cssText = `width:${width}px; height:420px; padding:10px;
+                border:2px solid black; box-sizing:border-box;`;
+            mount.before(host);
+            host.append(mount);
+            mount.style.cssText = 'height:100%; min-height:0; min-width:0;';
+            for (const [position, id] of [['beforebegin', 'above'], ['afterend', 'below']]) {
+                host.insertAdjacentHTML(position, `<div id="${id}" style="height:60px">${id}</div>`);
+            }
+        }""",
+            width,
+        )
+
+        def assert_host_fit():
+            page.wait_for_function("""() => {
+                const host = document.querySelector('#explorer-host').getBoundingClientRect();
+                const frame = document.querySelector('.explorer-bokeh-frame').getBoundingClientRect();
+                const below = document.querySelector('#below').getBoundingClientRect();
+                return Math.abs(frame.height - (host.height - 24)) <= 1 &&
+                    Math.abs(frame.width - (host.width - 24)) <= 1 &&
+                    Math.abs(frame.top - host.top - 12) <= 1 &&
+                    Math.abs(below.top - host.bottom) <= 1 && window.scrollY === 0;
+            }""")
+
+        assert_host_fit()
+        page.get_by_text("Cumulative", exact=True).click()
+        page.get_by_text("Bar chart", exact=True).click()
+        page.get_by_role("button", name="☷", exact=True).click()
+        for placement in ("Right sidebar", "Right (half width)", "Bottom") * 2:
+            page.get_by_role("button", name=placement, exact=True).click()
+            page.wait_for_function(
+                """placement => {
+                const doc = Bokeh.documents[0];
+                const mode = {'Right sidebar': 'sidebar', 'Right (half width)': 'right', 'Bottom': 'bottom'}[placement];
+                const body = doc.roots()[0].children[0];
+                const workspace = body.children[1];
+                const left = body.children[0].children[1];
+                return doc.get_model_by_name(`details_layout_${mode}`).active &&
+                    (workspace.type === 'Column') === (mode === 'bottom') &&
+                    Bokeh.index.find_one(left).el.checkVisibility() === left.visible;
+            }""",
+                arg=placement,
+            )
+            if (
+                placement == "Bottom"
+                and not page.locator(".explorer-controls").is_visible()
+            ):
+                page.get_by_role("button", name="»", exact=True).click()
+            set_long_details(page)
+            assert_host_fit()
+            assert_region_scrolling(page)
+            set_long_details(page, 20)
+            assert_host_fit()
+        set_long_details(page)
+        for size in ((580, 340), (1000, 500)):
+            page.evaluate(
+                """([width, height]) => {
+                document.querySelector('#explorer-host').style.width = `${width}px`;
+                document.querySelector('#explorer-host').style.height = `${height}px`;
+            }""",
+                size,
+            )
+            assert_host_fit()
+            assert_region_scrolling(page)
+        page.get_by_role("button", name="« Controls", exact=True).click()
+        assert_host_fit()
+        page.get_by_role("button", name="»", exact=True).click()
+        page.get_by_role("button", name="Fullscreen", exact=True).click()
+        page.wait_for_function("document.fullscreenElement !== null")
+        page.wait_for_function("""() => {
+            const rect = document.fullscreenElement.getBoundingClientRect();
+            return rect.width === innerWidth && rect.height === innerHeight;
+        }""")
+        expect(page.locator(".explorer-center")).to_have_css("overflow", "auto")
+        page.get_by_role("button", name="☷", exact=True).click()
+        set_long_details(page)
+        assert_region_scrolling(page)
+        # Change the host while fullscreen; exit must use its current dimensions.
+        page.evaluate("""document.querySelector('#explorer-host').style.cssText +=
+            ';width:620px;height:360px'""")
+        page.evaluate("document.exitFullscreen()")
+        page.wait_for_function("document.fullscreenElement === null")
+        assert_host_fit()
+        page.evaluate("document.querySelector('#explorer-host').style.height = '460px'")
+        assert_host_fit()
+        set_long_details(page)
+        assert_region_scrolling(page)
+
+
+def test_viewport_in_bounded_iframe(page, explorer_server):
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(explorer_server)
+    page.set_content(f"""
+        <style>body {{margin:0; padding:20px}} iframe {{display:block; width:100%;
+            height:clamp(320px, 50vh, 600px); border:0; box-sizing:border-box}}</style>
+        <header style="height:60px">Above</header>
+        <iframe name="explorer" src="{explorer_server}" allow="fullscreen" allowfullscreen></iframe>
+        <footer style="height:60px">Below</footer>
+    """)
+    target = page.frame(name="explorer")
+    expect(target.get_by_label("X coordinate")).to_be_visible()
+    target.evaluate(
+        "document.body.style.cssText = 'margin:0; padding:50px 10px 6px; box-sizing:border-box'"
+    )
+    iframe = page.locator("iframe")
+    bounds = iframe.bounding_box()
+    assert bounds["height"] == 450
+    target.get_by_text("Cumulative", exact=True).click()
+    target.get_by_text("Bar chart", exact=True).click()
+    target.get_by_role("button", name="☷", exact=True).click()
+    target.get_by_role("button", name="Bottom", exact=True).click()
+    if not target.locator(".explorer-controls").is_visible():
+        target.get_by_role("button", name="»", exact=True).click()
+    set_long_details(target)
+    assert_region_scrolling(target)
+    target.wait_for_function("""() => {
+        const rect = document.querySelector('.explorer-bokeh-frame').getBoundingClientRect();
+        return Math.abs(rect.top - 50) <= 1 && Math.abs(rect.bottom - (innerHeight - 6)) <= 1 &&
+            document.scrollingElement.scrollHeight <= innerHeight &&
+            document.scrollingElement.scrollWidth <= innerWidth;
+    }""")
+    assert iframe.bounding_box() == bounds
+    assert page.evaluate("window.scrollY") == 0
+    target.get_by_role("button", name="Fullscreen", exact=True).click()
+    target.wait_for_function("document.fullscreenElement !== null")
+    expect(target.locator(".explorer-center")).to_have_css("overflow", "auto")
+    target.evaluate("document.exitFullscreen()")
+    target.wait_for_function("document.fullscreenElement === null")
+    assert iframe.bounding_box() == bounds
+    page.evaluate("document.querySelector('iframe').style.height = '360px'")
+    target.wait_for_function("""() => {
+        const rect = document.querySelector('.explorer-bokeh-frame').getBoundingClientRect();
+        return innerHeight === 360 && Math.abs(rect.bottom - 354) <= 1;
+    }""")
+    set_long_details(target, 20)
+    assert iframe.bounding_box()["height"] == 360

@@ -133,14 +133,11 @@ def test_live_inspection_preserves_plot_and_zoom(page, explorer_server, details_
         plot.x_range.start = -0.5;
         plot.x_range.end = 9.5;
         const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
-        const view = Bokeh.index.find_one(plot);
-        const bounds = view.canvas_view.events_el.getBoundingClientRect();
-        const i = source.data.id.indexOf(1);
-        return {plot: plot.id, range: plot.x_range.id,
-            x: bounds.left + view.frame.x_scale.compute(source.data.x[i]),
-            y: bounds.top + view.frame.y_scale.compute(source.data.y[i])};
+        // Zooming asynchronously repacks terminal markers on the server.
+        // Select directly so this layout test does not race their coordinates.
+        source.selected.indices = [source.data.id.indexOf(1)];
+        return {plot: plot.id, range: plot.x_range.id};
     }""")
-    page.mouse.click(initial.pop("x"), initial.pop("y"))
     expect(
         page.get_by_role("button", name="Inspect event #2", exact=True)
     ).to_be_visible()

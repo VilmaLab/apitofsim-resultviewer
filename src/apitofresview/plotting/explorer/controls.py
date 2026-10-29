@@ -591,7 +591,13 @@ def apply_layout(ui, layout, *, full=False, bottom=False):
         {"height": "auto", "overflow": "visible"}
         if page
         else {
-            "height": "calc(100dvh - var(--explorer-top, 0px) - 6px)",
+            "height": (
+                "100%"
+                if layout == "contained" and not full
+                else "calc(100dvh - var(--explorer-top, 0px) - 6px)"
+            ),
+            **flow,
+            "box-sizing": "border-box",
             "overflow": "hidden",
         }
     )

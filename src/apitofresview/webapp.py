@@ -641,10 +641,10 @@ def spectrogram_bokeh(db, doc):
 
 
 def explorer_bokeh(db, doc, *, layout="viewport"):
-    """Build the Explorer with viewport sizing or intrinsic page flow.
+    """Build the Explorer with viewport, contained, or intrinsic page sizing.
 
-    Page layout grows with its controls and plots for embedding in a resizing
-    iframe. Fullscreen temporarily uses viewport sizing in either mode.
+    Contained layout fills a definitely sized parent; page layout grows with its
+    content. Fullscreen temporarily uses viewport sizing in every mode.
     """
     from apitofresview.plotting.explorer import build_document
 

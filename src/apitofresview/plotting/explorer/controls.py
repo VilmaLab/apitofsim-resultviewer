@@ -133,8 +133,11 @@ def create_controls(
     fate_colors,
     total,
     initial_details,
+    *,
+    layout="viewport",
 ):
     """Build the frame and attach browser bridges for one document."""
+    layout_policy = layout
     pathway_legend = "\n".join(
         f'label:nth-child({i + 1})::before {{ content: ""; background: {fate_colors[name]}; '
         "width: 12px; height: 12px; flex-shrink: 0; margin-right: 4px; }"
@@ -346,7 +349,7 @@ def create_controls(
             "Rates", column(log_rates, show_readoffs, spacing=4), name="sidebar_rates"
         ),
         spacing=4,
-        styles=SCROLL_STYLES,
+        css_classes=["explorer-controls"],
     )
     right_controls = column(
         details,
@@ -354,7 +357,7 @@ def create_controls(
         summarise_energy,
         show_rates,
         rate_controls,
-        styles=SCROLL_STYLES,
+        css_classes=["explorer-details"],
     )
     left_toggle = Toggle(
         label="« Controls", active=True, width=100, height=32, margin=0
@@ -367,9 +370,7 @@ def create_controls(
         height=32,
         html_attributes={"title": "Show selected realization"},
     )
-    left = column(
-        left_toggle, left_controls, width=205, spacing=4, styles={"height": "100%"}
-    )
+    left = column(left_toggle, left_controls, width=205, spacing=4)
     detail_layouts = {
         mode: Toggle(
             label=title,
@@ -403,10 +404,14 @@ def create_controls(
         right_controls,
         width=38,
         spacing=4,
-        styles={"height": "100%", "min-height": "0", "min-width": "0"},
     )
     right_controls.visible = False
-    center_plots = column(sizing_mode="stretch_width", spacing=0, name="explorer_plots")
+    center_plots = column(
+        sizing_mode="stretch_width",
+        spacing=0,
+        name="explorer_plots",
+        css_classes=["explorer-plots"],
+    )
     center = column(
         counts,
         quality,
@@ -415,7 +420,6 @@ def create_controls(
         sizing_mode="stretch_width",
         spacing=2,
         css_classes=["explorer-center"],
-        styles={**SCROLL_STYLES, "flex": "1"},
         stylesheets=[InlineStyleSheet(css=":host > * { flex-shrink: 0; }")],
     )
     workspace = row(
@@ -423,14 +427,12 @@ def create_controls(
         right,
         sizing_mode="stretch_width",
         spacing=6,
-        styles={"height": "100%", "min-height": "0", "min-width": "0"},
     )
     body = row(
         left,
         workspace,
         sizing_mode="stretch_width",
         spacing=6,
-        styles={"height": "100%", "min-height": "0", "min-width": "0"},
     )
     frame = column(
         body,
@@ -440,10 +442,6 @@ def create_controls(
         sizing_mode="stretch_width",
         spacing=4,
         css_classes=["explorer-bokeh-frame"],
-        styles={
-            "height": "calc(100dvh - var(--explorer-top, 0px) - 6px)",
-            "overflow": "hidden",
-        },
         stylesheets=[
             InlineStyleSheet(
                 css="""
@@ -524,7 +522,7 @@ def create_controls(
     """,
         ),
     )
-    return Controls(
+    ui = Controls(
         counts=counts,
         quality=quality,
         fate=fate,
@@ -577,6 +575,41 @@ def create_controls(
         body=body,
         center_plots=center_plots,
         frame=frame,
+    )
+
+    apply_layout(ui, layout_policy)
+    return ui
+
+
+def apply_layout(ui, layout, *, full=False, bottom=False):
+    """Own sizing and both overflow axes for every Explorer layout transition."""
+    page = layout == "page" and not full
+    flow = {"min-height": "0", "min-width": "0"}
+    container = flow if page else {**flow, "height": "100%"}
+    scrolling = {**flow, "overflow": "visible"} if page else SCROLL_STYLES
+    ui.frame.styles = (
+        {"height": "auto", "overflow": "visible"}
+        if page
+        else {
+            "height": "calc(100dvh - var(--explorer-top, 0px) - 6px)",
+            "overflow": "hidden",
+        }
+    )
+    ui.body.styles = ui.workspace.styles = container
+    ui.left.styles = flow if page else {"height": "100%"}
+    ui.left_controls.styles = ui.right_controls.styles = scrolling
+    ui.center.styles = {**scrolling, "flex": "1"}
+    ui.right.styles = (
+        {
+            **(flow if page else {}),
+            "border-top": "1px solid #cbd5e1",
+            "padding-top": "8px",
+            "flex-shrink": "0",
+            "box-sizing": "border-box",
+            **({} if page else {"max-height": "50%"}),
+        }
+        if bottom
+        else container
     )
 
 

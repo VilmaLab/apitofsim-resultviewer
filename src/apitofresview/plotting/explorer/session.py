@@ -9,7 +9,13 @@ from bokeh.layouts import column, row
 from bokeh.models import Column, Div, FixedTicker, Range1d
 
 from .aggregation import cumulative_areas, regional_fractions
-from .controls import CHECKBOX_CSS, create_controls, enabled, prepare_toolbar
+from .controls import (
+    CHECKBOX_CSS,
+    apply_layout,
+    create_controls,
+    enabled,
+    prepare_toolbar,
+)
 from .data import EVENT_TYPES, events_for, load_data, select_realizations
 from .details import render_choices, render_details
 from .layout import (
@@ -31,8 +37,10 @@ from .plot import (
 from .rates import RateViews
 
 
-def build_document(db, doc, experiment: int, cluster: int):
+def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport"):
     """Build one Bokeh session; every control uses the same cohort and X mapping."""
+    if layout not in ("viewport", "page"):
+        raise ValueError(f"Unknown Explorer layout: {layout!r}")
     try:
         realizations, events, pathways, regions = load_data(db, experiment, cluster)
     except Exception as exc:
@@ -94,6 +102,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         fate_colors,
         total,
         render_details(realizations.head(0), events.head(0), None),
+        layout=layout,
     )
 
     selection_updates = []
@@ -136,17 +145,7 @@ def build_document(db, doc, experiment: int, cluster: int):
         if mode == "sidebar":
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
-        ui.right.styles = (
-            {
-                "border-top": "1px solid #cbd5e1",
-                "padding-top": "8px",
-                "max-height": "50%",
-                "flex-shrink": "0",
-                "box-sizing": "border-box",
-            }
-            if bottom
-            else {"height": "100%", "min-height": "0", "min-width": "0"}
-        )
+        apply_layout(ui, layout, full=full, bottom=bottom)
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
         if narrow and left_open and right_open and not bottom:
             left_open = False
@@ -154,8 +153,8 @@ def build_document(db, doc, experiment: int, cluster: int):
         state["syncing_sidebar"] = True
         try:
             ui.left_toggle.active, ui.right_toggle.active = left_open, right_open
-            for layout, button in ui.detail_layouts.items():
-                button.active = layout == mode
+            for placement, button in ui.detail_layouts.items():
+                button.active = placement == mode
                 button.visible = right_open
         finally:
             state["syncing_sidebar"] = False
@@ -168,13 +167,13 @@ def build_document(db, doc, experiment: int, cluster: int):
         if right_open and mode != "sidebar":
             ui.right.width = None
         if bottom != isinstance(ui.workspace, Column):
-            layout = column if bottom else row
-            ui.workspace = layout(
+            container = column if bottom else row
+            ui.workspace = container(
                 ui.center,
                 ui.right,
                 sizing_mode="stretch_width",
                 spacing=6,
-                styles={"height": "100%", "min-height": "0", "min-width": "0"},
+                styles=ui.workspace.styles,
             )
             ui.body.children = [ui.left, ui.workspace]
         ui.left_toggle.width, ui.right_toggle.width = (

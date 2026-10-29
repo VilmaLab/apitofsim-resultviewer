@@ -640,7 +640,12 @@ def spectrogram_bokeh(db, doc):
     doc.add_root(root)
 
 
-def explorer_bokeh(db, doc):
+def explorer_bokeh(db, doc, *, layout="viewport"):
+    """Build the Explorer with viewport sizing or intrinsic page flow.
+
+    Page layout grows with its controls and plots for embedding in a resizing
+    iframe. Fullscreen temporarily uses viewport sizing in either mode.
+    """
     from apitofresview.plotting.explorer import build_document
 
     args = doc.session_context.request.arguments
@@ -651,7 +656,7 @@ def explorer_bokeh(db, doc):
 
     experiment = arg("experiment")
     cluster = arg("cluster")
-    build_document(db, doc, experiment, cluster)
+    build_document(db, doc, experiment, cluster, layout=layout)
 
 
 def create_app(database_path=None, debug=True):

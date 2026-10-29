@@ -1224,12 +1224,13 @@ def test_beeswarm_reuses_preparation_until_cohort_or_coordinates_change(monkeypa
     assert packs[-1] is preparations[-1]
 
 
+@pytest.mark.parametrize("layout", ["viewport", "page"])
 @pytest.mark.parametrize("mode", ["bottom", "right"])
-def test_details_layout_transitions(monkeypatch, mode):
+def test_details_layout_transitions(monkeypatch, mode, layout):
     frames = cohort([1], event(1, "escape", 1, 1, 5))
     monkeypatch.setattr(session, "load_data", lambda *args: frames)
     doc = Document()
-    build_document(None, doc, 1, 1)
+    build_document(None, doc, 1, 1, layout=layout)
     body = doc.roots[0].children[0]
     left, workspace = body.children
     center, right = workspace.children
@@ -1249,7 +1250,11 @@ def test_details_layout_transitions(monkeypatch, mode):
     assert ("border-top" in right.styles) == (mode == "bottom")
     assert right.sizing_mode == "stretch_width" and right.width is None
     assert type(body.children[1]).__name__ == ("Column" if mode == "bottom" else "Row")
-    if mode == "bottom":
+    if layout == "page":
+        assert "max-height" not in right.styles
+        assert "height" not in right.styles
+        assert doc.roots[0].styles["height"] == "auto"
+    elif mode == "bottom":
         assert right.styles["max-height"] == "50%"
     else:
         assert right.styles["height"] == "100%"
@@ -1351,3 +1356,29 @@ def test_postcollision_never_enters_explorer_sources(monkeypatch, layout):
     for source in doc.select({"type": ColumnDataSource}):
         if "id" in source.data:
             assert set(source.data["id"]).isdisjoint({2, 5})
+
+
+@pytest.mark.parametrize("layout", ["viewport", "page"])
+def test_explorer_entry_point_passes_layout(monkeypatch, layout):
+    from types import SimpleNamespace
+
+    from apitofresview.webapp import explorer_bokeh
+    import apitofresview.plotting.explorer as explorer
+
+    calls = []
+    monkeypatch.setattr(
+        explorer, "build_document", lambda *a, **kw: calls.append((a, kw))
+    )
+    doc = SimpleNamespace(
+        session_context=SimpleNamespace(
+            request=SimpleNamespace(arguments={"experiment": [b"3"], "cluster": [b"7"]})
+        )
+    )
+    db = object()
+    explorer_bokeh(db, doc, layout=layout)
+    assert calls == [((db, doc, 3, 7), {"layout": layout})]
+
+
+def test_invalid_explorer_layout():
+    with pytest.raises(ValueError, match="Unknown Explorer layout"):
+        build_document(None, Document(), 1, 1, layout="invalid")

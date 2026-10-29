@@ -52,7 +52,7 @@ def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, heigh
 
 
 @contextmanager
-def serve_explorer(monkeypatch, frames, db=None):
+def serve_explorer(monkeypatch, frames, db=None, *, layout="viewport"):
     """Serve a synthetic cohort with real Bokeh session callbacks."""
     from queue import Queue
     from threading import Thread
@@ -67,7 +67,7 @@ def serve_explorer(monkeypatch, frames, db=None):
         loop = IOLoop()
         try:
             server = Server(
-                {"/": lambda doc: build_document(db, doc, 1, 1)},
+                {"/": lambda doc: build_document(db, doc, 1, 1, layout=layout)},
                 io_loop=loop,
                 port=0,
                 address="127.0.0.1",
@@ -1031,3 +1031,97 @@ def test_bottom_details_preserve_controls(page, explorer_server, width):
     else:
         expect(page.get_by_label("X coordinate")).to_be_visible()
     assert_horizontal_fit(page)
+
+
+@pytest.mark.parametrize("width", [640, 1280])
+def test_page_layout_flows_and_restores_after_fullscreen(monkeypatch, page, width):
+    frames = cohort([1], event(1, "escape", 1, 1, 5))
+    with serve_explorer(monkeypatch, frames, layout="page") as url:
+        page.set_viewport_size({"width": width, "height": 700})
+        page.goto(url)
+        frame = page.locator(".explorer-bokeh-frame")
+        controls = page.locator(".explorer-controls")
+        details = page.locator(".explorer-details")
+        expect(controls).to_be_visible()
+        expect(frame).to_have_css("overflow", "visible")
+        page.wait_for_function(
+            "document.querySelector('.explorer-bokeh-frame').getBoundingClientRect().height > 800"
+        )
+        initial_height = frame.bounding_box()["height"]
+        page.get_by_role("button", name="« Controls", exact=True).click()
+        page.wait_for_function(
+            """height =>
+            document.querySelector('.explorer-bokeh-frame').getBoundingClientRect().height < height - 100
+        """,
+            arg=initial_height,
+        )
+        page.get_by_role("button", name="»", exact=True).click()
+        expect(controls).to_be_visible()
+        page.get_by_role("button", name="☷", exact=True).click()
+
+        def set_details(height):
+            page.evaluate(
+                """height => {
+                const models = Bokeh.documents[0].all_models;
+                const details = [...models].find(m => m.css_classes?.includes('explorer-details'));
+                details.children[0].text = `<div style="height: ${height}px">Details</div>`;
+            }""",
+                height,
+            )
+
+        for placement in ("Right sidebar", "Bottom", "Right (half width)"):
+            page.get_by_role("button", name=placement, exact=True).click()
+            set_details(1600)
+            page.wait_for_function("""() => {
+                function find(root, selector) {
+                    const match = root.querySelector(selector);
+                    if (match) return match;
+                    for (const el of root.querySelectorAll('*')) {
+                        if (el.shadowRoot) {
+                            const result = find(el.shadowRoot, selector);
+                            if (result) return result;
+                        }
+                    }
+                }
+                const details = find(document, '.explorer-details');
+                return details?.getBoundingClientRect().height >= 1600;
+            }""")
+            for region in (controls, details, page.locator(".explorer-center")):
+                if region.is_visible():
+                    assert region.evaluate("""el => {
+                        const css = getComputedStyle(el);
+                        return css.overflowX === 'visible' && css.overflowY === 'visible';
+                    }""")
+            tall = frame.bounding_box()["height"]
+            # A host resizing its iframe changes the viewport height. Intrinsic
+            # content height must stay fixed, including surrounding page padding.
+            page.evaluate("document.body.style.padding = '80px 0'")
+            page.set_viewport_size({"width": width, "height": round(tall + 160)})
+            page.wait_for_function(
+                """height => Bokeh.documents[0].get_model_by_name('explorer_viewport')
+                    .text.split(',')[1] === String(height)""",
+                arg=round(tall + 160),
+            )
+            assert frame.bounding_box()["height"] == pytest.approx(tall, abs=1)
+            set_details(20)
+            expect(details).to_have_css("overflow", "visible")
+            page.wait_for_function(
+                """height =>
+                document.querySelector('.explorer-bokeh-frame').getBoundingClientRect().height < height - 100
+            """,
+                arg=tall,
+            )
+
+        page.get_by_role("button", name="Hide details »", exact=True).click()
+        page.get_by_role("button", name="»", exact=True).click()
+        page.set_viewport_size({"width": width, "height": 700})
+        page.get_by_role("button", name="Fullscreen", exact=True).click()
+        page.wait_for_function("document.fullscreenElement !== null")
+        expect(frame).to_have_css("overflow", "hidden")
+        page.get_by_role("button", name="»", exact=True).first.click()
+        expect(controls).to_have_css("overflow", "auto")
+        page.evaluate("document.exitFullscreen()")
+        page.wait_for_function("document.fullscreenElement === null")
+        expect(controls).to_be_visible()
+        expect(controls).to_have_css("overflow", "visible")
+        expect(frame).to_have_css("overflow", "visible")

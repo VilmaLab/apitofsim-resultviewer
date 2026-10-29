@@ -50,6 +50,21 @@ apitofresview
 | `--no-browser`    | Don't open a browser                             |
 | `--debug`         | Show tracebacks in the browser                   |
 
+## Embedding the Explorer
+
+Use `explorer_bokeh(db, doc, layout="page")` from `apitofresview.webapp` for an
+Explorer embedded in a page or an iframe that resizes to its content. The default
+`layout="viewport"` fits the standalone viewer to the viewport and scrolls its
+panels independently. Page layout uses intrinsic content height and lets controls,
+plots, and details grow in document flow. Fullscreen temporarily uses viewport
+layout and restores the chosen policy on exit.
+
+The same option is available on `build_document(db, doc, experiment, cluster,
+layout="page")` from `apitofresview.plotting.explorer`. Stable CSS classes identify
+`.explorer-bokeh-frame`, `.explorer-controls`, `.explorer-center`,
+`.explorer-plots`, and `.explorer-details`. Bokeh regions may be inside shadow
+roots. The embedding host remains responsible for resizing its iframe.
+
 ## Developing
 
 ```bash

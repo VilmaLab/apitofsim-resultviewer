@@ -1067,7 +1067,7 @@ def test_page_layout_flows_and_restores_after_fullscreen(monkeypatch, page, widt
             )
 
         for placement in ("Right sidebar", "Bottom", "Right (half width)"):
-            page.get_by_role("button", name=placement, exact=True).click()
+            set_details_layout(page, placement)
             set_details(1600)
             page.wait_for_function("""() => {
                 function find(root, selector) {
@@ -1122,6 +1122,30 @@ def test_page_layout_flows_and_restores_after_fullscreen(monkeypatch, page, widt
         expect(controls).to_be_visible()
         expect(controls).to_have_css("overflow", "visible")
         expect(frame).to_have_css("overflow", "visible")
+
+
+def set_details_layout(target, placement):
+    target.get_by_role("button", name=placement, exact=True).click()
+    # A click updates its own toggle immediately; the server then updates the
+    # other toggles and rebuilds the workspace. Wait for that whole transition.
+    target.wait_for_function(
+        """placement => {
+        const doc = Bokeh.documents[0];
+        const modes = {'Right sidebar': 'sidebar', 'Right (half width)': 'right', 'Bottom': 'bottom'};
+        const mode = modes[placement];
+        const body = doc.roots()[0].children[0];
+        const workspace = body.children[1];
+        const left = body.children[0].children[1];
+        return doc.is_idle && Object.values(modes).every(value =>
+            doc.get_model_by_name(`details_layout_${value}`).active === (value === mode)) &&
+            (workspace.type === 'Column') === (mode === 'bottom') &&
+            Bokeh.index.find_one(left).el.checkVisibility() === left.visible;
+    }""",
+        arg=placement,
+    )
+    target.evaluate(
+        "async () => await Bokeh.index.find_one(Bokeh.documents[0].roots()[0]).ready"
+    )
 
 
 def set_long_details(target, height=1600):
@@ -1219,20 +1243,7 @@ def test_contained_layout_follows_host(monkeypatch, page, width):
         page.get_by_text("Bar chart", exact=True).click()
         page.get_by_role("button", name="☷", exact=True).click()
         for placement in ("Right sidebar", "Right (half width)", "Bottom") * 2:
-            page.get_by_role("button", name=placement, exact=True).click()
-            page.wait_for_function(
-                """placement => {
-                const doc = Bokeh.documents[0];
-                const mode = {'Right sidebar': 'sidebar', 'Right (half width)': 'right', 'Bottom': 'bottom'}[placement];
-                const body = doc.roots()[0].children[0];
-                const workspace = body.children[1];
-                const left = body.children[0].children[1];
-                return doc.get_model_by_name(`details_layout_${mode}`).active &&
-                    (workspace.type === 'Column') === (mode === 'bottom') &&
-                    Bokeh.index.find_one(left).el.checkVisibility() === left.visible;
-            }""",
-                arg=placement,
-            )
+            set_details_layout(page, placement)
             if (
                 placement == "Bottom"
                 and not page.locator(".explorer-controls").is_visible()

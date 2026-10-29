@@ -52,32 +52,26 @@ apitofresview
 
 ## Embedding the Explorer
 
-Both `explorer_bokeh(db, doc, layout=...)` from `apitofresview.webapp` and
-`build_document(db, doc, experiment, cluster, layout=...)` from
-`apitofresview.plotting.explorer` accept three policies:
+`explorer_bokeh(db, doc, layout=...)` (`apitofresview.webapp`) and
+`build_document(db, doc, experiment, cluster, layout=...)`
+(`apitofresview.plotting.explorer`) support:
 
-- `"viewport"` (default): fills the remaining document viewport below the Explorer,
-  with independent scrolling for controls, plots, and details.
-- `"contained"`: fills a definitely sized parent region, with the same independent
-  scrolling. Adding content never enlarges the region.
-- `"page"`: controls, plots, and details grow in document flow. Use this for a
-  content-sized page or an iframe whose host resizes it to its content.
+- `"viewport"` (default): fills the remaining viewport below the Explorer.
+- `"contained"`: fills an explicitly sized parent.
+- `"page"`: grows with content, including in content-sized iframes.
 
-Fullscreen temporarily fills the screen with bounded panel scrolling; exiting
-restores the selected policy and sidebar placement.
+Viewport and contained layouts scroll controls, plots, and details independently.
+Fullscreen fills the screen; exiting restores the chosen layout and sidebars.
 
-### Parent-sized region in the same document
+### Parent-sized region
 
-Use `layout="contained"` when the Explorer follows a region inside its document.
-For example, in a Bokeh server template:
+Use `layout="contained"` with a Bokeh server template such as:
 
 ```html
 {% extends base %} {% block contents %}
-<header>Content above the Explorer</header>
 <section id="explorer-host">
   {% for root in roots %} {{ embed(root) }} {% endfor %}
 </section>
-<footer>Content below the Explorer</footer>
 <style>
   #explorer-host {
     height: clamp(320px, 60dvh, 720px);
@@ -94,18 +88,14 @@ For example, in a Bokeh server template:
 {% endblock %}
 ```
 
-The Explorer’s containing block must have a definite height. Any intervening
-box-generating wrappers need a resolvable height (for example `height: 100%` through a chain of
-explicitly sized ancestors). A constrained grid/flex region also works; allow
-its items to shrink with `min-height: 0; min-width: 0`. The Explorer uses
-`box-sizing: border-box`; use the same for a host with padding/borders, and avoid
-external margins on the Explorer root. The height fills the host's content box.
-Parent-only width and height changes remain responsive after fullscreen.
+The containing block needs a definite height; intervening wrappers need resolvable
+heights too. Constrained grid/flex regions work with `min-height: 0; min-width: 0`.
+Use `box-sizing: border-box` for padded/bordered hosts and avoid root margins.
+The Explorer fills the host's content box and follows parent resizes.
 
 ### Bounded iframe
 
-An iframe already supplies its own viewport, so use `layout="viewport"` inside
-it. The outer page determines the iframe height:
+Use `layout="viewport"` inside a host-sized iframe:
 
 ```html
 <iframe
@@ -117,16 +107,12 @@ it. The outer page determines the iframe height:
 ></iframe>
 ```
 
-Serve the Explorer with viewport layout at that URL. Disable content-driven
-iframe autosizing for this view (including resize-message handlers or iframe
-resizer integrations): panel content scrolls inside the fixed region and must
-not feed back into the iframe height. Fullscreen requires permission from the
-embedding page and any enclosing frames.
+Disable content-driven iframe autosizing for this view to prevent resize feedback.
+Fullscreen requires permission from the host and any enclosing frames.
 
-Stable CSS classes identify `.explorer-bokeh-frame`, `.explorer-controls`,
-`.explorer-center`, `.explorer-plots`, and `.explorer-details`. Bokeh regions may
-be inside shadow roots. The embedding application owns the available region,
-iframe styling, and autosizing policy.
+Stable region classes are `.explorer-bokeh-frame`, `.explorer-controls`,
+`.explorer-center`, `.explorer-plots`, and `.explorer-details`; some are inside
+Bokeh shadow roots.
 
 ## Developing
 

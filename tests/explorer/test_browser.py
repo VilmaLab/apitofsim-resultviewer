@@ -1125,6 +1125,9 @@ def test_page_layout_flows_and_restores_after_fullscreen(monkeypatch, page, widt
 
 
 def set_long_details(target, height=1600):
+    # Sidebar clicks round-trip through the server. Wait for the panel to open
+    # before measuring scrolling, otherwise its arrival can resize its siblings.
+    expect(target.locator(".explorer-details")).to_be_visible()
     target.evaluate(
         """height => {
         const details = [...Bokeh.documents[0].all_models]

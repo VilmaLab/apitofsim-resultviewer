@@ -36,7 +36,12 @@ SCROLL_STYLES = {
     "min-width": "0",
     "overflow": "auto",
     "overscroll-behavior": "contain",
+    "flex": "1",
 }
+
+# Bokeh caps non-fixed layouts at 100% of their parent. Scroll contents must
+# retain their intrinsic height, including when taller than the whole panel.
+CONTENT_CSS = ":host > * { flex-shrink: 0; max-height: none; }"
 
 
 @dataclass
@@ -120,7 +125,7 @@ def group(title, child, *, name=None):
         height_policy="min",
         margin=(5, 0),
         # The scroll container must not shrink groups below their contents.
-        styles={"flex-shrink": "0"},
+        styles={"flex-shrink": "0", "max-height": "none"},
         stylesheets=[InlineStyleSheet(css="fieldset { min-inline-size: 0; }")],
     )
 
@@ -359,6 +364,7 @@ def create_controls(
         ),
         spacing=4,
         css_classes=["explorer-controls"],
+        stylesheets=[InlineStyleSheet(css=CONTENT_CSS)],
     )
     right_controls = column(
         details,
@@ -367,6 +373,7 @@ def create_controls(
         show_rates,
         rate_controls,
         css_classes=["explorer-details"],
+        stylesheets=[InlineStyleSheet(css=CONTENT_CSS)],
     )
     left_toggle = Toggle(
         label="« Controls", active=True, width=100, height=32, margin=0
@@ -429,7 +436,7 @@ def create_controls(
         sizing_mode="stretch_width",
         spacing=2,
         css_classes=["explorer-center"],
-        stylesheets=[InlineStyleSheet(css=":host > * { flex-shrink: 0; }")],
+        stylesheets=[InlineStyleSheet(css=CONTENT_CSS)],
     )
     workspace = row(
         center,

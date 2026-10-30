@@ -13,7 +13,7 @@ from apitofresview.plotting.explorer import build_document, session
 from .helpers import cohort, event
 
 
-@pytest.mark.parametrize("width,height", [(920, 995), (640, 600)])
+@pytest.mark.parametrize("width,height", [(920, 995), (640, 600), (955, 300)])
 def test_control_groups_do_not_overlap(monkeypatch, page, tmp_path, width, height):
     frames = cohort([1], event(1, "escape", 1, 1, 5))
     monkeypatch.setattr(session, "load_data", lambda *args: frames)
@@ -1198,7 +1198,68 @@ def assert_region_scrolling(target):
         assert region.evaluate("el => el.scrollTop") == 25
         before[index][-1] = 25
         assert target.evaluate(geometry) == before
+        # Reaching an arbitrary scroll offset does not prove that the bottom is
+        # usable: the scrollport itself may extend past the clipped frame.
+        region.evaluate("el => el.scrollTop = el.scrollHeight")
+        assert region.evaluate("""el => {
+            const rect = el.getBoundingClientRect();
+            const frame = document.querySelector('.explorer-bokeh-frame').getBoundingClientRect();
+            const children = [...el.shadowRoot.children].filter(child =>
+                child.checkVisibility() && child.getBoundingClientRect().height);
+            const last = children.at(-1).getBoundingClientRect();
+            return rect.bottom <= frame.bottom + 1 && last.bottom <= rect.bottom + 1;
+        }""")
         region.evaluate("el => el.scrollTop = 0")
+
+
+@pytest.mark.parametrize("layout", ["viewport", "contained"])
+@pytest.mark.parametrize("width,height", [(640, 300), (955, 300), (1280, 700)])
+def test_sidebar_bottom_controls_are_reachable(
+    monkeypatch, page, layout, width, height
+):
+    frames = cohort([1], event(1, "escape", 1, 1, 5))
+    with serve_explorer(monkeypatch, frames, layout=layout) as url:
+        page.set_viewport_size({"width": width, "height": height})
+        page.goto(url)
+        expect(page.get_by_label("X coordinate")).to_be_visible()
+        if layout == "contained":
+            page.locator(".explorer-bokeh-frame").evaluate(
+                "el => el.parentElement.style.height = '240px'"
+            )
+
+        controls = page.locator(".explorer-controls")
+        controls.evaluate("el => el.scrollTop = el.scrollHeight")
+        bottom_control = controls.get_by_text("Show readoff values", exact=True)
+        expect(bottom_control).to_be_in_viewport()
+        controls.get_by_role("checkbox", name="Show readoff values").click()
+        expect(
+            controls.get_by_role("checkbox", name="Show readoff values")
+        ).not_to_be_checked()
+        page.get_by_role("button", name="☷", exact=True).click()
+
+        for placement in ("Right sidebar", "Right (half width)", "Bottom"):
+            set_details_layout(page, placement)
+            set_long_details(page)
+            page.evaluate("""() => {
+                const details = [...Bokeh.documents[0].all_models]
+                    .find(m => m.css_classes?.includes('explorer-details'));
+                details.children[1].visible = details.children[2].visible = true;
+            }""")
+            details = page.locator(".explorer-details")
+            energy = details.get_by_role("checkbox", name="Summarise energy")
+            expect(energy).to_be_visible()
+            page.wait_for_function("""() => {
+                const model = [...Bokeh.documents[0].all_models]
+                    .find(m => m.css_classes?.includes('explorer-details'));
+                const rects = model.children.filter(child => child.visible)
+                    .map(child => Bokeh.index.find_one(child).el.getBoundingClientRect());
+                return rects.every((rect, i) => !i || rect.top >= rects[i - 1].bottom);
+            }""")
+            details.evaluate("el => el.scrollTop = el.scrollHeight")
+            expect(energy).to_be_in_viewport()
+            checked = energy.is_checked()
+            energy.click()
+            expect(energy).to_be_checked(checked=not checked)
 
 
 @pytest.mark.parametrize("width", [640, 1100])

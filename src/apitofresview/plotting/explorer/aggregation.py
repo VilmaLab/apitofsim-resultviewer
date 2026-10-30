@@ -5,9 +5,9 @@ import polars as pl
 from .layout import escape_slot
 
 
-def regional_fractions(realizations, events, regions):
+def regional_fractions(realizations, events, regions, *, denominator=None):
     """Region fractions use every selected realization as denominator."""
-    n = realizations.height
+    n = realizations.height if denominator is None else denominator
     terminals = realizations.join(
         events, left_on="terminal_event_id", right_on="id", how="inner"
     )
@@ -39,8 +39,11 @@ def regional_fractions(realizations, events, regions):
     return bars
 
 
-def cumulative_areas(members, events, left_edge, right_edge, fates):
+def cumulative_areas(
+    members, events, left_edge, right_edge, fates, *, denominator=None
+):
     """Stack pathways on a shared step grid, including tied terminal events."""
+    n = max(members.height if denominator is None else denominator, 1)
     terminals = members.join(
         events, left_on="terminal_event_id", right_on="id", how="inner"
     )
@@ -58,10 +61,10 @@ def cumulative_areas(members, events, left_edge, right_edge, fates):
         cumulative = 0
         fractions = [0.0]
         for position in positions:
-            fractions.append(cumulative / members.height)
+            fractions.append(cumulative / n)
             cumulative += pathway_counts.get(position, 0)
-            fractions.append(cumulative / members.height)
-        fractions.append(cumulative / members.height)
+            fractions.append(cumulative / n)
+        fractions.append(cumulative / n)
         top = [lo + value for lo, value in zip(bottom, fractions, strict=True)]
         areas[name] = pl.DataFrame(
             dict(position=x, bottom=bottom, top=top, fraction=fractions),

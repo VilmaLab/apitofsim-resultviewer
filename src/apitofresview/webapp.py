@@ -36,6 +36,7 @@ from workingtitle.pydanticstarlette import (
     query_params,
 )
 
+from .modes import mode_label
 
 # This is a guard against a Panel bug with BokehASGI if we accidentally end up with Panel installed.
 # Can probably be removed at some point.
@@ -160,15 +161,13 @@ class ReportPageParams(BaseModel):
     experiment: LenientInt = None
 
 
-def pathway_type_lbl(is_single_pathway):
-    return "single pathway" if is_single_pathway else "multi-pathway"
-
-
 def get_experiment_choices(db):
     experiment_choices = []
     df = db.experiment_overview_query().fetchdf()
     for row in df.itertuples():
-        pathway_desc = pathway_type_lbl(row.is_single_pathway)
+        pathway_desc = mode_label(
+            db, row.experiment_run_id, row.is_single_pathway
+        ).lower()
         label = (
             f"#{row.experiment_run_id} {row.config_name} run at {row.start_time} "
             f"({pathway_desc}, success rate: {row.successes}/{row.successes + row.failures})"
@@ -198,7 +197,7 @@ def get_experiment_overview(db, experiment):
         "start_time": f"{start_time.day} {start_time:%b %Y, %H:%M:%S}",
         "successes": row[3],
         "failures": row[4],
-        "pathway_mode": "Single pathway" if row[5] else "Multi-pathway",
+        "pathway_mode": mode_label(db, experiment, row[5]),
         "configuration": {
             "experiment_config": json.loads(row[6]),
             "run_config": json.loads(row[7]),

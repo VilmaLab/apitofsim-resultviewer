@@ -1337,3 +1337,44 @@ def test_viewport_in_bounded_iframe(page, explorer_server):
     }""")
     set_long_details(target, 20)
     assert iframe.bounding_box()["height"] == 360
+
+
+@pytest.mark.parametrize("width", [640, 1280])
+def test_independent_pathway_facets_and_filters(monkeypatch, page, tmp_path, width):
+    from .helpers import pathway_cohort
+
+    with serve_explorer(monkeypatch, pathway_cohort()) as url:
+        page.set_viewport_size({"width": width, "height": 850})
+        page.goto(url)
+        expect(page.get_by_text("Outcomes", exact=True)).not_to_be_visible()
+        expect(page.get_by_text("Facet pathways", exact=True)).not_to_be_visible()
+        expect(page.get_by_text("Group fragmentations", exact=True)).not_to_be_visible()
+        page.wait_for_function("""() => {
+            const plots = Bokeh.documents[0]?.get_model_by_name('explorer_plots');
+            const events = plots?.children.filter(p => p.name === 'events');
+            return events?.length === 3 && events[0].inner_width > 0;
+        }""")
+        expect(page.get_by_text("Fractions use", exact=False)).not_to_be_visible()
+        # Inspect a fragmented realization using its actual Bokeh source.
+        page.evaluate("""() => {
+            const chart = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            chart.renderers.find(r => r.data_source?.data.id).data_source.selected.indices = [0];
+        }""")
+        expect(page.get_by_role("heading", name="Details", exact=True)).to_be_visible()
+        expect(
+            page.locator(".explorer-details p").filter(has_text="Realization #1")
+        ).to_be_visible()
+        expect(
+            page.get_by_text("Database realization", exact=False)
+        ).not_to_be_visible()
+        page.evaluate("""() => {
+            const doc = Bokeh.documents[0];
+            const charts = doc.get_model_by_name('explorer_plots').children.filter(p => p.name === 'events');
+            const path = [...doc.all_models.values()].find(m => m.type === 'CheckboxGroup' && m.labels.includes('Parent → A + B'));
+            path.active = [1];
+        }""")
+        page.wait_for_function("""() => {
+            const events = Bokeh.documents[0].get_model_by_name('explorer_plots').children.filter(p => p.name === 'events');
+            return events.length === 1 && events[0].title.text.startsWith('Parent → C + D');
+        }""")
+        page.screenshot(path=str(tmp_path / f"pathway-facets-{width}.png"))

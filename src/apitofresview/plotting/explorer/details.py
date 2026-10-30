@@ -170,11 +170,21 @@ def render_details(
             )
             + "</tr>"
         )
+    context = (
+        f"<p>Realization #{member['realization_number']}<br>{escape(member['simulated_pathway'])}</p>"
+        if "simulated_pathway" in member
+        else f"<p><em>{escape(member['fate'])}</em></p>"
+    )
+    heading = (
+        "Details"
+        if "simulated_pathway" in member
+        else f"Realization #{member['realization_number']}"
+    )
     return (
         "<button id='clear-selection'>Clear selection</button>"
-        f"<h3>Realization #{member['realization_number']}</h3>"
-        f"<p><em>{escape(member['fate'])}</em></p>"
-        '<div style="overflow-x:auto"><table><thead><tr>'
+        f"<h3>{heading}</h3>"
+        + context
+        + '<div style="overflow-x:auto"><table><thead><tr>'
         + "".join(f"<th>{heading}</th>" for heading in headings)
         + "</tr></thead><tbody>"
         + "".join(rows)

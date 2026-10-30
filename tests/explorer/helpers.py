@@ -77,3 +77,40 @@ def collision_cohort():
         )
     )
     return members, events, pathways, regions
+
+
+def pathway_cohort():
+    """Independent cohorts: mixed outcomes, all escaped, and no recordings."""
+    members, events, _, regions = cohort(
+        [100, 200, 300, 400, 500],
+        event(1, "fragmentation", 100, 1, 2, 7),
+        event(2, "escape", 200, 2, 5),
+        event(3, "collision", 300, 1, 1),
+        event(4, "fragmentation", 400, 1, 2, 7),
+        event(5, "escape", 400, 2, 5),
+        event(6, "escape", 500, 2, 5),
+    )
+    pathways = pl.DataFrame(
+        {
+            "pathway_id": [7, 8, 9, 10],
+            "pathway": [
+                "Parent → A + B",
+                "Parent → C + D",
+                "Parent → E + F",
+                "Parent → G + H",
+            ],
+            "simulated": [True, True, True, False],
+        }
+    )
+    members = members.with_columns(
+        pl.Series("simulated_pathway_id", [7, 7, 7, 7, 8]),
+        pl.Series("experiment_result_id", [10, 10, 10, 10, 11]),
+    ).join(
+        pathways.select("pathway_id", "pathway").rename(
+            {"pathway_id": "simulated_pathway_id", "pathway": "simulated_pathway"}
+        ),
+        on="simulated_pathway_id",
+        how="left",
+        maintain_order="left",
+    )
+    return members, events, pathways, regions

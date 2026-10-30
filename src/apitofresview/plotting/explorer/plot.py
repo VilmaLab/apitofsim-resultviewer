@@ -425,6 +425,7 @@ def _event_plot(
     on_selected,
     event_colors,
     realization_bounds=(1, 1),
+    y_range=None,
     spread_terminals=False,
     selection_updates=None,
     doc=None,
@@ -440,6 +441,8 @@ def _event_plot(
         output_backend="webgl",
         tools="pan,wheel_zoom,box_zoom,reset,save,tap",
     )
+    if y_range is not None:
+        plot.y_range = y_range
     plot.yaxis.axis_label = {
         "radial": "Radial distance (mm)",
         "realization": "Realization #",
@@ -448,7 +451,8 @@ def _event_plot(
     plot.ygrid.visible = layout == "radial"
     if layout == "realization":
         first, last = realization_bounds
-        plot.y_range = Range1d(first - 0.5, last + 0.5)
+        if y_range is None:
+            plot.y_range = Range1d(first - 0.5, last + 0.5)
         plot.yaxis.ticker = FixedTicker(ticks=sorted({first, last}))
         plot.yaxis.major_tick_line_color = None
         plot.yaxis.minor_tick_line_color = None

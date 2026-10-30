@@ -48,8 +48,18 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         doc.add_root(Div(text=f"Explorer data unavailable: {escape(str(exc))}"))
         return
 
-    # Match the pager's full experiment/cluster order before applying filters.
-    realizations = realizations.with_row_index("realization_number", offset=1)
+    pathway_mode = "simulated_pathway_id" in realizations.columns
+    # Number the full population before applying pathway and range filters.
+    realizations = (
+        realizations.with_columns(
+            pl.col("id")
+            .cum_count()
+            .over("simulated_pathway_id")
+            .alias("realization_number")
+        )
+        if pathway_mode
+        else realizations.with_row_index("realization_number", offset=1)
+    )
     fate_names = realizations["fate"].unique().sort().to_list()
     fate_counts = dict(realizations.group_by("fate").len().iter_rows())
     escaped_fates = (
@@ -77,6 +87,27 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     fate_colors = _pathway_colors(
         sorted(set(fate_names) | set(fragmentation_names)), escape_name
     )
+    simulated_pathways = (
+        pathways.filter(pl.col("simulated")) if pathway_mode else pathways
+    )
+    pathway_ids = simulated_pathways["pathway_id"].to_list() if pathway_mode else []
+    selector_names = (
+        simulated_pathways["pathway"].to_list() if pathway_mode else fate_names
+    )
+    selector_counts = (
+        {
+            name: realizations.filter(pl.col("simulated_pathway_id") == pid).height
+            for pid, name in zip(pathway_ids, selector_names, strict=True)
+        }
+        if pathway_mode
+        else fate_counts
+    )
+    if pathway_mode:
+        fate_colors.update(
+            _pathway_colors(
+                sorted(set(selector_names) | set(fragmentation_names)), escape_name
+            )
+        )
     state = {
         "selected": None,
         "event": None,
@@ -96,21 +127,36 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     total = realizations.height
     ui = create_controls(
         doc,
-        fate_names,
-        fate_counts,
+        selector_names,
+        selector_counts,
         fragmentation_names,
         fate_colors,
-        total,
+        max(realizations["realization_number"].max() or 1, 1)
+        if pathway_mode
+        else total,
         render_details(realizations.head(0), events.head(0), None),
         layout=layout,
+        pathway_mode=pathway_mode,
     )
 
+    if pathway_mode:
+        ui.selector.title = "Realization numbers per pathway (inclusive)"
+        ui.selector.disabled = realizations.is_empty()
     selection_updates = []
     chosen = realizations.head(0)
     selection_events = events.head(0)
     active_groups = set()
     selection_notice = Div(visible=False)
-    rates = RateViews(db, experiment, cluster, pathways, fate_names, fate_colors, ui)
+    rates = RateViews(
+        db,
+        experiment,
+        cluster,
+        pathways,
+        fate_names,
+        fate_colors,
+        ui,
+        pathway_mode=pathway_mode,
+    )
     collision_coordinates = None
     collision_panels = []
     drag_bridge = Div(text="", visible=False, name="schematic_drag_bridge")
@@ -235,8 +281,15 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         lo, hi = (
             (int(v) for v in ui.selector.value)
             if enabled(ui.show_pager)
-            else (1, max(total, 1))
+            else (1, int(ui.selector.end))
         )
+        if pathway_mode:
+            return realizations.filter(
+                pl.col("simulated_pathway_id").is_in(
+                    [pathway_ids[i] for i in ui.fate.active]
+                )
+                & pl.col("realization_number").is_between(lo, hi)
+            )
         chosen_fates = {fate_names[i] for i in ui.fate.active}
         return select_realizations(realizations, (lo, hi), chosen_fates)
 
@@ -352,13 +405,18 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             state["selected"] = state["event"] = None
         chosen_events = events_for(events, chosen)
         chosen_events = chosen_events.join(
-            chosen.select(pl.col("id").alias("realization_id"), "realization_number"),
+            chosen.select(
+                pl.col("id").alias("realization_id"),
+                "realization_number",
+                *(["simulated_pathway"] if pathway_mode else []),
+            ),
             on="realization_id",
             how="left",
             maintain_order="left",
         )
         ui.counts.text = f"<b>{chosen.height} selected / {total} total realizations</b>"
-        ui.counts.visible = ui.selector.visible = enabled(ui.show_pager)
+        ui.counts.visible = not pathway_mode and enabled(ui.show_pager)
+        ui.selector.visible = enabled(ui.show_pager)
         incomplete = chosen.filter(
             pl.col("fate").is_in(["Incomplete", "Ambiguous"])
         ).height
@@ -383,7 +441,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.group_fragmentations.disabled = enabled(ui.fate_facets)
         if ui.group_fragmentations.disabled:
             ui.group_fragmentations.active = [0]
-        grouped = enabled(ui.group_fragmentations)
+        grouped = enabled(ui.group_fragmentations) and not pathway_mode
         if grouped != state["grouped"]:
             if grouped:
                 ui.event_options["fragmentation"].active = (
@@ -408,9 +466,16 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.event_options["collision"].labels = [
             "Accepted collisions" if separated else "Collision"
         ]
-        selected_fates = {fate_names[i] for i in ui.fate.active}
+        selected_fates = (
+            set(selected_cohort()["fate"])
+            if pathway_mode
+            else {fate_names[i] for i in ui.fate.active}
+        )
         available_events = events_for(
-            events, realizations.filter(pl.col("fate").is_in(selected_fates))
+            events,
+            selected_cohort()
+            if pathway_mode
+            else realizations.filter(pl.col("fate").is_in(selected_fates)),
         )
         kinds = (
             list(EVENT_TYPES)
@@ -425,7 +490,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         }
         for kind, widget in ui.event_options.items():
             if kind == "escape":
-                available = escape_name in selected_fates
+                available = (
+                    "escape" in available_events["type"]
+                    if pathway_mode
+                    else escape_name in selected_fates
+                )
             elif kind in ("collision", "rejected_collision"):
                 rejected = (
                     pl.col("accepted").eq(False).fill_null(False)
@@ -444,10 +513,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 ).is_empty()
             else:
                 available = (
-                    kind not in fate_names or kind in selected_fates
+                    pathway_mode or kind not in fate_names or kind in selected_fates
                 ) and kind in available_events["event_pathway"]
             widget.disabled = not available
-        ui.event_options["escape"].labels = ["Escape" if grouped else escape_name]
+        ui.event_options["escape"].labels = [
+            "Escape" if grouped or pathway_mode else escape_name
+        ]
         ui.event_controls.children = [ui.event_options[kind] for kind in kinds]
         active_groups = {
             kind
@@ -529,13 +600,36 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         use_x_markers = enabled(ui.x_markers) and not ui.x_markers.disabled
         rows = (
             [
-                (chosen.filter(pl.col("fate") == name), name)
+                (chosen.filter(pl.col("fate") == name), name, None)
                 for name in fate_names
                 if name in {fate_names[i] for i in ui.fate.active}
             ]
-            if enabled(ui.fate_facets)
-            else [(chosen, "All selected pathways")]
+            if enabled(ui.fate_facets) and not pathway_mode
+            else [(chosen, "All selected pathways", None)]
         )
+        population = selected_cohort() if pathway_mode else chosen
+        if pathway_mode:
+            rows = [
+                (
+                    chosen.filter(pl.col("simulated_pathway_id") == pathway_ids[i]),
+                    selector_names[i],
+                    pathway_ids[i],
+                )
+                for i in ui.fate.active
+            ]
+        shared_y = None
+        if pathway_mode and ui.layout.value in ("realization", "radial"):
+            if ui.layout.value == "realization":
+                lo = int(ui.selector.value[0]) if enabled(ui.show_pager) else 1
+                hi = (
+                    int(ui.selector.value[1])
+                    if enabled(ui.show_pager)
+                    else int(ui.selector.end)
+                )
+                shared_y = Range1d(lo - 0.5, hi + 0.5)
+            else:
+                maximum = events_for(events, population)["radial"].max() or 0
+                shared_y = Range1d(0, maximum * 1000 * 1.05 if maximum else 1)
         max_position = positioned["position"].max()
         if spatial:
             left_edge = (
@@ -616,9 +710,21 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
 
             return on_selected
 
-        for members, row_name in rows:
-            if members.is_empty() and chosen.is_empty():
+        for members, row_name, pid in rows:
+            if members.is_empty() and chosen.is_empty() and not pathway_mode:
                 continue
+            denominator = None
+            if pathway_mode:
+                # Rows follow the pathway selector, including empty cohorts.
+                denominator = population.filter(
+                    pl.col("simulated_pathway_id") == pid
+                ).height
+                if members.is_empty():
+                    panels.append(
+                        Div(
+                            text=f"<b>{escape(row_name)}</b>: No realizations match the selected range."
+                        )
+                    )
             member_events = events_for(positioned, members)
             plots = []
             if enabled(ui.show_events):
@@ -639,10 +745,13 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         state,
                         selection_callback,
                         event_colors,
-                        (
+                        (lo, hi)
+                        if pathway_mode and ui.layout.value == "realization"
+                        else (
                             members["realization_number"].min() or 1,
                             members["realization_number"].max() or 1,
                         ),
+                        y_range=shared_y,
                         spread_terminals=spread_terminals,
                         selection_updates=selection_updates,
                         doc=doc,
@@ -675,16 +784,26 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                                 left_edge,
                                 right_edge,
                                 row_colors,
+                                denominator=denominator,
                             ),
                             shared_x,
                             row_colors,
                         )
                     )
                 if enabled(ui.show_bars) and regional:
-                    bars = regional_fractions(members, member_events, mapped_regions)
-                    plots.append(_bar_plot(bars, shared_x))
+                    bars = regional_fractions(
+                        members, member_events, mapped_regions, denominator=denominator
+                    )
+                    bar = _bar_plot(bars, shared_x)
+                    if pathway_mode:
+                        bar.y_range = Range1d(0, 1)
+                    plots.append(bar)
             if enabled(ui.fate_facets) and plots:
-                plots[0].title = f"{row_name} (N={members.height})"
+                plots[0].title = (
+                    f"{row_name} ({members.height} shown / {denominator} in range)"
+                    if pathway_mode
+                    else f"{row_name} (N={members.height})"
+                )
             for plot in plots:
                 plot.min_border_top = 0
                 plot.min_border_bottom = 0
@@ -717,11 +836,13 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     else "Zone"
                 )
             panels.extend(plots)
-        if chosen.is_empty():
+        if chosen.is_empty() and (not pathway_mode or not rows):
             panels.insert(
                 0,
                 Div(
-                    text="<p>No realizations in this cohort. Adjust the range or pathway filters.</p>"
+                    text="<p>Select at least one pathway.</p>"
+                    if pathway_mode
+                    else "<p>No realizations in this cohort. Adjust the range or pathway filters.</p>"
                 ),
             )
         sync_collision_spacing(panels)

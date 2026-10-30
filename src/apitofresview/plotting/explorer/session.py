@@ -145,7 +145,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if mode == "sidebar":
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
-        apply_layout(ui, layout, full=full, bottom=bottom)
         narrow = int(ui.viewport_width.text.split(",")[0]) < 900
         if narrow and left_open and right_open and not bottom:
             left_open = False
@@ -158,6 +157,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 button.visible = right_open
         finally:
             state["syncing_sidebar"] = False
+        apply_layout(ui, layout, full=full, bottom=bottom)
         ui.left_controls.visible, ui.right_controls.visible = left_open, right_open
         ui.left.width = 205 if left_open else 38
         ui.right.width = (250 if narrow else 300) if right_open else 38

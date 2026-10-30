@@ -106,6 +106,43 @@ def explorer_server(monkeypatch):
         yield url
 
 
+@pytest.mark.parametrize("width", [640, 1280])
+def test_closed_panel_buttons_overlay_plot_area(page, explorer_server, width):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(explorer_server)
+    page.get_by_role("button", name="« Controls", exact=True).click()
+
+    def check_overlay():
+        page.wait_for_function("""() => {
+            const frame = Bokeh.documents[0].roots()[0];
+            const body = frame.children[0];
+            const [left, workspace] = body.children;
+            const [center, right] = workspace.children;
+            const rect = model => Bokeh.index.find_one(model).el.getBoundingClientRect();
+            if (left.children[0].active || right.children[0].children[0].active)
+                return false;
+            const area = rect(body), plots = rect(center);
+            return Math.abs(plots.left - area.left) <= 1 &&
+                Math.abs(plots.right - area.right) <= 1 &&
+                [left, right].every(panel => {
+                    const button = rect(panel);
+                    return button.left >= plots.left && button.right <= plots.right &&
+                        button.top < plots.bottom && button.bottom > plots.top;
+                });
+        }""")
+        expect(page.get_by_role("button", name="»", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="☷", exact=True)).to_be_visible()
+
+    check_overlay()
+    page.get_by_role("button", name="»", exact=True).click()
+    page.get_by_role("button", name="« Controls", exact=True).click()
+    check_overlay()
+    page.get_by_role("button", name="☷", exact=True).click()
+    page.get_by_role("button", name="Bottom", exact=True).click()
+    page.get_by_role("button", name="Hide details ↓", exact=True).click()
+    check_overlay()
+
+
 @pytest.fixture
 def overlap_server(monkeypatch):
     frames = cohort(

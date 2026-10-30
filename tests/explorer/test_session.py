@@ -210,7 +210,7 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
     fullscreen.text = "full"
     assert not sidebars[0].children[1].visible and not sidebars[2].children[1].visible
-    assert sidebars[0].styles["height"] == "100%"
+    assert sidebars[0].styles["position"] == "absolute"
     fullscreen.text = "normal"
     assert sidebars[0].children[1].visible and not sidebars[2].children[1].visible
     viewport = next(d for d in doc.select({"type": Div}) if d.text == "1440,900")

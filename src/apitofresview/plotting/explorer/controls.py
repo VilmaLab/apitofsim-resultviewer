@@ -617,7 +617,7 @@ def apply_layout(ui, layout, *, full=False, bottom=False):
             "overflow": "hidden",
         }
     )
-    ui.body.styles = ui.workspace.styles = container
+    ui.body.styles = ui.workspace.styles = {**container, "position": "relative"}
     ui.left.styles = flow if page else {"height": "100%"}
     ui.left_controls.styles = ui.right_controls.styles = scrolling
     ui.center.styles = {**scrolling, "flex": "1"}
@@ -633,6 +633,20 @@ def apply_layout(ui, layout, *, full=False, bottom=False):
         if bottom
         else container
     )
+
+    # Closed panels only contain their opener; float it over the plots so it
+    # does not reserve a column (or a flex gap) in the plotting workspace.
+    for panel, toggle, edge in (
+        (ui.left, ui.left_toggle, "left"),
+        (ui.right, ui.right_toggle, "right"),
+    ):
+        if not toggle.active:
+            panel.styles = {
+                "position": "absolute",
+                "top": "0",
+                edge: "0",
+                "z-index": "10",
+            }
 
 
 def prepare_toolbar(plot):

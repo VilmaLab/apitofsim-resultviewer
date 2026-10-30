@@ -135,6 +135,11 @@ def test_closed_panel_buttons_overlay_plot_area(page, explorer_server, width):
 
     check_overlay()
     page.get_by_role("button", name="»", exact=True).click()
+    page.wait_for_function("""() => {
+        const [left, workspace] = Bokeh.documents[0].roots()[0].children[0].children;
+        const rect = model => Bokeh.index.find_one(model).el.getBoundingClientRect();
+        return left.children[0].active && rect(left).right <= rect(workspace.children[0]).left;
+    }""")
     page.get_by_role("button", name="« Controls", exact=True).click()
     check_overlay()
     page.get_by_role("button", name="☷", exact=True).click()

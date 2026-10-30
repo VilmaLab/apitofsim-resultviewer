@@ -640,13 +640,13 @@ def apply_layout(ui, layout, *, full=False, bottom=False):
         (ui.left, ui.left_toggle, "left"),
         (ui.right, ui.right_toggle, "right"),
     ):
-        if not toggle.active:
-            panel.styles = {
-                "position": "absolute",
-                "top": "0",
-                edge: "0",
-                "z-index": "10",
-            }
+        panel.styles = {
+            **(panel.styles if toggle.active else {"height": "auto"}),
+            "position": "relative" if toggle.active else "absolute",
+            "top": "auto" if toggle.active else "0",
+            edge: "auto" if toggle.active else "0",
+            "z-index": "auto" if toggle.active else "10",
+        }
 
 
 def prepare_toolbar(plot):

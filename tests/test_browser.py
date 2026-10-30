@@ -83,7 +83,7 @@ def test_selected_experiment_opens_overview_with_summary_and_config(
         ("Start time", "2 Jan 2026, 03:04:05"),
         ("Successes", "1"),
         ("Failures", "0"),
-        ("Pathway mode", "Single pathway"),
+        ("Pathway mode", "Pathway at a time"),
     ]:
         row = table.get_by_role("row").filter(has_text=label)
         expect(row.get_by_role("cell")).to_have_text(value)

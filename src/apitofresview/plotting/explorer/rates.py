@@ -103,8 +103,11 @@ def place_readout(label, chart, x, y, logarithmic, offset=0):
 
 
 class RateViews:
-    def __init__(self, db, run, cluster, pathways, fate_names, colors, ui):
+    def __init__(
+        self, db, run, cluster, pathways, fate_names, colors, ui, *, pathway_mode=False
+    ):
         self.db, self.run, self.cluster, self.ui = db, run, cluster, ui
+        self.pathway_mode = pathway_mode
         self.names = dict(pathways.select("pathway_id", "pathway").iter_rows())
         self.default_names = set(fate_names)
         self.colors = dict(colors)
@@ -207,7 +210,11 @@ class RateViews:
             curve
             for curve in curves
             if enabled(self.ui.all_pathways)
-            or self.names.get(curve.pathway_id) in self.default_names
+            or (
+                curve.participating
+                if self.pathway_mode
+                else self.names.get(curve.pathway_id) in self.default_names
+            )
         ]
         if not curves:
             self.ui.rate_plots.children = [message("No rate pathways to display.")]

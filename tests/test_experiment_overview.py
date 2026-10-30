@@ -52,7 +52,7 @@ def test_get_experiment_overview_returns_formatted_summary_and_both_configs():
         "start_time": "2 Jan 2026, 03:04:05",
         "successes": 12,
         "failures": 3,
-        "pathway_mode": "Single pathway",
+        "pathway_mode": "Single cluster",
         "configuration": {
             "experiment_config": {"temperature": 300},
             "run_config": {"simulation_mode": "SINGLE_CLUSTER"},
@@ -71,11 +71,11 @@ def test_metadata_choices_and_modes_are_scoped_and_readonly(browser_database):
     try:
         assert get_experiment_choices(db) == [
             (
-                "#1 Browser test run at 2026-01-02 03:04:05 (single pathway, success rate: 1/1)",
+                "#1 Browser test run at 2026-01-02 03:04:05 (pathway at a time, success rate: 1/1)",
                 1,
             ),
             (
-                "#2 Other run run at 2026-01-03 03:04:05 (single pathway, success rate: 1/1)",
+                "#2 Other run run at 2026-01-03 03:04:05 (pathway at a time, success rate: 1/1)",
                 2,
             ),
         ]
@@ -113,6 +113,23 @@ def test_multi_pathway_metadata_keeps_display_sorting_local():
             ("Heavy (100.0 amu)", 1),
         ]
         assert get_is_single_pathway(db, 1, 1) is False
-        assert get_experiment_overview(db, 1)["pathway_mode"] == "Multi-pathway"
+        assert get_experiment_overview(db, 1)["pathway_mode"] == "Single cluster"
+    finally:
+        db.close()
+
+
+def test_mode_labels_use_recorded_mode_before_run_config():
+    from apitofresview.modes import MODE_LABELS, mode_label
+
+    db = ExperimentDatabase(":memory:")
+    db.create_tables()
+    try:
+        db.db.execute("insert into experiment_config (id) values (1)")
+        for i, (mode, label) in enumerate(MODE_LABELS.items(), start=1):
+            db.db.execute(
+                "insert into experiment_run (id,experiment_config_id,simulation_mode,run_config) values (?,1,?,?)",
+                [i, mode, '{"simulation_mode":"SINGLE_CLUSTER"}'],
+            )
+            assert mode_label(db, i, True) == label
     finally:
         db.close()

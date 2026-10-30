@@ -8,6 +8,8 @@ import duckdb
 import polars as pl
 from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_lengths
 
+from apitofresview.modes import simulation_mode
+
 EVENT_TYPES = ("init", "collision", "fragmentation", "escape")
 REGIONS = (
     "First chamber",
@@ -32,9 +34,13 @@ def make_regions(boundaries):
 
 def load_data(db, experiment: int, cluster: int):
     """Return realization, event, pathway and region frames for one cohort."""
+    pathway_mode = simulation_mode(db, experiment) == "PATHWAY_AT_A_TIME"
     realizations = (
         db.realizations_query(run_id=experiment, parent=cluster)
-        .select("realization_id as id, experiment_result_id")
+        .select(
+            "realization_id as id, experiment_result_id"
+            + (", pathway_id as simulated_pathway_id" if pathway_mode else "")
+        )
         .order("id")
         .pl()
     )
@@ -66,6 +72,21 @@ def load_data(db, experiment: int, cluster: int):
             ).alias("pathway"),
         )
     )
+    if pathway_mode:
+        recorded = db.db.execute(
+            "select distinct pathway_id from experiment_result "
+            "where experiment_run_id = ? and cluster_id = ?",
+            [experiment, cluster],
+        ).pl()
+        pathways = (
+            pathways.join(
+                recorded.with_columns(pl.lit(True).alias("simulated")),
+                on="pathway_id",
+                how="left",
+            )
+            .with_columns(pl.col("simulated").fill_null(False))
+            .sort("pathway_id")
+        )
     regions = make_regions(
         tuple(
             float(v)
@@ -79,8 +100,26 @@ def load_data(db, experiment: int, cluster: int):
         .select("common_name")
         .fetchone()[0]
     )
+    classified = classify(realizations, events, pathways, cluster_name)
+    if pathway_mode:
+        classified = (
+            classified.join(
+                realizations.select("id", "simulated_pathway_id"), on="id", how="left"
+            )
+            .join(
+                pathways.select("pathway_id", "pathway").rename(
+                    {
+                        "pathway_id": "simulated_pathway_id",
+                        "pathway": "simulated_pathway",
+                    }
+                ),
+                on="simulated_pathway_id",
+                how="left",
+            )
+            .sort("id")
+        )
     return (
-        classify(realizations, events, pathways, cluster_name),
+        classified,
         events,
         pathways,
         regions,

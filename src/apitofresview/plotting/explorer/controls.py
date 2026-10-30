@@ -135,6 +135,7 @@ def create_controls(
     initial_details,
     *,
     layout="viewport",
+    pathway_mode=False,
 ):
     """Build the frame and attach browser bridges for one document."""
     layout_policy = layout
@@ -158,9 +159,11 @@ def create_controls(
         ],
     )
 
-    fate_facets = checkbox("Facet pathways")
+    fate_facets = checkbox("Facet pathways", pathway_mode)
+    fate_facets.visible = not pathway_mode
     separate_rejected = checkbox("Separate rejected collisions")
     group_fragmentations = checkbox("Group fragmentations", True)
+    group_fragmentations.visible = not pathway_mode
     own_zones = checkbox("Place initial/escape in their own zones", True)
     spread_x = checkbox("Spread initial/escape X", True)
     event_options = (
@@ -315,7 +318,13 @@ def create_controls(
     left_controls = column(
         fullscreen_button,
         group(
-            "Pathways", column(fate, fate_facets, spacing=4), name="sidebar_pathways"
+            "Pathways",
+            column(
+                fate,
+                fate_facets,
+                spacing=4,
+            ),
+            name="sidebar_pathways",
         ),
         group("X-axis", column(mode, sizing, guides, spacing=4)),
         group(

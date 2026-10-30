@@ -268,3 +268,56 @@ def test_pairing_does_not_skip_records_or_reuse_a_collision():
         None,
         7,
     ]
+
+
+def test_pathway_cohorts_keep_simulated_pathway_for_escaped_and_empty_results(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "independent.duckdb"
+    db = RealizationDatabase(path)
+    db.create_tables()
+    db.db.execute("""
+        insert into cluster (id,common_name) values (1,'Parent'),(2,'A'),(3,'B');
+        insert into pathway values (7,1,2,3),(8,1,3,2),(9,1,2,2),(10,1,3,3);
+        insert into experiment_config (id) values (1);
+        insert into experiment_run (id,experiment_config_id,simulation_mode)
+        values (1,1,'PATHWAY_AT_A_TIME');
+        insert into single_pathway_experiment_result (id,experiment_run_id,pathway_id)
+        values (10,1,7),(11,1,8),(12,1,9);
+        insert into realization values (100,10),(200,11);
+    """)
+    for column, value in {
+        "velocity": "{'x':1,'y':2,'z':3}",
+        "omega": "{'x':4,'y':5,'z':6}",
+        "rot_energy": "1e-21",
+        "vibrational_energy": "2e-20",
+        "particle_index": "0",
+    }.items():
+        db.db.execute(f"alter table event_info alter {column} set default {value}")
+    db.db.execute("""
+        insert into event_info (id,realization_id,event_type,postime) values
+        (1,100,'fragmentation',{'x':0,'y':0,'z':2,'t':1}),
+        (2,200,'escape',{'x':0,'y':0,'z':5,'t':2});
+        insert into fragmentation_event values (1,7);
+    """)
+    db.close()
+    monkeypatch.setattr(data, "get_geometry", lambda *args: None)
+    monkeypatch.setattr(
+        data, "lengths_to_cumulative_lengths", lambda *args: (0, 1, 2, 3, 4, 5)
+    )
+    db = RealizationDatabase(path, readonly=True)
+    try:
+        members, events, pathways, _ = data.load_data(db, 1, 1)
+        assert members["simulated_pathway_id"].to_list() == [7, 8]
+        assert members["simulated_pathway"].to_list() == [
+            "Parent → A + B",
+            "Parent → B + A",
+        ]
+        assert members["fate"].to_list() == ["Parent → A + B", "Parent → Parent"]
+        assert events.filter(pl.col("type") == "escape")["pathway_id"][0] is None
+        assert pathways.filter(pl.col("simulated"))["pathway_id"].to_list() == [7, 8, 9]
+        assert (
+            pathways.height == 4
+        )  # Other pathways remain available for rate comparisons.
+    finally:
+        db.close()

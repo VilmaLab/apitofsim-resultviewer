@@ -6,7 +6,7 @@ from math import isfinite
 
 import polars as pl
 from bokeh.layouts import column, row
-from bokeh.models import Column, Div, FixedTicker, Range1d
+from bokeh.models import Column, CustomJS, Div, FixedTicker, Range1d
 
 from .aggregation import cumulative_areas, regional_fractions
 from .controls import (
@@ -847,6 +847,25 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             )
         sync_collision_spacing(panels)
         ui.center_plots.children = [selection_notice, *panels]
+        axis_plot = next((p for p in panels if getattr(p, "yaxis", None)), None)
+        if axis_plot is not None:
+            axis_plot.js_on_change(
+                "inner_width",
+                CustomJS(
+                    args=dict(plot=axis_plot, notes=[ui.counts, ui.quality]),
+                    code="""
+                    const view = Bokeh.index.find_one(plot);
+                    if (!view) return;
+                    const axis = view.canvas_view.events_el.getBoundingClientRect().left + view.frame.bbox.left;
+                    for (const note of notes) {
+                        const el = Bokeh.index.find_one(note)?.el;
+                        if (el?.checkVisibility())
+                            note.styles = {...note.styles, "box-sizing": "border-box",
+                                "padding-left": `${Math.max(0, axis - el.getBoundingClientRect().left)}px`};
+                    }
+                    """,
+                ),
+            )
 
     def render():
         nonlocal chosen, active_groups

@@ -148,6 +148,43 @@ def test_closed_panel_buttons_overlay_plot_area(page, explorer_server, width):
     check_overlay()
 
 
+@pytest.mark.parametrize("width", [640, 1280])
+def test_plot_notes_align_with_y_axis(monkeypatch, page, width):
+    frames = cohort(
+        [1, 2],
+        event(1, "collision", 1, 1, 0, clamped=True),
+        event(2, "escape", 2, 1, 5),
+    )
+    with serve_explorer(monkeypatch, frames) as url:
+        page.set_viewport_size({"width": width, "height": 900})
+        page.goto(url)
+        page.get_by_text("Realizations pager", exact=True).click()
+        page.get_by_role("button", name="« Controls", exact=True).click()
+        for viewport in (width, 920):
+            page.set_viewport_size({"width": viewport, "height": 900})
+            page.wait_for_function("""() => {
+                const doc = Bokeh.documents[0];
+                const plot = doc.get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+                const view = plot && Bokeh.index.find_one(plot);
+                if (!view || !(plot.inner_width > 0)) return false;
+                const [left, workspace] = doc.roots()[0].children[0].children;
+                if (left.children[0].active) return false;
+                const button = Bokeh.index.find_one(left).el.getBoundingClientRect();
+                const axis = view.canvas_view.events_el.getBoundingClientRect().left + view.frame.bbox.left;
+                return workspace.children[0].children.slice(0, 2).every(note => {
+                    const el = Bokeh.index.find_one(note).markup_el;
+                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                    let text;
+                    while ((text = walker.nextNode()) && !text.textContent.trim()) {}
+                    if (!text) return false;
+                    const range = document.createRange();
+                    range.selectNodeContents(text);
+                    const bounds = range.getBoundingClientRect();
+                    return Math.abs(bounds.left - axis) <= 1 && bounds.left > button.right;
+                });
+            }""")
+
+
 @pytest.fixture
 def overlap_server(monkeypatch):
     frames = cohort(

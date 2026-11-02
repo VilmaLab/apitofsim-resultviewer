@@ -35,6 +35,7 @@ from .plot import (
     _schematic_plot,
 )
 from .rates import RateViews
+from .tree import ExecutionTree, install_tree_controls
 
 
 def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport"):
@@ -49,6 +50,23 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         return
 
     pathway_mode = "simulated_pathway_id" in realizations.columns
+    tree = (
+        ExecutionTree.load(db, experiment, cluster, pathways)
+        if "current_cluster_id" in events.columns
+        else None
+    )
+    if tree and not tree.nodes:
+        doc.add_root(
+            Div(text="No recorded cluster-tree executions for this selection.")
+        )
+        return
+    if tree:
+        tree.incomplete = set(realizations["fate"])
+        realizations = realizations.with_columns(
+            pl.col("fate")
+            .replace_strict(tree.leaf_labels(), default="Incomplete")
+            .alias("fate_label")
+        )
     # Number the full population before applying pathway and range filters.
     realizations = (
         realizations.with_columns(
@@ -61,7 +79,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         else realizations.with_row_index("realization_number", offset=1)
     )
     fate_names = realizations["fate"].unique().sort().to_list()
+    if tree:
+        fate_names = list(tree.leaf_labels())
+        if "Incomplete" not in realizations["fate"]:
+            fate_names.remove("Incomplete")
     fate_counts = dict(realizations.group_by("fate").len().iter_rows())
+    fate_counts = {name: fate_counts.get(name, 0) for name in fate_names}
     escaped_fates = (
         realizations.join(
             events.filter(pl.col("type") == "escape"),
@@ -79,7 +102,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
     )
     fragmentation_names = (
-        events.filter(pl.col("type") == "fragmentation")["event_pathway"]
+        pathways["pathway"].unique().sort().to_list()
+        if tree
+        else events.filter(pl.col("type") == "fragmentation")["event_pathway"]
         .unique()
         .sort()
         .to_list()
@@ -139,6 +164,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         pathway_mode=pathway_mode,
     )
 
+    scope, tree_labels = (
+        install_tree_controls(doc, ui, tree, fate_names, fate_counts, fate_colors)
+        if tree
+        else (None, {})
+    )
+
     if pathway_mode:
         ui.selector.title = "Realization numbers per pathway (inclusive)"
         ui.selector.disabled = realizations.is_empty()
@@ -156,6 +187,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         fate_colors,
         ui,
         pathway_mode=pathway_mode,
+        tree=tree,
     )
     collision_coordinates = None
     collision_panels = []
@@ -347,14 +379,23 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if state["event"] is not None
             else selected_events.head(0)
         )
+        old_collision = rates.collision_plot
         rates.update(
             selected,
             selected_event.row(0, named=True)
             if not selected_event.is_empty()
             else None,
         )
+        if rates.collision_plot is not old_collision:
+            sync_collision_panels()
         state["plot_event"] = (
-            selected_event["collision_id"][0] or state["event"]
+            selected_event["collision_id"][0]
+            or (
+                selected_event["fragmentation_id"][0]
+                if "fragmentation_id" in selected_event.columns
+                else None
+            )
+            or state["event"]
             if not selected_event.is_empty()
             else None
         )
@@ -418,7 +459,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.counts.visible = not pathway_mode and enabled(ui.show_pager)
         ui.selector.visible = enabled(ui.show_pager)
         incomplete = chosen.filter(
-            pl.col("fate").is_in(["Incomplete", "Ambiguous"])
+            pl.col("terminal_event_id").is_null()
+            if tree
+            else pl.col("fate").is_in(["Incomplete", "Ambiguous"])
         ).height
         clamped = chosen_events["z_clamped"].sum()
         ui.quality.text = "<br>".join(
@@ -492,7 +535,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if kind == "escape":
                 available = (
                     "escape" in available_events["type"]
-                    if pathway_mode
+                    if pathway_mode or tree
                     else escape_name in selected_fates
                 )
             elif kind in ("collision", "rejected_collision"):
@@ -513,11 +556,14 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 ).is_empty()
             else:
                 available = (
-                    pathway_mode or kind not in fate_names or kind in selected_fates
+                    pathway_mode
+                    or tree
+                    or kind not in fate_names
+                    or kind in selected_fates
                 ) and kind in available_events["event_pathway"]
             widget.disabled = not available
         ui.event_options["escape"].labels = [
-            "Escape" if grouped or pathway_mode else escape_name
+            "Escape" if grouped or pathway_mode or tree else escape_name
         ]
         ui.event_controls.children = [ui.event_options[kind] for kind in kinds]
         active_groups = {
@@ -591,7 +637,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         dedicated_zones = regional and enabled(ui.own_zones)
         spread_terminals = enabled(ui.spread_x) and not ui.spread_x.disabled
         positioned = position_events(
-            chosen_events.filter(pl.col("type") != "postcollision"),
+            chosen_events.filter(
+                ~pl.col("type").is_in(["postcollision", "postfragmentation"])
+            ),
             mapped_regions,
             ui.mode.value,
             dedicated_zones,
@@ -713,6 +761,15 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         for members, row_name, pid in rows:
             if members.is_empty() and chosen.is_empty() and not pathway_mode:
                 continue
+            if tree and members.is_empty():
+                panels.append(
+                    Div(
+                        text=f"<b>{escape(tree_labels[row_name])}</b>: No recorded histories match this leaf in the selected range.",
+                        sizing_mode="stretch_width",
+                        styles={"overflow-wrap": "anywhere"},
+                    )
+                )
+                continue
             denominator = None
             if pathway_mode:
                 # Rows follow the pathway selector, including empty cohorts.
@@ -771,15 +828,28 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         if spatial
                         else member_events
                     )
+                    cumulative_members = (
+                        tree.cumulative_members(members, cumulative_events, scope.value)
+                        if tree
+                        else members
+                    )
                     row_colors = {
                         name: fate_colors[name]
                         for name in fate_names
                         if name in members["fate"]
                     }
+                    if tree:
+                        row_colors = {
+                            name: fate_colors.get(name, COLORS["escape"])
+                            for name in cumulative_members["fate"]
+                            .drop_nulls()
+                            .unique()
+                            .sort()
+                        }
                     plots.append(
                         _cdf_plot(
                             cumulative_areas(
-                                members,
+                                cumulative_members,
                                 cumulative_events,
                                 left_edge,
                                 right_edge,
@@ -795,15 +865,29 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         members, member_events, mapped_regions, denominator=denominator
                     )
                     bar = _bar_plot(bars, shared_x)
+                    if tree:
+                        bar.yaxis.axis_label = "Events / realization"
                     if pathway_mode:
                         bar.y_range = Range1d(0, 1)
                     plots.append(bar)
-            if enabled(ui.fate_facets) and plots:
+            if tree and enabled(ui.fate_facets) and plots:
+                panels.append(
+                    Div(
+                        text=f"<b>{escape(tree_labels.get(row_name, row_name))} (N={members.height})</b>",
+                        sizing_mode="stretch_width",
+                        styles={"overflow-wrap": "anywhere"},
+                    )
+                )
+            elif enabled(ui.fate_facets) and plots:
                 plots[0].title = (
                     f"{row_name} ({members.height} shown / {denominator} in range)"
                     if pathway_mode
-                    else f"{row_name} (N={members.height})"
+                    else f"{tree_labels.get(row_name, row_name)} (N={members.height})"
                 )
+            if tree and enabled(ui.show_cdf):
+                for chart in plots:
+                    if chart.name == "cdf":
+                        chart.title = f"Cumulative from {tree.label(scope.value)} (N={members.height} selected)"
             for plot in plots:
                 plot.min_border_top = 0
                 plot.min_border_bottom = 0
@@ -990,6 +1074,14 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         update_selection()
 
     ui.show_rates.on_change("active", show_rates_changed)
+    if scope is not None:
+
+        def scope_changed(attr, old, new):
+            ui.show_cdf.active = [0]
+            render()
+
+        scope.on_change("value", scope_changed)
+
     ui.collision_rates.on_change("active", collision_changed)
     ui.log_rates.on_change("active", rate_scale_changed)
     ui.show_readoffs.on_change("active", lambda attr, old, new: update_selection())

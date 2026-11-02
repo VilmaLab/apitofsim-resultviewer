@@ -11,7 +11,15 @@ def regional_fractions(realizations, events, regions, *, denominator=None):
     terminals = realizations.join(
         events, left_on="terminal_event_id", right_on="id", how="inner"
     )
-    fragmented = terminals.filter(pl.col("type") == "fragmentation")
+    fragmented = (
+        events.filter(pl.col("type") == "fragmentation").join(
+            realizations.select(pl.col("id").alias("realization_id")),
+            on="realization_id",
+            how="semi",
+        )
+        if "current_cluster_id" in events.columns
+        else terminals.filter(pl.col("type") == "fragmentation")
+    )
     escaped = terminals.filter(pl.col("type") == "escape").height
     regional = fragmented.group_by("region").len()
     bars = (

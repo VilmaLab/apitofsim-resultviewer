@@ -114,6 +114,21 @@ Stable region classes are `.explorer-bokeh-frame`, `.explorer-controls`,
 `.explorer-center`, `.explorer-plots`, and `.explorer-details`; some are inside
 Bokeh shadow roots.
 
+### Cluster-tree exploration
+
+The Explorer uses apitofsim 0.27's persisted execution trees. Expand branches to
+select outcome leaves independently; parent checkboxes select their whole
+subtree. Folding preserves selection, and facets show complete histories.
+Routes reaching the same species remain separate.
+
+Regional bars count every recorded fragmentation per selected realization, so
+they can exceed one. The cumulative plot counts first-level fragmentations and
+escapes by default. Click the cumulative icon beside a branch to count that
+node's immediate outcomes instead; the denominator remains all selected
+histories in the facet. Before/after fragmentation rows share time and position,
+while species, energy, and motion remain independently inspectable. Rate panels
+follow the selected state's species. Interrupted histories remain incomplete.
+
 ## Developing
 
 ```bash

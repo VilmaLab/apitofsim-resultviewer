@@ -10,6 +10,8 @@ from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_length
 
 from apitofresview.modes import simulation_mode
 
+from .tree import ExecutionTree
+
 EVENT_TYPES = ("init", "collision", "fragmentation", "escape")
 REGIONS = (
     "First chamber",
@@ -35,9 +37,8 @@ def make_regions(boundaries):
 def load_data(db, experiment: int, cluster: int):
     """Return realization, event, pathway and region frames for one cohort."""
     mode = simulation_mode(db, experiment)
-    if mode == "CLUSTER_TREE":
-        raise ValueError("The Explorer does not yet support cluster-tree histories.")
     pathway_mode = mode == "PATHWAY_AT_A_TIME"
+    tree_mode = mode == "CLUSTER_TREE"
     realizations = (
         db.realizations_query(run_id=experiment, parent=cluster)
         .select(
@@ -48,7 +49,11 @@ def load_data(db, experiment: int, cluster: int):
         .pl()
     )
     events = (
-        db.events_query(run_id=experiment, parent=cluster, sort=True)
+        (
+            db.tree_events_query(run_id=experiment, parent=cluster)
+            if tree_mode
+            else db.events_query(run_id=experiment, parent=cluster, sort=True)
+        )
         .pl()
         .rename({"event_id": "id", "event_type": "type"})
         .with_columns(
@@ -58,22 +63,29 @@ def load_data(db, experiment: int, cluster: int):
         )
         .with_columns(pl.col("z").clip(lower_bound=0))
     )
-    pathways = (
-        db.db.table("pathway_report")
-        .filter(
+    pathway_query = (
+        db.db.sql(
+            """select p.* from pathway_report p where p.cluster_id in (
+            select n.cluster_id from cluster_tree_node n
+            join cluster_tree_experiment_result r on r.id = n.experiment_result_id
+            where r.experiment_run_id = ? and r.cluster_id = ?
+        )""",
+            params=[experiment, cluster],
+        )
+        if tree_mode
+        else db.db.table("pathway_report").filter(
             duckdb.ColumnExpression("cluster_id") == duckdb.ConstantExpression(cluster)
         )
-        .pl()
-        .select(
-            "pathway_id",
-            pl.concat_str(
-                "cluster_common_name",
-                pl.lit(" → "),
-                "product1_common_name",
-                pl.lit(" + "),
-                "product2_common_name",
-            ).alias("pathway"),
-        )
+    )
+    pathways = pathway_query.pl().select(
+        "pathway_id",
+        pl.concat_str(
+            "cluster_common_name",
+            pl.lit(" → "),
+            "product1_common_name",
+            pl.lit(" + "),
+            "product2_common_name",
+        ).alias("pathway"),
     )
     if pathway_mode:
         recorded = db.db.execute(
@@ -103,7 +115,17 @@ def load_data(db, experiment: int, cluster: int):
         .select("common_name")
         .fetchone()[0]
     )
-    classified = classify(realizations, events, pathways, cluster_name)
+    if tree_mode:
+        names = dict(db.db.execute("select id, common_name from cluster").fetchall())
+        events = events.with_columns(
+            pl.col("current_cluster_id")
+            .replace_strict(names, default=None, return_dtype=pl.String)
+            .alias("current_cluster_name")
+        )
+        tree = ExecutionTree.load(db, experiment, cluster, pathways)
+        classified = tree.classify(realizations, events)
+    else:
+        classified = classify(realizations, events, pathways, cluster_name)
     if pathway_mode:
         classified = (
             classified.join(
@@ -129,20 +151,36 @@ def load_data(db, experiment: int, cluster: int):
     )
 
 
-def pair_collisions(events):
-    """Link only adjacent accepted before/after states at the same spacetime point."""
+def _pair_states(events, kind, valid):
     events = events.sort("realization_id", "t", "id")
-    accepted = pl.col("accepted") if "accepted" in events.columns else pl.lit(False)
     paired = (
-        (pl.col("type") == "postcollision")
-        & (pl.col("type").shift() == "collision")
-        & accepted.shift().fill_null(False)
+        (pl.col("type") == f"post{kind}") & (pl.col("type").shift() == kind) & valid
     )
     for key in ("realization_id", "t", "x", "y", "z"):
         paired &= pl.col(key) == pl.col(key).shift()
     return events.with_columns(
-        pl.when(paired).then(pl.col("id").shift()).alias("collision_id")
+        pl.when(paired).then(pl.col("id").shift()).alias(f"{kind}_id")
     )
+
+
+def pair_collisions(events):
+    """Link only adjacent accepted before/after states at the same spacetime point."""
+    accepted = pl.col("accepted") if "accepted" in events.columns else pl.lit(False)
+    return _pair_states(events, "collision", accepted.shift().fill_null(False))
+
+
+def pair_fragmentations(events):
+    """Pair adjacent continuing splits using persisted destination and spacetime."""
+    valid = pl.lit(False)
+    if "provenance" in events.columns:
+        valid = (
+            (pl.col("next_particle_index").shift() == pl.col("particle_index"))
+            & (pl.col("particle_index") >= 0)
+            & (pl.col("provenance") == "persisted")
+            & (pl.col("provenance").shift() == "persisted")
+            & pl.col("continuity_valid").fill_null(False)
+        )
+    return _pair_states(events, "fragmentation", valid)
 
 
 def preprocess_events(events, regions):
@@ -155,7 +193,7 @@ def preprocess_events(events, regions):
         )
         region = pl.when(inside).then(pl.lit(index)).otherwise(region)
     return (
-        pair_collisions(events)
+        pair_fragmentations(pair_collisions(events))
         .with_columns(
             region.alias("region"),
             (pl.col("x").pow(2) + pl.col("y").pow(2)).sqrt().alias("radial"),

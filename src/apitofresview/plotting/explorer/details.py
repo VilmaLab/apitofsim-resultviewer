@@ -18,6 +18,8 @@ def _columns(events, radial, summarise_energy):
         if radial
         else ["x (mm)", "y (mm)", "z (mm)"]
     )
+    if "current_cluster_name" in events.columns:
+        headings += ["Species / state"]
     motion_columns = (
         [
             ("velocity", "z", "Axial velocity (m/s)"),
@@ -74,6 +76,12 @@ def _cells(
     shared_selected=False,
 ):
     kind = escape(event["type"])
+    if (
+        "current_cluster_name" in event
+        and event["type"] == "fragmentation"
+        and event.get("event_pathway")
+    ):
+        kind += "<br/>" + escape(event["event_pathway"])
     if clickable:
         kind = (
             f'<button type="button" aria-label="Inspect event #{event["id"]}">'
@@ -96,6 +104,12 @@ def _cells(
             *(f"<td{shared}>{format_value(value)}</td>" for value in values),
         ]
     )
+    if "current_cluster_name" in event:
+        phase = "After · " if after else "Before · " if rowspan > 1 else ""
+        species = phase + escape(event["current_cluster_name"] or "Unknown")
+        if after and clickable:
+            species = f'<button type="button" aria-label="Inspect event #{event["id"]}">{species}</button>'
+        cells.append(f"<td>{species}</td>")
     values = []
     for key, axes, _ in motion_columns:
         vector = event[key]
@@ -112,7 +126,7 @@ def _cells(
         values.append(_energy(event) if key == "internal_energy" else event[key])
     for index, value in enumerate(values):
         text = format_value(value)
-        if after and clickable and index == 0:
+        if after and clickable and index == 0 and "current_cluster_name" not in event:
             text = (
                 f'<button type="button" aria-label="Inspect event #{event["id"]}">'
                 f"{text}</button>"
@@ -142,18 +156,22 @@ def render_details(
         events, radial, summarise_energy
     )
     rows = []
-    paired = (
-        set(events["collision_id"].drop_nulls())
-        if "collision_id" in events.columns
-        else set()
+
+    def pair(event):
+        return event.get("collision_id") or event.get("fragmentation_id")
+
+    records = list(events.iter_rows(named=True))
+    paired = {pair(event) for event in records if pair(event) is not None}
+    selected_pair = next(
+        (
+            pair(event) or selected_event
+            for event in records
+            if event["id"] == selected_event
+        ),
+        selected_event,
     )
-    selected_collision = selected_event
-    if selected_event is not None and "collision_id" in events.columns:
-        selected = events.filter(events["id"] == selected_event)
-        if not selected.is_empty() and selected["collision_id"][0] is not None:
-            selected_collision = selected["collision_id"][0]
-    for event in events.iter_rows(named=True):
-        after = event.get("collision_id") is not None
+    for event in records:
+        after = pair(event) is not None
         row_class = "explorer-event explorer-after" if after else "explorer-event"
         rows.append(
             f'<tr class="{row_class}" data-event="{event["id"]}" id="event-{event["id"]}" '
@@ -166,15 +184,25 @@ def render_details(
                 clickable=True,
                 rowspan=2 if event["id"] in paired else 1,
                 after=after,
-                shared_selected=event["id"] == selected_collision,
+                shared_selected=event["id"] == selected_pair,
             )
             + "</tr>"
         )
     context = (
         f"<p>Realization #{member['realization_number']}<br>{escape(member['simulated_pathway'])}</p>"
         if "simulated_pathway" in member
-        else f"<p><em>{escape(member['fate'])}</em></p>"
+        else f"<p><em>{escape(member.get('fate_label', member['fate']))}</em></p>"
     )
+    if "provenance" in events.columns:
+        diagnostics = {
+            event["provenance"]
+            for event in records
+            if event["provenance"] != "persisted"
+        }
+        if any(event["continuity_valid"] is not True for event in records):
+            diagnostics.add("unresolved continuity")
+        if diagnostics:
+            context += f"<p>Recording diagnostics: {escape(', '.join(sorted(diagnostics)))}</p>"
     heading = (
         "Details"
         if "simulated_pathway" in member

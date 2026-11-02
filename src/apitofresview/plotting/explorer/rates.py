@@ -104,10 +104,21 @@ def place_readout(label, chart, x, y, logarithmic, offset=0):
 
 class RateViews:
     def __init__(
-        self, db, run, cluster, pathways, fate_names, colors, ui, *, pathway_mode=False
+        self,
+        db,
+        run,
+        cluster,
+        pathways,
+        fate_names,
+        colors,
+        ui,
+        *,
+        pathway_mode=False,
+        tree=None,
     ):
         self.db, self.run, self.cluster, self.ui = db, run, cluster, ui
         self.pathway_mode = pathway_mode
+        self.tree = tree
         self.names = dict(pathways.select("pathway_id", "pathway").iter_rows())
         self.default_names = set(fate_names)
         self.colors = dict(colors)
@@ -123,6 +134,8 @@ class RateViews:
         self.markers = []
         self.readouts = []
         self.energy_range = None
+        self.current_cluster = cluster
+        self.collision_context = None
         self.profile = None
         self.profile_error = None
         self.collision = column(Div(), sizing_mode="stretch_width", visible=False)
@@ -132,23 +145,36 @@ class RateViews:
         self.event = None
 
     def curves(self, result):
-        if result not in self.curve_cache:
+        key = (result, self.current_cluster)
+        if key not in self.curve_cache:
             try:
-                self.curve_cache[result] = self.db.pathway_rate_curves(
-                    self.run, self.cluster, result_id=result, all_pathways=True
+                self.curve_cache[key] = self.db.pathway_rate_curves(
+                    self.run, self.current_cluster, result_id=result, all_pathways=True
                 )
             except (ValueError, RuntimeError, AttributeError) as exc:
-                self.curve_cache[result] = str(exc)
-        return self.curve_cache[result]
+                self.curve_cache[key] = str(exc)
+        return self.curve_cache[key]
 
     def update(self, selected, event):
         self.event = event
+        current = (
+            event.get("current_cluster_id")
+            if event and "current_cluster_id" in event
+            else self.cluster
+        )
+        if current != self.current_cluster:
+            self.current_cluster = current
+            self.profile = self.profile_error = None
+            if self.collision_context is not None:
+                self.configure_collision(*self.collision_context)
         self.update_collision()
         if selected.is_empty() or not enabled(self.ui.show_rates):
             return
         result = selected["experiment_result_id"][0]
         signature = (
             result,
+            self.current_cluster,
+            event.get("particle_index") if event and self.tree else None,
             enabled(self.ui.share_rates),
             enabled(self.ui.all_pathways),
             enabled(self.ui.log_rates),
@@ -206,12 +232,22 @@ class RateViews:
                 message(f"Rate curves unavailable: {curves}")
             ]
             return
+        enabled_pathways = None
+        if self.tree:
+            node = self.event["particle_index"] if self.event else 0
+            enabled_pathways = {
+                p
+                for (r, _), (source, p, _) in self.tree.transitions.items()
+                if r == result and source == node
+            }
         curves = [
             curve
             for curve in curves
             if enabled(self.ui.all_pathways)
             or (
-                curve.participating
+                curve.pathway_id in enabled_pathways
+                if self.tree
+                else curve.participating
                 if self.pathway_mode
                 else self.names.get(curve.pathway_id) in self.default_names
             )
@@ -310,6 +346,7 @@ class RateViews:
         )
 
     def configure_collision(self, mapped_regions, shared_x, spatial):
+        self.collision_context = (mapped_regions, shared_x, spatial)
         self.collision.visible = spatial and enabled(self.ui.collision_rates)
         self.ui.collision_rates.disabled = not spatial
         if not self.collision.visible:
@@ -317,7 +354,7 @@ class RateViews:
         if self.profile is None and self.profile_error is None:
             try:
                 config, cluster = self.db.collision_profile_inputs(
-                    run_id=self.run, cluster_id=self.cluster
+                    run_id=self.run, cluster_id=self.current_cluster
                 )
                 self.profile = collision_profile(
                     config, cluster, skimmer=skimmer(config)

@@ -61,7 +61,11 @@ EVENT_TOOLTIP = """
 
 
 def _pathway_colors(names, escaped):
-    unresolved = {"Ambiguous", "Incomplete"}
+    unresolved = {
+        name
+        for name in names
+        if name in ("Ambiguous", "Incomplete") or ":incomplete:" in name
+    }
     fragmented = sorted(
         name for name in names if name != escaped and name not in unresolved
     )
@@ -484,6 +488,11 @@ def _event_plot(
                 "realization_id",
                 pl.col("realization_number").alias("realization"),
                 "type",
+                *(
+                    ["current_cluster_name"]
+                    if "current_cluster_name" in events.columns
+                    else []
+                ),
                 (pl.col("t") * 1e9).alias("time_ns"),
                 (pl.col("z") * 1000).alias("axial_distance"),
                 pl.Series("color", [event_colors[k] for k in events["event_group"]]),
@@ -508,7 +517,16 @@ def _event_plot(
         plot.add_tools(
             HoverTool(
                 renderers=[glyph],
-                tooltips=EVENT_TOOLTIP,
+                tooltips=(
+                    EVENT_TOOLTIP.replace(
+                        "<span>Type</span>", "<span>Species / type</span>"
+                    ).replace(
+                        "<span>@type</span>",
+                        "<span>@current_cluster_name<br>@type</span>",
+                    )
+                    if "current_cluster_name" in events.columns
+                    else EVENT_TOOLTIP
+                ),
                 sort_by=["@realization", "@time_ns", "@id"],
                 callback=CustomJS(
                     args=dict(css=EVENT_TOOLTIP_CSS),

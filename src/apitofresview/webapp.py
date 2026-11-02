@@ -36,7 +36,7 @@ from workingtitle.pydanticstarlette import (
     query_params,
 )
 
-from .modes import mode_label
+from .modes import mode_label, simulation_mode
 
 # This is a guard against a Panel bug with BokehASGI if we accidentally end up with Panel installed.
 # Can probably be removed at some point.
@@ -141,17 +141,8 @@ class ClusterPageParams(BaseModel):
 
 
 class RealizationsParams(ClusterPageParams):
-    plottype: Literal[
-        "off-center",
-        "off-center-facet",
-        "beeswarm",
-        "beeswarm-facet",
-        "stripplot",
-        "stripplot-facet",
-        "violinplot",
-        "violinplot-facet",
-    ] = "beeswarm"
-    rescale: Literal["equal", "schematic", "none"] = "none"
+    panel: Literal["all", "cumulative", "bars"] = "all"
+    rescale: Literal["equal", "schematic", "none"] = "schematic"
 
 
 class ReportPageParams(BaseModel):
@@ -526,18 +517,29 @@ async def spectrogram_page(request, params):
 
 @query_params(RealizationsParams)
 async def realizations(request, params):
-    from apitofsim.plotting.events import plot_events_cluster
+    from apitofsim.plotting.events import PANELS, plot_events_cluster
 
     db = request.app.state.db
     experiment_id = params.experiment
     cluster_id = params.cluster
-    plot_type = params.plottype
-    rescale = params.rescale
-
     is_single_pathway = get_is_single_pathway(db, experiment_id, cluster_id)
-    fig = plot_events_cluster(
-        db, experiment_id, is_single_pathway, cluster_id, rescale, plot_type
-    )
+    notice = None
+    fig_html = ""
+    if simulation_mode(db, experiment_id) == "CLUSTER_TREE":
+        notice = "Realization outcome plots do not yet support cluster-tree histories."
+    elif is_single_pathway:
+        notice = "Realization outcome plots do not support pathway-at-a-time runs. Use the Explorer to inspect their recorded events."
+    else:
+        panels = PANELS if params.panel == "all" else ("schematic", params.panel)
+        fig = plot_events_cluster(
+            db,
+            experiment_id,
+            is_single_pathway,
+            cluster_id,
+            rescale=params.rescale,
+            panels=panels,
+        )
+        fig_html = safe_html.figure_html(fig)
     return templates.TemplateResponse(
         request,
         "realizations.html",
@@ -545,17 +547,14 @@ async def realizations(request, params):
             "section": "experiment",
             "view": "realizations",
             "route": "realizations",
-            "plot_type": plot_type,
-            "rescale": rescale,
-            "fig": safe_html.figure_html(fig),
-            "plot_type_opts": [
-                "off-centeroff-center-facet",
-                "beeswarm",
-                "beeswarm-facet",
-                "stripplot",
-                "stripplot-facet",
-                "violinplot",
-                "violinplot-facet",
+            "panel": params.panel,
+            "rescale": params.rescale,
+            "fig": fig_html,
+            "notice": notice,
+            "panel_opts": [
+                ("all", "Cumulative outcomes and regional bars"),
+                ("cumulative", "Cumulative outcomes"),
+                ("bars", "Regional bars"),
             ],
             "rescale_opts": ["none", "equal", "schematic"],
         },

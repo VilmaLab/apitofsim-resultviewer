@@ -3,37 +3,40 @@
 {% block title %}Realizations{% endblock %}
 
 {% block content %}
-    <form method="get" action="{{ url_for(route) }}" class="text-nowrap mx-4 flex items-center">
-        <select
-            name="plottype"
-            id="plottype-select"
-            onchange="this.form.requestSubmit()"
-            class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
-            <option value="" {% if not plot_type %}selected{% endif %} disabled>
-                --- Please choose an option ---
-            </option>
-            {% for plot_type_opt in plot_type_opts %}
-                <option value="{{ plot_type_opt }}" {% if plot_type == plot_type_opt %}selected{% endif %}>
-                    {{ plot_type_opt }}
+    {% if notice %}
+        <p class="m-4">{{ notice }}</p>
+    {% else %}
+        <form method="get" action="{{ url_for(route) }}" class="mx-4 flex flex-wrap items-center">
+            <select
+                name="panel"
+                id="panel-select"
+                aria-label="Outcome panels"
+                onchange="this.form.requestSubmit()"
+                class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+                {% for value, label in panel_opts %}
+                    <option value="{{ value }}" {% if panel == value %}selected{% endif %}>
+                        {{ label }}
+                    </option>
+                {% endfor %}
+            </select>
+            <select
+                name="rescale"
+                id="rescale-select"
+                aria-label="Distance scale"
+                onchange="this.form.requestSubmit()"
+                class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
+                <option value="" {% if not rescale %}selected{% endif %} disabled>
+                    --- Please choose an option ---
                 </option>
-            {% endfor %}
-        </select>
-        <select
-            name="rescale"
-            id="rescale-select"
-            onchange="this.form.requestSubmit()"
-            class="mx-4 my-2 rounded-md border border-black p-1 bg-white">
-            <option value="" {% if not rescale %}selected{% endif %} disabled>
-                --- Please choose an option ---
-            </option>
-            {% for rescale_opt in rescale_opts %}
-                <option value="{{ rescale_opt }}" {% if rescale == rescale_opt %}selected{% endif %}>
-                    {{ rescale_opt }}
-                </option>
-            {% endfor %}
-        </select>
-        <input type="hidden" name="experiment" value="{{ experiment }}">
-        <input type="hidden" name="cluster" value="{{ cluster }}">
-    </form>
-    {{ fig }}
+                {% for rescale_opt in rescale_opts %}
+                    <option value="{{ rescale_opt }}" {% if rescale == rescale_opt %}selected{% endif %}>
+                        {{ rescale_opt }}
+                    </option>
+                {% endfor %}
+            </select>
+            <input type="hidden" name="experiment" value="{{ experiment }}">
+            <input type="hidden" name="cluster" value="{{ cluster }}">
+        </form>
+        {{ fig }}
+    {% endif %}
 {% endblock %}

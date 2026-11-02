@@ -34,7 +34,10 @@ def make_regions(boundaries):
 
 def load_data(db, experiment: int, cluster: int):
     """Return realization, event, pathway and region frames for one cohort."""
-    pathway_mode = simulation_mode(db, experiment) == "PATHWAY_AT_A_TIME"
+    mode = simulation_mode(db, experiment)
+    if mode == "CLUSTER_TREE":
+        raise ValueError("The Explorer does not yet support cluster-tree histories.")
+    pathway_mode = mode == "PATHWAY_AT_A_TIME"
     realizations = (
         db.realizations_query(run_id=experiment, parent=cluster)
         .select(

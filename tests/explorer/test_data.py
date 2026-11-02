@@ -95,7 +95,7 @@ def test_adapter_resolves_results_and_preserves_ids(
         "insert into event_info (id,realization_id,event_type,postime) values (503,102,'escape', {'x':1,'y':2,'z':5,'t':2})"
     )
     conn.execute("insert into collision_event values (501,0.75,-114.5,false)")
-    conn.execute("insert into fragmentation_event values (502,7)")
+    conn.execute("insert into fragmentation_event (id,pathway_id) values (502,7)")
     conn.execute(
         "insert into event_info (id,realization_id,event_type,postime) values (500,100,'init', {'x':0,'y':0,'z':0,'t':0})"
     )
@@ -298,7 +298,7 @@ def test_pathway_cohorts_keep_simulated_pathway_for_escaped_and_empty_results(
         insert into event_info (id,realization_id,event_type,postime) values
         (1,100,'fragmentation',{'x':0,'y':0,'z':2,'t':1}),
         (2,200,'escape',{'x':0,'y':0,'z':5,'t':2});
-        insert into fragmentation_event values (1,7);
+        insert into fragmentation_event (id,pathway_id) values (1,7);
     """)
     db.close()
     monkeypatch.setattr(data, "get_geometry", lambda *args: None)

@@ -416,7 +416,8 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     checkbox("Bar chart").active = [0]
     checkbox("Facet pathways").active = [0]
     assert {p.title.text for p in plots() if p.title and p.title.text} == {
-        f"{name} (N=1)" for name in fates.labels
+        f"{'→ Parent' if name == 'Parent → Parent' else name} (N=1)"
+        for name in fates.labels
     }
     views = [p for p in plots() if p.name in {"events", "cdf", "bars"}]
     assert len(views) == 3 * len(fates.labels)
@@ -432,7 +433,8 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     for label in ("Realizations", "Cumulative"):
         checkbox(label).active = []
         assert {p.title.text for p in plots() if p.title and p.title.text} == {
-            f"{name} (N=1)" for name in fates.labels
+            f"{'→ Parent' if name == 'Parent → Parent' else name} (N=1)"
+            for name in fates.labels
         }
         assert sum(bool(p.xaxis[0].visible) for p in plots()) == len(fates.labels)
     checkbox("Realizations").active = [0]
@@ -458,7 +460,8 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert not counts.visible
     assert text_contains("3 selected / 3 total realizations")
     assert {p.title.text for p in plots() if p.title and p.title.text} == {
-        f"{name} (N=1)" for name in fates.labels
+        f"{'→ Parent' if name == 'Parent → Parent' else name} (N=1)"
+        for name in fates.labels
     }
     pager.active = [0]
     assert slider.visible and counts.visible
@@ -675,7 +678,7 @@ def test_cumulative_pathway_areas(monkeypatch, mode, sizing):
             area = facet.renderers[0]
             assert area.data_source.data["top"][-1] == 1
             assert not any(area.data_source.data["bottom"])
-            name = facet.title.text.split(" (N=")[0]
+            name = facet.html_attributes["title"]
             assert area.glyph.fill_color == colors[name]
             if name == "Parent → Parent":
                 assert area.data_source.data["position"][1:3] == [escape_position] * 2

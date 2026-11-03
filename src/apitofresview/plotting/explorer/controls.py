@@ -148,6 +148,7 @@ def create_controls(
         f'label:nth-child({i + 1})::before {{ content: ""; background: {fate_colors[name]}; '
         "width: 12px; height: 12px; flex-shrink: 0; margin-right: 4px; }"
         for i, name in enumerate(fate_names)
+        if name in fate_colors
     )
     count_styles = "\n".join(
         f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
@@ -653,3 +654,23 @@ def prepare_toolbar(plot):
     """Add the standard fullscreen tool to each plot."""
     plot.toolbar.logo = None
     plot.add_tools(FullscreenTool())
+
+
+def label_facets(doc, widget, labels):
+    """Keep pathway identities while presenting charged daughters with hover context."""
+    callback = CustomJS(
+        args=dict(widget=widget, labels=labels),
+        code="""
+        const view = Bokeh.index.find_one(widget);
+        const root = view?.shadow_el ?? view?.el?.shadowRoot ?? view?.el;
+        if (!root) return;
+        root.querySelectorAll('label').forEach((label, i) => {
+            const name = widget.labels[i];
+            const span = label.querySelector('span');
+            if (span) span.textContent = labels[name] ?? name;
+            label.title = name;
+        });
+    """,
+    )
+    doc.js_on_event(DocumentReady, callback)
+    widget.js_on_change("labels", callback)

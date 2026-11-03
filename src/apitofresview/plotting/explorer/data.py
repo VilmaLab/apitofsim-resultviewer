@@ -80,6 +80,18 @@ def load_data(db, experiment: int, cluster: int):
     pathways = pathway_query.pl().select(
         "pathway_id",
         pl.concat_str(
+            pl.when(pl.col("product1_charge") != 0).then(
+                pl.col("product1_common_name")
+            ),
+            pl.when(pl.col("product2_charge") != 0).then(
+                pl.col("product2_common_name")
+            ),
+            separator=" + ",
+            ignore_nulls=True,
+        )
+        .replace("", "Unknown charged daughter")
+        .alias("daughter"),
+        pl.concat_str(
             "cluster_common_name",
             pl.lit(" → "),
             "product1_common_name",

@@ -14,6 +14,7 @@ from .controls import (
     apply_layout,
     create_controls,
     enabled,
+    label_facets,
     prepare_toolbar,
 )
 from .data import EVENT_TYPES, events_for, load_data, select_realizations
@@ -102,16 +103,41 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
     )
     fragmentation_names = (
-        pathways["pathway"].unique().sort().to_list()
-        if tree
-        else events.filter(pl.col("type") == "fragmentation")["event_pathway"]
+        events.filter(pl.col("type") == "fragmentation")["event_pathway"]
         .unique()
         .sort()
         .to_list()
     )
     fate_colors = _pathway_colors(
-        sorted(set(fate_names) | set(fragmentation_names)), escape_name
+        sorted(
+            set(fragmentation_names) | ({"Incomplete"} if tree else set(fate_names))
+        ),
+        "Escape" if tree else escape_name,
     )
+    if tree:
+        for key, count in fate_counts.items():
+            if not count:
+                continue
+            if ":stop:" in key:
+                result, _, transition = key.split(":")
+                pathway = tree.transitions[int(result), int(transition)][1]
+                fate_colors[key] = fate_colors[tree.pathways[pathway]]
+            else:
+                fate_colors[key] = (
+                    fate_colors["Incomplete"]
+                    if "incomplete" in key.lower()
+                    else COLORS["escape"]
+                )
+    facet_names = (
+        dict(pathways.select("pathway", "daughter").iter_rows())
+        if "daughter" in pathways.columns
+        else {}
+    )
+    facet_names = {name: f"→ {daughter}" for name, daughter in facet_names.items()}
+    for name in fate_names:
+        if name not in facet_names and " → " in name and " + " not in name:
+            facet_names[name] = f"→ {name.split(' → ')[-1]}"
+
     simulated_pathways = (
         pathways.filter(pl.col("simulated")) if pathway_mode else pathways
     )
@@ -164,11 +190,16 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         pathway_mode=pathway_mode,
     )
 
-    scope, tree_labels = (
+    scope, tree_labels, full_tree = (
         install_tree_controls(doc, ui, tree, fate_names, fate_counts, fate_colors)
         if tree
-        else (None, {})
+        else (None, {}, None)
     )
+
+    if not tree:
+        label_facets(doc, ui.fate, facet_names)
+    else:
+        facet_names = tree.short_labels()
 
     if pathway_mode:
         ui.selector.title = "Realization numbers per pathway (inclusive)"
@@ -651,6 +682,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 (chosen.filter(pl.col("fate") == name), name, None)
                 for name in fate_names
                 if name in {fate_names[i] for i in ui.fate.active}
+                and (not tree or enabled(full_tree) or fate_counts[name])
             ]
             if enabled(ui.fate_facets) and not pathway_mode
             else [(chosen, "All selected pathways", None)]
@@ -764,7 +796,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if tree and members.is_empty():
                 panels.append(
                     Div(
-                        text=f"<b>{escape(tree_labels[row_name])}</b>: No recorded histories match this leaf in the selected range.",
+                        text=f'<b title="{escape(tree_labels[row_name], quote=True)}">{escape(facet_names[row_name])}</b>: No recorded histories match this leaf in the selected range.',
                         sizing_mode="stretch_width",
                         styles={"overflow-wrap": "anywhere"},
                     )
@@ -873,17 +905,19 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if tree and enabled(ui.fate_facets) and plots:
                 panels.append(
                     Div(
-                        text=f"<b>{escape(tree_labels.get(row_name, row_name))} (N={members.height})</b>",
+                        text=f'<b title="{escape(tree_labels.get(row_name, row_name), quote=True)}">{escape(facet_names.get(row_name, row_name))} (N={members.height})</b>',
                         sizing_mode="stretch_width",
                         styles={"overflow-wrap": "anywhere"},
                     )
                 )
             elif enabled(ui.fate_facets) and plots:
                 plots[0].title = (
-                    f"{row_name} ({members.height} shown / {denominator} in range)"
+                    f"{facet_names.get(row_name, row_name)} ({members.height} shown / {denominator} in range)"
                     if pathway_mode
-                    else f"{tree_labels.get(row_name, row_name)} (N={members.height})"
+                    else f"{facet_names.get(row_name, row_name)} (N={members.height})"
                 )
+            if not tree and enabled(ui.fate_facets) and plots:
+                plots[0].html_attributes = {"title": row_name}
             if tree and enabled(ui.show_cdf):
                 for chart in plots:
                     if chart.name == "cdf":
@@ -1074,6 +1108,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         update_selection()
 
     ui.show_rates.on_change("active", show_rates_changed)
+    if full_tree is not None:
+        full_tree.on_change("active", control_changed)
     if scope is not None:
 
         def scope_changed(attr, old, new):

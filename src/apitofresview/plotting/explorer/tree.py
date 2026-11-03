@@ -1,6 +1,7 @@
 """Persisted execution trees, outcome leaves, and subtree controls."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from html import escape
 
 import polars as pl
@@ -15,6 +16,7 @@ class ExecutionTree:
     species: dict
     pathways: dict
     incomplete: set = field(default_factory=set)
+    daughters: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, db, run, cluster, pathways):
@@ -33,6 +35,7 @@ class ExecutionTree:
             {(r, t): (n, p, dest) for r, t, n, p, dest in transitions},
             dict(db.db.execute("select id, common_name from cluster").fetchall()),
             dict(pathways.select("pathway_id", "pathway").iter_rows()),
+            daughters=dict(pathways.select("pathway_id", "daughter").iter_rows()),
         )
 
     @staticmethod
@@ -106,7 +109,11 @@ class ExecutionTree:
             key = self.node_key(result, index)
             species = self.species[self.nodes[result, index]]
             children = [
-                (f"{result}:escape:{index}", f"{route} · {species} escapes", [])
+                (
+                    f"{result}:escape:{index}",
+                    f"{route} / {species} → {species}".strip(" /"),
+                    [],
+                )
             ]
             for (r, transition), (source, pathway, dest) in self.transitions.items():
                 if r != result or source != index:
@@ -147,6 +154,37 @@ class ExecutionTree:
         visit(self.branches())
         return labels
 
+    def short_label(self, key, label):
+        if key in ("root", "Incomplete"):
+            return label
+        result, kind, index = (
+            key.split(":") if key.count(":") == 2 else (None, None, None)
+        )
+        if kind == "escape":
+            return f"→ {self.species[self.nodes[int(result), int(index)]]}"
+        if kind == "stop":
+            pathway = self.transitions[int(result), int(index)][1]
+            return f"→ {self.daughters[pathway]}"
+        if kind == "incomplete":
+            return "Incomplete"
+        result, node = map(int, key.split(":"))
+        return f"→ {self.species[self.nodes[result, node]]}" if node else label
+
+    def short_labels(self):
+        labels = {"Incomplete": "Incomplete"}
+
+        def visit(branch, route):
+            key, label, children = branch
+            text = self.short_label(key, label)
+            path = f"{route} {text}" if route else text
+            if not children:
+                labels[key] = path
+            for child in children:
+                visit(child, path)
+
+        visit(self.branches(), "")
+        return labels
+
     def cumulative_members(self, members, events, scope):
         """One immediate split/escape per history at the chosen execution node."""
         condition = pl.col("particle_index") == 0
@@ -167,7 +205,13 @@ class ExecutionTree:
         )
         outcomes = outcomes.with_columns(
             pl.when(pl.col("type") == "escape")
-            .then(pl.concat_str(pl.col("current_cluster_name"), pl.lit(" → escape")))
+            .then(
+                pl.concat_str(
+                    pl.col("current_cluster_name"),
+                    pl.lit(" → "),
+                    pl.col("current_cluster_name"),
+                )
+            )
             .otherwise(pl.col("event_pathway"))
             .alias("fate")
         )
@@ -184,9 +228,18 @@ class ExecutionTree:
 
 def install_tree_controls(doc, ui, tree, names, counts, colors):
     """Native folding preserves expansion while Bokeh owns leaf selection."""
+    from .controls import checkbox
+
     indices = {name: i for i, name in enumerate(names)}
     labels = tree.leaf_labels()
     scopes = [("root", "Initial cluster")]
+    icon = (
+        (Path(__file__).parents[2] / "static/img/curve.svg")
+        .read_text()
+        .replace(
+            'width="160" height="160"', 'width="16" height="16" aria-hidden="true"'
+        )
+    )
 
     def render(branch):
         key, label, children = branch
@@ -200,25 +253,35 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
             leaves = [indices[key]]
         selected = sum(counts.get(names[i], 0) for i in leaves)
         value = ",".join(map(str, leaves))
-        swatch = (
-            ""
-            if children
-            else f'<span style="color:{colors[key]}" aria-hidden="true">■</span> '
-        )
-        # Leaf labels carry full routes in facet titles; indentation supplies that context here.
-        text = label
-        if not children:
-            text = (
-                label.split(" / ")[-1].strip(" ·")
-                if ":stop:" in key
-                else label.split(" · ")[-1]
+        color = colors.get(key)
+        if children and key != "root":
+            result, node = map(int, key.split(":"))
+            pathway = next(
+                (
+                    p
+                    for (r, _), (_, p, dest) in tree.transitions.items()
+                    if r == result and dest == node
+                ),
+                None,
             )
-        control = f'<label><input type="checkbox" data-leaves="{value}" checked> {swatch}{escape(text)} <i>({selected})</i></label>'
+            color = colors.get(tree.pathways.get(pathway))
+        if not selected:
+            color = None
+        swatch = (
+            f'<span style="color:{color}" aria-hidden="true">■</span> ' if color else ""
+        )
+        text = tree.short_label(key, label)
+        control = f'<label title="{escape(label, quote=True)}"><input type="checkbox" data-leaves="{value}" checked> {swatch}{escape(text)} <i>({selected})</i></label>'
+        observed = str(selected > 0 or key == "root").lower()
+        hidden = "" if selected or key == "root" else " hidden"
         if not children:
-            return f'<div class="tree-leaf">{control}</div>', leaves
-        button = f'<button type="button" data-scope="{key}" aria-label="Cumulative from {escape(label, quote=True)}" title="Cumulative from {escape(label, quote=True)}" aria-pressed="{str(key == "root").lower()}"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1 14H15M2 13V10H6V7H10V3H14" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>'
+            return (
+                f'<div class="tree-leaf" data-observed="{observed}"{hidden}>{control}</div>',
+                leaves,
+            )
+        button = f'<button type="button" data-scope="{key}" aria-label="Cumulative from {escape(label, quote=True)}" title="Cumulative from {escape(label, quote=True)}" aria-pressed="{str(key == "root").lower()}">{icon}</button>'
         return (
-            f'<details open><summary>{control}{button}</summary><div class="tree-children">{content}</div></details>',
+            f'<details open data-observed="{observed}"{hidden}><summary>{control}{button}</summary><div class="tree-children">{content}</div></details>',
             leaves,
         )
 
@@ -232,6 +295,7 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         stylesheets=[
             InlineStyleSheet(
                 css="""
+        [hidden] { display: none !important; }
         summary { display: flex; align-items: start; gap: 3px; cursor: pointer; }
         summary::before { content: '▸'; flex-shrink: 0; }
         details[open] > summary::before { content: '▾'; }
@@ -247,17 +311,21 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         ],
     )
     scope = Select(value="root", options=scopes, visible=False, name="cumulative_scope")
+    full_tree = checkbox("Show full pathway tree")
+    full_tree.name = "show_full_pathway_tree"
     ui.fate.visible = False
     container = ui.left_controls.children[1].child
-    container.children = [view, ui.fate, ui.fate_facets, scope]
+    container.children = [view, full_tree, ui.fate, ui.fate_facets, scope]
     ui.fate_facets.labels = ["Facet histories"]
     sync = CustomJS(
-        args=dict(view=view, fate=ui.fate, scope=scope),
+        args=dict(view=view, fate=ui.fate, scope=scope, full_tree=full_tree),
         code="""
         const el = Bokeh.index.find_one(view);
         const root = el?.shadow_el ?? el?.el?.shadowRoot ?? el?.el;
         if (!root) return;
         const sync = () => {
+            for (const branch of root.querySelectorAll('[data-observed="false"]'))
+                branch.hidden = !full_tree.active.length;
             const active = new Set(fate.active);
             for (const input of root.querySelectorAll('input[data-leaves]')) {
                 const leaves = input.dataset.leaves.split(',').filter(Boolean).map(Number);
@@ -291,4 +359,5 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
     doc.js_on_event(DocumentReady, sync)
     ui.fate.js_on_change("active", sync)
     scope.js_on_change("value", sync)
-    return scope, labels
+    full_tree.js_on_change("active", sync)
+    return scope, labels, full_tree

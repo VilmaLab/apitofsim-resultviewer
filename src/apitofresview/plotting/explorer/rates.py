@@ -122,13 +122,6 @@ class RateViews:
         self.names = dict(pathways.select("pathway_id", "pathway").iter_rows())
         self.default_names = set(fate_names)
         self.colors = dict(colors)
-        palette = [
-            color for color in PATHWAY_COLORS if color not in colors.values()
-        ] or PATHWAY_COLORS
-        for index, name in enumerate(
-            sorted(set(self.names.values()) - self.colors.keys())
-        ):
-            self.colors[name] = palette[index % len(palette)]
         self.curve_cache = {}
         self.signature = None
         self.markers = []
@@ -255,6 +248,15 @@ class RateViews:
         if not curves:
             self.ui.rate_plots.children = [message("No rate pathways to display.")]
             return
+        palette = [
+            color for color in PATHWAY_COLORS if color not in self.colors.values()
+        ] or PATHWAY_COLORS
+        names = {
+            self.names.get(curve.pathway_id, f"Pathway {curve.pathway_id}")
+            for curve in curves
+        }
+        for index, name in enumerate(sorted(names - self.colors.keys())):
+            self.colors[name] = palette[index % len(palette)]
         logarithmic = enabled(self.ui.log_rates)
         shared = enabled(self.ui.share_rates)
         xs, ys, minima = [], [], []

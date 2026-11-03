@@ -20,7 +20,7 @@ def tree_database(tmp_path, monkeypatch):
     db = RealizationDatabase(path)
     db.create_tables()
     db.db.execute("""
-        insert into cluster (id,common_name) values (1,'Parent'),(2,'A'),(3,'Neutral'),(4,'Leaf');
+        insert into cluster (id,common_name,charge) values (1,'Parent',-1),(2,'A',-1),(3,'Neutral',0),(4,'Leaf',-1);
         insert into pathway values (7,1,2,3),(8,1,3,2),(9,2,4,3),(10,4,4,3),(11,3,1,2),(12,2,3,4);
         insert into experiment_config (id) values (1);
         insert into experiment_run (id,experiment_config_id,simulation_mode) values (1,1,'CLUSTER_TREE'),(2,1,'CLUSTER_TREE');
@@ -113,6 +113,9 @@ def test_tree_identity_classification_and_after_states(tree_database):
         labels["10:escape:1"] != labels["10:escape:2"]
     )  # Same species, separate routes.
     assert "A → Leaf + Neutral" in labels["10:escape:3"]
+    assert labels["10:escape:3"].endswith("Leaf → Leaf")
+    assert tree.short_labels()["10:escape:3"] == "Parent → A → Leaf → Leaf"
+    assert tree.short_label("10:stop:5", "") == "→ Leaf"  # Charged product is second.
 
 
 def test_all_splits_in_bars_and_immediate_splits_in_cumulative(tree_database):
@@ -223,6 +226,27 @@ def test_browser_tree_selection_folding_and_scope(
         root = page.locator("details").first
         root_input = root.locator("summary").first.locator("input")
         expect(root_input).to_be_checked()
+        full_tree = page.get_by_label("Show full pathway tree", exact=True)
+        expect(full_tree).not_to_be_checked()
+        unobserved = page.locator('.tree-leaf[data-observed="false"]').first
+        expect(unobserved).not_to_be_visible()
+        full_tree.check()
+        expect(unobserved).to_be_visible()
+        expect(unobserved.locator("span[aria-hidden]")).to_have_count(0)
+        full_tree.uncheck()
+        expect(unobserved).not_to_be_visible()
+        expect(
+            root.locator("summary").first.locator("svg path").first
+        ).to_have_attribute("d", "M16 128C88 128 88 20 160 20")
+        expect(
+            page.locator('label[title="Parent → A + Neutral"]').first
+        ).to_contain_text("→ A")
+        assert (
+            "Neutral"
+            not in page.locator(
+                'label[title="Parent → A + Neutral"]'
+            ).first.inner_text()
+        )
         root_input.uncheck()
         expect(
             page.get_by_text("No realizations in this cohort.", exact=False)
@@ -368,4 +392,74 @@ def test_inconsistent_recording_stays_incomplete_and_does_not_pair(tree_database
     )
     assert "Recording diagnostics: unresolved continuity" in render_details(
         member, events.filter(pl.col("realization_id") == 100), 3
+    )
+
+
+@pytest.mark.parametrize("pathway_mode", [False, True])
+def test_browser_daughter_labels_in_other_modes(monkeypatch, page, pathway_mode):
+    from playwright.sync_api import expect
+
+    from .helpers import cohort, event, pathway_cohort
+    from .test_browser import serve_explorer
+
+    frames = (
+        pathway_cohort()
+        if pathway_mode
+        else cohort(
+            [1, 2], event(1, "fragmentation", 1, 1, 2, 7), event(2, "escape", 2, 2, 5)
+        )
+    )
+    pathways = frames[2].with_columns(
+        pl.Series("daughter", ["A", "C", "E", "G"] if pathway_mode else ["A"])
+    )
+    frames = (frames[0], frames[1], pathways, frames[3])
+    with serve_explorer(monkeypatch, frames) as url:
+        page.goto(url)
+        label = page.locator('label[title="Parent → A + B"]')
+        expect(label).to_contain_text("→ A")
+        assert "+ B" not in label.inner_text()
+        expect(page.get_by_label("Show full pathway tree", exact=True)).to_have_count(0)
+        if not pathway_mode:
+            expect(page.locator('label[title="Parent → Parent"]')).to_contain_text(
+                "→ Parent"
+            )
+            page.get_by_text("Facet pathways", exact=True).click()
+        page.wait_for_function("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            return plot?.title?.text.startsWith('→ A');
+        }""")
+        assert (
+            page.evaluate(
+                "Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events').html_attributes.title"
+            )
+            == "Parent → A + B"
+        )
+
+
+def test_tree_colors_use_observed_pathways_without_changing_palette(tree_database):
+    from apitofresview.plotting.explorer.plot import _pathway_colors
+
+    doc = Document()
+    session.build_document(tree_database, doc, 1, 1)
+    html = doc.select_one({"name": "fragmentation_tree"}).text
+    expected = _pathway_colors(
+        [
+            "Parent → A + Neutral",
+            "Parent → Neutral + A",
+            "A → Leaf + Neutral",
+            "Leaf → Leaf + Neutral",
+        ],
+        "Escape",
+    )
+    # Only observed pathways participate in palette allocation; adding a zero-event branch cannot shift them.
+    for pathway, color in expected.items():
+        if pathway == "Escape":
+            continue
+        assert f"color:{color}" in html
+    assert "A → Neutral + Leaf · Stop" in html
+    assert (
+        "color:"
+        not in html.split('title="Parent → Neutral + A / A → Neutral + Leaf · Stop"')[
+            -1
+        ].split("</label>")[0]
     )

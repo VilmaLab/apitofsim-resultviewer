@@ -119,7 +119,10 @@ Bokeh shadow roots.
 The Explorer uses apitofsim 0.27's persisted execution trees. Expand branches to
 select outcome leaves independently; parent checkboxes select their whole
 subtree. Folding preserves selection, and facets show complete histories.
-Routes reaching the same species remain separate.
+Routes reaching the same species remain separate. Facets show charged daughters;
+hover to see the full pathway. Escape repeats the current daughter. Unobserved
+branches are hidden by default; enable **Show full pathway tree** beneath the
+tree to reveal them. These branches do not consume pathway colors.
 
 Regional bars count every recorded fragmentation per selected realization, so
 they can exceed one. The cumulative plot counts first-level fragmentations and

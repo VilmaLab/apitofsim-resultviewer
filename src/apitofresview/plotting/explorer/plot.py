@@ -61,11 +61,7 @@ EVENT_TOOLTIP = """
 
 
 def _pathway_colors(names, escaped):
-    unresolved = {
-        name
-        for name in names
-        if name in ("Ambiguous", "Incomplete") or ":incomplete:" in name
-    }
+    unresolved = {"Ambiguous", "Incomplete"}
     fragmented = sorted(
         name for name in names if name != escaped and name not in unresolved
     )

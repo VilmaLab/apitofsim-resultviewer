@@ -85,6 +85,7 @@ def test_adapter_resolves_results_and_preserves_ids(
         values (12,1,7);
         insert into realization values (100,10),(101,11),(102,12);
     """)
+    conn.execute("update cluster set charge = case when id = 3 then 0 else -1 end")
     conn.execute(
         "insert into event_info (id,realization_id,event_type,postime) values (501,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
     )
@@ -164,6 +165,7 @@ def test_adapter_resolves_results_and_preserves_ids(
     assert events.filter(pl.col("id") == 502)["pathway_id"][0] == 7
     assert pathways.to_dict(as_series=False) == {
         "pathway_id": [7],
+        "daughter": ["4A_5SA_negative"],
         "pathway": ["5A_5SA_negative → 4A_5SA_negative + 1A_neutral"],
     }
     assert events["z_clamped"].sum() == (2 if negative_z else 0)

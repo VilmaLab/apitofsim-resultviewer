@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from apitofresview import webapp
 from apitofresview.plotting.explorer import build_document
+from apitofresview.plotting.explorer import data as explorer_data
 
 
 @pytest.fixture
@@ -118,8 +119,11 @@ def test_unsupported_outcomes_explain_mode(outcome_app, run, mode):
     assert 'id="panel-select"' not in result.body.decode()
 
 
-def test_tree_explorer_does_not_classify_serial_splits_as_ambiguous(outcome_app):
+def test_tree_explorer_explains_missing_execution_tree(outcome_app, monkeypatch):
+    monkeypatch.setattr(explorer_data, "get_geometry", events.get_geometry)
     doc = Document()
     build_document(outcome_app.state.db, doc, 3, 1)
     assert len(doc.roots) == 1
-    assert "does not yet support cluster-tree histories" in doc.roots[0].text
+    assert (
+        doc.roots[0].text == "No recorded cluster-tree executions for this selection."
+    )

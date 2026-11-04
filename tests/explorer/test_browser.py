@@ -514,7 +514,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
             const view = Bokeh.index.find_one(plot);
             const bounds = view.canvas_view.events_el.getBoundingClientRect();
             const x = plot.renderers[0].data_source.data.right[boundary];
-            return {x: bounds.left + view.frame.x_scale.compute(x),
+            return {id: plot.id, x: bounds.left + view.frame.x_scale.compute(x),
                 y: bounds.top + view.frame.y_scale.compute(0.5)};
         }""",
             boundary,
@@ -524,7 +524,8 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         page.mouse.move(point["x"] + pixels, point["y"], steps=5)
         page.mouse.up()
         page.wait_for_function(
-            """() => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected && p.renderers[0].data_source.data.right.length === 7)"""
+            """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
+            arg=point["id"],
         )
 
     before = widths()
@@ -545,14 +546,13 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     assert widths() == pytest.approx(before)
 
     drag(0, 25)
-    page.wait_for_function(
-        """() => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected && p.renderers[0].data_source.data.right[0] > 0)"""
-    )
     after = widths()
     assert after[0] > before[0]
     assert all(after[i] < before[i] for i in range(1, 6))
     assert after[6] == pytest.approx(before[6])
-    assert x_range() == pytest.approx(original_range)
+    # The entrance stays at zero, so resizing Initial shifts both range ends.
+    start, end = x_range()
+    assert end - start == pytest.approx(original_range[1] - original_range[0])
     expect(page.get_by_label("Sizing")).to_have_value("Custom")
 
     for boundary, pixels, grow, shrink, fixed in (
@@ -571,7 +571,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         page.get_by_label("Sizing").select_option(label="Equal chambers")
         expect(page.get_by_label("Sizing")).to_have_value("Equal chambers")
         page.wait_for_function(
-            """oldId => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && Bokeh.index.find_one(p)?.el?.isConnected)""",
+            """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
             arg=old_id,
         )
         before = widths()
@@ -591,7 +591,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     )
     page.get_by_label("Sizing").select_option(label="Equal chambers")
     page.wait_for_function(
-        """oldId => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && Bokeh.index.find_one(p)?.el?.isConnected)""",
+        """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
         arg=old_id,
     )
     drag(3, 20)
@@ -602,7 +602,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     )
     drag(0, 20)
     page.wait_for_function(
-        """oldId => [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && Bokeh.index.find_one(p)?.el?.isConnected)""",
+        """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
         arg=old_id,
     )
     after = widths()
@@ -1315,17 +1315,20 @@ def test_sidebar_bottom_controls_are_reachable(
             controls.get_by_role("checkbox", name="Show readoff values")
         ).not_to_be_checked()
         page.get_by_role("button", name="☷", exact=True).click()
+        # Summary controls need a real selection: their callbacks hide them
+        # again if only their client-side visibility has been changed.
+        page.evaluate("""() => {
+            const plot = Bokeh.documents[0].get_model_by_name('events');
+            const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+            source.selected.indices = [source.data.id.indexOf(1)];
+        }""")
+        details = page.locator(".explorer-details")
+        energy = details.get_by_role("checkbox", name="Summarise energy")
+        expect(energy).to_be_visible()
 
         for placement in ("Right sidebar", "Right (half width)", "Bottom"):
             set_details_layout(page, placement)
             set_long_details(page)
-            page.evaluate("""() => {
-                const details = [...Bokeh.documents[0].all_models]
-                    .find(m => m.css_classes?.includes('explorer-details'));
-                details.children[1].visible = details.children[2].visible = true;
-            }""")
-            details = page.locator(".explorer-details")
-            energy = details.get_by_role("checkbox", name="Summarise energy")
             expect(energy).to_be_visible()
             page.wait_for_function("""() => {
                 const model = [...Bokeh.documents[0].all_models]
@@ -1498,7 +1501,15 @@ def test_independent_pathway_facets_and_filters(monkeypatch, page, tmp_path, wid
         # Inspect a fragmented realization using its actual Bokeh source.
         page.evaluate("""() => {
             const chart = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
-            chart.renderers.find(r => r.data_source?.data.id).data_source.selected.indices = [0];
+            const source = chart.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+            source.selected.indices = [source.data.id.indexOf(1)];
+        }""")
+        # Selection opens and populates the sidebar on the server before it
+        # clears the source selection. Wait for that round trip to finish.
+        page.wait_for_function("""() => {
+            const chart = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
+            const source = chart.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
+            return source.selected.indices.length === 0;
         }""")
         expect(page.get_by_role("heading", name="Details", exact=True)).to_be_visible()
         expect(

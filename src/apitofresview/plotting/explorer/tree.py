@@ -1,6 +1,7 @@
 """Persisted execution trees, outcome leaves, and subtree controls."""
 
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from html import escape
 
@@ -37,6 +38,27 @@ class ExecutionTree:
             dict(pathways.select("pathway_id", "pathway").iter_rows()),
             daughters=dict(pathways.select("pathway_id", "daughter").iter_rows()),
         )
+
+    @cached_property
+    def outgoing(self):
+        outgoing = {}
+        for (result, transition), (
+            source,
+            pathway,
+            destination,
+        ) in self.transitions.items():
+            outgoing.setdefault((result, source), []).append(
+                (transition, pathway, destination)
+            )
+        return outgoing
+
+    @cached_property
+    def incoming(self):
+        return {
+            (result, destination): pathway
+            for (result, _), (_, pathway, destination) in self.transitions.items()
+            if destination is not None
+        }
 
     @staticmethod
     def node_key(result, node):
@@ -115,9 +137,7 @@ class ExecutionTree:
                     [],
                 )
             ]
-            for (r, transition), (source, pathway, dest) in self.transitions.items():
-                if r != result or source != index:
-                    continue
+            for transition, pathway, dest in self.outgoing.get((result, index), ()):
                 name = self.pathways[pathway]
                 path = f"{route} / {name}" if route else name
                 children.append(
@@ -241,29 +261,24 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         )
     )
 
-    def render(branch):
+    def render(branch, full=False):
         key, label, children = branch
         if children:
-            rendered = [render(child) for child in children]
+            rendered = [render(child, full) for child in children]
             leaves = [i for _, child_leaves in rendered for i in child_leaves]
-            if key != "root":
-                scopes.append((key, label))
             content = "".join(html for html, _ in rendered)
         else:
             leaves = [indices[key]]
         selected = sum(counts.get(names[i], 0) for i in leaves)
+        if not full and not selected and key != "root":
+            return "", leaves
+        if children and key != "root":
+            scopes.append((key, label))
         value = ",".join(map(str, leaves))
         color = colors.get(key)
         if children and key != "root":
             result, node = map(int, key.split(":"))
-            pathway = next(
-                (
-                    p
-                    for (r, _), (_, p, dest) in tree.transitions.items()
-                    if r == result and dest == node
-                ),
-                None,
-            )
+            pathway = tree.incoming.get((result, node))
             color = colors.get(tree.pathways.get(pathway))
         if not selected:
             color = None
@@ -281,13 +296,20 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
             )
         button = f'<button type="button" data-scope="{key}" aria-label="Cumulative from {escape(label, quote=True)}" title="Cumulative from {escape(label, quote=True)}" aria-pressed="{str(key == "root").lower()}">{icon}</button>'
         return (
-            f'<details open data-observed="{observed}"{hidden}><summary>{control}{button}</summary><div class="tree-children">{content}</div></details>',
+            f'<details open data-branch="{key}" data-observed="{observed}"{hidden}><summary>{control}{button}</summary><div class="tree-children">{content}</div></details>',
             leaves,
         )
 
-    html, _ = render(tree.branches())
-    if "Incomplete" in indices:
-        html += render(("Incomplete", "Incomplete", []))[0]
+    branches = tree.branches()
+
+    def make_html(full=False):
+        scopes[:] = [("root", "Initial cluster")]
+        html, _ = render(branches, full)
+        if "Incomplete" in indices:
+            html += render(("Incomplete", "Incomplete", []), full)[0]
+        return html
+
+    html = make_html()
     view = Div(
         text=html,
         name="fragmentation_tree",
@@ -315,8 +337,16 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
     full_tree.name = "show_full_pathway_tree"
     ui.fate.visible = False
     container = ui.left_controls.children[1].child
-    container.children = [view, full_tree, ui.fate, ui.fate_facets, scope]
+    container.children = [view, full_tree, ui.fate_facets, scope]
     ui.fate_facets.labels = ["Facet histories"]
+
+    def show_full(attr, old, new):
+        view.text = make_html(bool(new))
+        scope.options = list(scopes)
+        if scope.value not in {key for key, _ in scopes}:
+            scope.value = "root"
+
+    full_tree.on_change("active", show_full)
     sync = CustomJS(
         args=dict(view=view, fate=ui.fate, scope=scope, full_tree=full_tree),
         code="""
@@ -326,6 +356,10 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         const sync = () => {
             for (const branch of root.querySelectorAll('[data-observed="false"]'))
                 branch.hidden = !full_tree.active.length;
+            for (const branch of root.querySelectorAll('details[data-branch]')) {
+                const open = root._treeOpen?.get(branch.dataset.branch);
+                if (open != null) branch.open = open;
+            }
             const active = new Set(fate.active);
             for (const input of root.querySelectorAll('input[data-leaves]')) {
                 const leaves = input.dataset.leaves.split(',').filter(Boolean).map(Number);
@@ -338,6 +372,11 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         };
         if (!root._treeInstalled) {
             root._treeInstalled = true;
+            root._treeOpen = new Map();
+            root.addEventListener('toggle', event => {
+                const branch = event.target;
+                if (branch.matches('details[data-branch]')) root._treeOpen.set(branch.dataset.branch, branch.open);
+            }, true);
             root.addEventListener('change', event => {
                 const input = event.target.closest('input[data-leaves]');
                 if (!input) return;
@@ -354,10 +393,12 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
             });
         }
         sync();
+        requestAnimationFrame(sync);
     """,
     )
     doc.js_on_event(DocumentReady, sync)
     ui.fate.js_on_change("active", sync)
     scope.js_on_change("value", sync)
     full_tree.js_on_change("active", sync)
+    view.js_on_change("text", sync)
     return scope, labels, full_tree

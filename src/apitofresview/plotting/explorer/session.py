@@ -188,6 +188,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         render_details(realizations.head(0), events.head(0), None),
         layout=layout,
         pathway_mode=pathway_mode,
+        tree_mode=bool(tree),
     )
 
     scope, tree_labels, full_tree = (

@@ -274,7 +274,11 @@ def test_browser_tree_selection_folding_and_scope(
         )
         branch.locator("summary").first.click(position={"x": 3, "y": 3})
         expect(branch).not_to_have_attribute("open", "")
-        # A selection update must preserve folding and the independent cumulative scope.
+        # Lazy regeneration preserves folded branches and the independent cumulative scope.
+        full_tree.check()
+        expect(branch).not_to_have_attribute("open", "")
+        full_tree.uncheck()
+        expect(branch).not_to_have_attribute("open", "")
         leaf.uncheck()
         expect(branch).not_to_have_attribute("open", "")
         expect(button).to_have_attribute("aria-pressed", "true")
@@ -456,6 +460,9 @@ def test_tree_colors_use_observed_pathways_without_changing_palette(tree_databas
         if pathway == "Escape":
             continue
         assert f"color:{color}" in html
+    assert "A → Neutral + Leaf · Stop" not in html
+    check(doc, "Show full pathway tree").active = [0]
+    html = doc.select_one({"name": "fragmentation_tree"}).text
     assert "A → Neutral + Leaf · Stop" in html
     assert (
         "color:"
@@ -463,3 +470,28 @@ def test_tree_colors_use_observed_pathways_without_changing_palette(tree_databas
             -1
         ].split("</label>")[0]
     )
+
+
+def test_large_unobserved_tree_is_built_only_on_request(tree_database, monkeypatch):
+    frames = data.load_data(tree_database, 1, 1)
+    tree = ExecutionTree.load(tree_database, 1, 1, frames[2])
+    for node in range(100, 4100):
+        tree.nodes[10, node] = 4
+        tree.transitions[10, node] = (0, 9, node)
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    monkeypatch.setattr(ExecutionTree, "load", lambda *args: tree)
+    doc = Document()
+    session.build_document(tree_database, doc, 1, 1)
+    view = doc.select_one({"name": "fragmentation_tree"})
+    assert 'data-scope="10:4099"' not in view.text
+    assert len(view.text) < 100_000
+    fate = next(
+        w for w in doc.select({"type": CheckboxGroup}) if "10:escape:4099" in w.labels
+    )
+    assert len(fate.stylesheets[0].css) < 2_000
+    check(doc, "Show full pathway tree").active = [0]
+    assert 'data-scope="10:4099"' in view.text
+    fate.active = [fate.labels.index("10:escape:3")]
+    check(doc, "Show full pathway tree").active = []
+    assert 'data-scope="10:4099"' not in view.text
+    assert fate.labels[fate.active[0]] == "10:escape:3"

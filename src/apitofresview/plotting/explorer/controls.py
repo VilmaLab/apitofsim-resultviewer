@@ -141,6 +141,7 @@ def create_controls(
     *,
     layout="viewport",
     pathway_mode=False,
+    tree_mode=False,
 ):
     """Build the frame and attach browser bridges for one document."""
     layout_policy = layout
@@ -150,9 +151,13 @@ def create_controls(
         for i, name in enumerate(fate_names)
         if name in fate_colors
     )
-    count_styles = "\n".join(
-        f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
-        for i, name in enumerate(fate_names)
+    count_styles = (
+        ""
+        if tree_mode
+        else "\n".join(
+            f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
+            for i, name in enumerate(fate_names)
+        )
     )
     counts = Div(sizing_mode="stretch_width", styles={"overflow-wrap": "anywhere"})
     quality = Div(sizing_mode="stretch_width")

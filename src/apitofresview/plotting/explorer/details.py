@@ -18,8 +18,6 @@ def _columns(events, radial, summarise_energy):
         if radial
         else ["x (mm)", "y (mm)", "z (mm)"]
     )
-    if "current_cluster_name" in events.columns:
-        headings += ["Species / state"]
     motion_columns = (
         [
             ("velocity", "z", "Axial velocity (m/s)"),
@@ -76,12 +74,12 @@ def _cells(
     shared_selected=False,
 ):
     kind = escape(event["type"])
-    if (
-        "current_cluster_name" in event
-        and event["type"] == "fragmentation"
-        and event.get("event_pathway")
-    ):
-        kind += "<br/>" + escape(event["event_pathway"])
+    if event["type"] == "fragmentation":
+        pathway = escape(
+            event.get("event_pathway") or "Unknown fragmentation", quote=True
+        )
+        daughter = escape(event.get("daughter") or "Unknown charged daughter")
+        kind = f'<span title="{pathway}">→ {daughter}</span>'
     if clickable:
         kind = (
             f'<button type="button" aria-label="Inspect event #{event["id"]}">'
@@ -104,12 +102,6 @@ def _cells(
             *(f"<td{shared}>{format_value(value)}</td>" for value in values),
         ]
     )
-    if "current_cluster_name" in event:
-        phase = "After · " if after else "Before · " if rowspan > 1 else ""
-        species = phase + escape(event["current_cluster_name"] or "Unknown")
-        if after and clickable:
-            species = f'<button type="button" aria-label="Inspect event #{event["id"]}">{species}</button>'
-        cells.append(f"<td>{species}</td>")
     values = []
     for key, axes, _ in motion_columns:
         vector = event[key]
@@ -126,7 +118,7 @@ def _cells(
         values.append(_energy(event) if key == "internal_energy" else event[key])
     for index, value in enumerate(values):
         text = format_value(value)
-        if after and clickable and index == 0 and "current_cluster_name" not in event:
+        if after and clickable and index == 0:
             text = (
                 f'<button type="button" aria-label="Inspect event #{event["id"]}">'
                 f"{text}</button>"

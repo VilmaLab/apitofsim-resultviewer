@@ -157,8 +157,15 @@ def test_fragmentation_details_share_spacetime_but_keep_both_states(tree_databas
     before_row = parsed.find(f".//tr[@id='event-{after['fragmentation_id']}']")
     after_row = parsed.find(f".//tr[@id='event-{after['id']}']")
     assert len(before_row.findall('td[@rowspan="2"]')) == 7
-    assert "Before · Parent" in "".join(before_row.itertext())
-    assert "After · A" in "".join(after_row.itertext())
+    assert "→ A" in "".join(before_row.itertext())
+    assert before_row.find(".//span").get("title") == "Parent → A + Neutral"
+    assert "Neutral" not in "".join(before_row.itertext())
+    assert "Species / state" not in html
+    assert (
+        after_row.find(".//button").get("aria-label") == f"Inspect event #{after['id']}"
+    )
+    assert len(before_row.findall("td")) == len(parsed.findall(".//th"))
+    assert len(after_row.findall("td")) == len(parsed.findall(".//th")) - 7
     assert "3e-20" in "".join(before_row.itertext())
     assert "6e-20" in "".join(after_row.itertext())
     assert "Parent → A + Neutral" in html

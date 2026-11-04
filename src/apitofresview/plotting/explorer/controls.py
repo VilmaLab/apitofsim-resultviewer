@@ -180,6 +180,7 @@ def create_controls(
     group_fragmentations.visible = not pathway_mode
     group_escapes = checkbox("Group escapes", True)
     group_escapes.name = "group_escapes"
+    group_escapes.visible = tree_mode
     distinguish_escapees = checkbox("Distinguish identical escapees by pathway")
     distinguish_escapees.visible = False
     distinguish_escapees.name = "distinguish_escapees"

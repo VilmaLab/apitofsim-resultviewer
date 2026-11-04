@@ -423,6 +423,7 @@ def test_browser_daughter_labels_in_other_modes(monkeypatch, page, pathway_mode)
         expect(label).to_contain_text("→ A")
         assert "+ B" not in label.inner_text()
         expect(page.get_by_label("Show empty pathways", exact=True)).to_have_count(0)
+        expect(page.get_by_label("Group escapes", exact=True)).not_to_be_visible()
         if not pathway_mode:
             expect(page.locator('label[title="Parent → Parent"]')).to_contain_text(
                 "→ Parent"

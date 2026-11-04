@@ -127,7 +127,8 @@ tree to reveal them. These branches do not consume pathway colors.
 Escape colors follow the final charged daughter, starting at green. When recorded
 routes share a daughter, **Distinguish identical escapees by pathway** enables
 separate route colors while retaining existing daughter colors where possible.
-**Group escapes** groups their realization markers by default. Individual
+**Group escapes**, available in cluster-tree mode, groups their realization markers
+by default. Individual
 fragmentation and escape event checkboxes also filter cumulative and bar counts
 without changing the selected-realization denominator.
 

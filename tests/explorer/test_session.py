@@ -1,6 +1,7 @@
 """Explorer session behavior."""
 
 import json
+from xml.etree import ElementTree
 
 import polars as pl
 import pytest
@@ -345,7 +346,13 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     )
     frames = (
         *frames[:2],
-        pl.DataFrame({"pathway_id": [7], "pathway": ["Parent → A < B + C"]}),
+        pl.DataFrame(
+            {
+                "pathway_id": [7],
+                "pathway": ["Parent → A < B + C"],
+                "daughter": ["A < B"],
+            }
+        ),
         frames[3],
     )
     loads = []
@@ -384,9 +391,13 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert text_contains("Realization #1")
     assert text_contains("<em>Parent → A + B</em>")
     assert not text_contains("Pathway:")
-    assert not text_contains("Parent → A &lt; B + C")
     assert not text_contains("pathway #7")
     details = next(d for d in doc.select({"type": Div}) if "Realization #1" in d.text)
+    parsed = ElementTree.fromstring(f"<div>{details.text}</div>")
+    fragmentation = parsed.find(".//tr[@id='event-2']//span")
+    assert fragmentation.text == "→ A < B"
+    assert fragmentation.get("title") == "Parent → A < B + C"
+    assert "Parent → A < B + C" not in "".join(parsed.itertext())
     assert details.text.startswith("<button id='clear-selection'>")
     assert "background:#fde68a" in details.text
     assert "<th>Time (ns)</th>" in details.text

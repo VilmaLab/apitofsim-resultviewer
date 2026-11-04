@@ -226,7 +226,9 @@ class ExecutionTree:
         outcomes = outcomes.with_columns(
             pl.when(pl.col("type") == "escape")
             .then(
-                pl.concat_str(
+                pl.col("event_escape")
+                if "event_escape" in events.columns
+                else pl.concat_str(
                     pl.col("current_cluster_name"),
                     pl.lit(" → "),
                     pl.col("current_cluster_name"),
@@ -333,11 +335,17 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         ],
     )
     scope = Select(value="root", options=scopes, visible=False, name="cumulative_scope")
-    full_tree = checkbox("Show full pathway tree")
+    full_tree = checkbox("Show empty pathways")
     full_tree.name = "show_full_pathway_tree"
     ui.fate.visible = False
     container = ui.left_controls.children[1].child
-    container.children = [view, full_tree, ui.fate_facets, scope]
+    container.children = [
+        view,
+        full_tree,
+        ui.distinguish_escapees,
+        ui.fate_facets,
+        scope,
+    ]
     ui.fate_facets.labels = ["Facet histories"]
 
     def show_full(attr, old, new):
@@ -348,7 +356,9 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
 
     full_tree.on_change("active", show_full)
     sync = CustomJS(
-        args=dict(view=view, fate=ui.fate, scope=scope, full_tree=full_tree),
+        args=dict(
+            view=view, fate=ui.fate, scope=scope, full_tree=full_tree, cdf=ui.show_cdf
+        ),
         code="""
         const el = Bokeh.index.find_one(view);
         const root = el?.shadow_el ?? el?.el?.shadowRoot ?? el?.el;
@@ -389,7 +399,11 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
             });
             root.addEventListener('click', event => {
                 const button = event.target.closest('button[data-scope]');
-                if (button) { event.preventDefault(); scope.value = button.dataset.scope; }
+                if (button) {
+                    event.preventDefault();
+                    if (scope.value === button.dataset.scope) cdf.active = [0];
+                    else scope.value = button.dataset.scope;
+                }
             });
         }
         sync();
@@ -401,4 +415,4 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
     scope.js_on_change("value", sync)
     full_tree.js_on_change("active", sync)
     view.js_on_change("text", sync)
-    return scope, labels, full_tree
+    return scope, labels, full_tree, lambda: show_full(None, None, full_tree.active)

@@ -644,7 +644,7 @@ def _event_plot(
     return plot
 
 
-def _cdf_plot(areas, shared_x, fate_colors):
+def _cdf_plot(areas, shared_x, fate_colors, *, labels=None):
     plot = figure(
         name="cdf",
         title=None,
@@ -670,13 +670,16 @@ def _cdf_plot(areas, shared_x, fate_colors):
             HoverTool(
                 renderers=[area],
                 mode="vline",
-                tooltips=[("Pathway", name), ("Fraction", "@fraction{0.0%}")],
+                tooltips=[
+                    ("Pathway", (labels or {}).get(name, name)),
+                    ("Fraction", "@fraction{0.0%}"),
+                ],
             )
         )
     return plot
 
 
-def _bar_plot(bars, shared_x):
+def _bar_plot(bars, shared_x, *, escapes=None, escape_colors=None, escape_labels=None):
     top = bars["fraction"].max() or 0
     plot = figure(
         name="bars",
@@ -693,16 +696,39 @@ def _bar_plot(bars, shared_x):
     for name, lo, hi, value in bars.select(
         "name", "left", "right", "fraction"
     ).iter_rows():
-        plot.quad(
-            left=lo,
-            right=hi,
-            bottom=0,
-            top=value,
-            fill_color=COLORS["escape"]
-            if name == "Escaped"
-            else COLORS["fragmentation"],
-            fill_alpha=0.65,
+        segments = (
+            escapes.items()
+            if name == "Escaped" and escapes is not None
+            else [(None, value)]
         )
+        bottom = 0
+        for key, fraction in segments:
+            color = (
+                escape_colors[key]
+                if key is not None
+                else COLORS["escape"]
+                if name == "Escaped"
+                else COLORS["fragmentation"]
+            )
+            glyph = plot.quad(
+                left=lo,
+                right=hi,
+                bottom=bottom,
+                top=bottom + fraction,
+                fill_color=color,
+                fill_alpha=0.65,
+            )
+            if key is not None:
+                plot.add_tools(
+                    HoverTool(
+                        renderers=[glyph],
+                        tooltips=[
+                            ("Pathway", escape_labels[key]),
+                            ("Fraction", f"{fraction:.1%}"),
+                        ],
+                    )
+                )
+            bottom += fraction
         plot.add_layout(
             Label(
                 x=(lo + hi) / 2,

@@ -226,7 +226,7 @@ def test_browser_tree_selection_folding_and_scope(
         root = page.locator("details").first
         root_input = root.locator("summary").first.locator("input")
         expect(root_input).to_be_checked()
-        full_tree = page.get_by_label("Show full pathway tree", exact=True)
+        full_tree = page.get_by_label("Show empty pathways", exact=True)
         expect(full_tree).not_to_be_checked()
         unobserved = page.locator('.tree-leaf[data-observed="false"]').first
         expect(unobserved).not_to_be_visible()
@@ -422,7 +422,7 @@ def test_browser_daughter_labels_in_other_modes(monkeypatch, page, pathway_mode)
         label = page.locator('label[title="Parent → A + B"]')
         expect(label).to_contain_text("→ A")
         assert "+ B" not in label.inner_text()
-        expect(page.get_by_label("Show full pathway tree", exact=True)).to_have_count(0)
+        expect(page.get_by_label("Show empty pathways", exact=True)).to_have_count(0)
         if not pathway_mode:
             expect(page.locator('label[title="Parent → Parent"]')).to_contain_text(
                 "→ Parent"
@@ -461,7 +461,7 @@ def test_tree_colors_use_observed_pathways_without_changing_palette(tree_databas
             continue
         assert f"color:{color}" in html
     assert "A → Neutral + Leaf · Stop" not in html
-    check(doc, "Show full pathway tree").active = [0]
+    check(doc, "Show empty pathways").active = [0]
     html = doc.select_one({"name": "fragmentation_tree"}).text
     assert "A → Neutral + Leaf · Stop" in html
     assert (
@@ -489,9 +489,9 @@ def test_large_unobserved_tree_is_built_only_on_request(tree_database, monkeypat
         w for w in doc.select({"type": CheckboxGroup}) if "10:escape:4099" in w.labels
     )
     assert len(fate.stylesheets[0].css) < 2_000
-    check(doc, "Show full pathway tree").active = [0]
+    check(doc, "Show empty pathways").active = [0]
     assert 'data-scope="10:4099"' in view.text
     fate.active = [fate.labels.index("10:escape:3")]
-    check(doc, "Show full pathway tree").active = []
+    check(doc, "Show empty pathways").active = []
     assert 'data-scope="10:4099"' not in view.text
     assert fate.labels[fate.active[0]] == "10:escape:3"

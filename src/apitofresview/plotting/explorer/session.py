@@ -15,10 +15,12 @@ from .controls import (
     create_controls,
     enabled,
     label_facets,
+    group,
     prepare_toolbar,
 )
 from .data import EVENT_TYPES, events_for, load_data, select_realizations
 from .details import render_choices, render_details
+from .escapes import EscapeGroups
 from .layout import (
     coordinate_regions,
     escape_slot,
@@ -97,6 +99,10 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         .to_list()
     )
     escape_name = escaped_fates[0] if escaped_fates else "Escape"
+    escapes = EscapeGroups(
+        events, cluster, tree, root_name=escape_name.split(" → ")[-1]
+    )
+    events = escapes.annotate(events)
     events = (
         events.join(pathways, on="pathway_id", how="left", maintain_order="left")
         .rename({"pathway": "event_pathway"})
@@ -128,6 +134,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     if "incomplete" in key.lower()
                     else COLORS["escape"]
                 )
+    fate_colors.update(escapes.route_colors())
     facet_names = (
         dict(pathways.select("pathway", "daughter").iter_rows())
         if "daughter" in pathways.columns
@@ -165,6 +172,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         "candidates": {},
         "updating": False,
         "grouped": True,
+        "grouped_escapes": True,
+        "escape_keys": escapes.keys(),
         "separated": False,
         "plot_event": None,
         "auto_cdf": False,
@@ -189,13 +198,28 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         layout=layout,
         pathway_mode=pathway_mode,
         tree_mode=bool(tree),
+        escape_options=escapes.labels,
     )
 
-    scope, tree_labels, full_tree = (
+    ui.distinguish_escapees.visible = bool(tree and escapes.ambiguous)
+    scope, tree_labels, full_tree, refresh_tree = (
         install_tree_controls(doc, ui, tree, fate_names, fate_counts, fate_colors)
         if tree
-        else (None, {}, None)
+        else (None, {}, None, lambda: None)
     )
+
+    event_groups = {}
+    if tree:
+        for key in fragmentation_names:
+            ui.event_options[key].labels = [facet_names.get(key, key)]
+            ui.event_options[key].html_attributes = {"title": key}
+        for key in escapes.labels:
+            ui.event_options[key].labels = [escapes.short_labels[key]]
+            ui.event_options[key].html_attributes = {"title": escapes.labels[key]}
+        event_groups = {
+            "fragmentation": group("Fragmentation", column()),
+            "escape": group("Escapes", column()),
+        }
 
     if not tree:
         label_facets(doc, ui.fate, facet_names)
@@ -513,7 +537,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
 
     def sync_event_controls():
         """Keep grouping, event availability, and colors in sync with pathways."""
-        ui.group_fragmentations.disabled = enabled(ui.fate_facets)
+        ui.group_fragmentations.disabled = enabled(ui.fate_facets) and not tree
         if ui.group_fragmentations.disabled:
             ui.group_fragmentations.active = [0]
         grouped = enabled(ui.group_fragmentations) and not pathway_mode
@@ -532,6 +556,36 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         [0] if enabled(ui.event_options["fragmentation"]) else []
                     )
             state["grouped"] = grouped
+        escape_keys = escapes.keys(enabled(ui.distinguish_escapees))
+        grouped_escapes = enabled(ui.group_escapes)
+        if escape_keys != state["escape_keys"]:
+            old_keys = state["escape_keys"]
+            for key in escape_keys:
+                related = [
+                    old
+                    for old in old_keys
+                    if escapes.route_daughters.get(old, old)
+                    == escapes.route_daughters.get(key, key)
+                ]
+                ui.event_options[key].active = (
+                    [0]
+                    if any(enabled(ui.event_options[old]) for old in related)
+                    else []
+                )
+            state["escape_keys"] = escape_keys
+        if grouped_escapes != state["grouped_escapes"]:
+            if grouped_escapes:
+                ui.event_options["escape"].active = (
+                    [0]
+                    if any(enabled(ui.event_options[key]) for key in escape_keys)
+                    else []
+                )
+            else:
+                for key in escape_keys:
+                    ui.event_options[key].active = list(
+                        ui.event_options["escape"].active
+                    )
+            state["grouped_escapes"] = grouped_escapes
         separated = enabled(ui.separate_rejected)
         if separated and not state["separated"]:
             ui.event_options["rejected_collision"].active = list(
@@ -552,15 +606,20 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if pathway_mode
             else realizations.filter(pl.col("fate").is_in(selected_fates)),
         )
-        kinds = (
-            list(EVENT_TYPES)
-            if grouped
-            else ["init", "collision", *fragmentation_names, "escape"]
-        )
+        kinds = [
+            "init",
+            "collision",
+            *(["fragmentation"] if grouped else fragmentation_names),
+            *(["escape"] if grouped_escapes else escape_keys),
+        ]
         if separated:
             kinds.insert(kinds.index("collision") + 1, "rejected_collision")
         event_colors = {
-            kind: COLORS[kind] if kind in COLORS else fate_colors[kind]
+            kind: COLORS[kind]
+            if kind in COLORS
+            else escapes.colors[kind]
+            if kind in escapes.colors
+            else fate_colors[kind]
             for kind in kinds
         }
         for kind, widget in ui.event_options.items():
@@ -570,6 +629,15 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     if pathway_mode or tree
                     else escape_name in selected_fates
                 )
+            elif kind in escapes.labels:
+                column_name = (
+                    "escape_route"
+                    if enabled(ui.distinguish_escapees)
+                    else "escape_daughter"
+                )
+                available = not available_events.filter(
+                    pl.col(column_name) == kind
+                ).is_empty()
             elif kind in ("collision", "rejected_collision"):
                 rejected = (
                     pl.col("accepted").eq(False).fill_null(False)
@@ -594,10 +662,33 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     or kind in selected_fates
                 ) and kind in available_events["event_pathway"]
             widget.disabled = not available
-        ui.event_options["escape"].labels = [
-            "Escape" if grouped or pathway_mode or tree else escape_name
-        ]
-        ui.event_controls.children = [ui.event_options[kind] for kind in kinds]
+        ui.event_options["escape"].labels = ["Escape"]
+        children = []
+        for kind in kinds:
+            family = (
+                "fragmentation"
+                if kind in fragmentation_names
+                else "escape"
+                if kind in escape_keys
+                else None
+            )
+            if (
+                tree
+                and family
+                and not (grouped if family == "fragmentation" else grouped_escapes)
+            ):
+                container = event_groups[family]
+                if container not in children:
+                    keys = (
+                        fragmentation_names
+                        if family == "fragmentation"
+                        else escape_keys
+                    )
+                    container.child.children = [ui.event_options[key] for key in keys]
+                    children.append(container)
+            else:
+                children.append(ui.event_options[kind])
+        ui.event_controls.children = children
         active_groups = {
             kind
             for kind in kinds
@@ -655,8 +746,23 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             .then(pl.lit("rejected_collision"))
             .when(pl.col("type") == "fragmentation")
             .then(pl.lit("fragmentation") if grouped else pl.col("event_pathway"))
+            .when(pl.col("type") == "escape")
+            .then(
+                pl.lit("escape")
+                if enabled(ui.group_escapes)
+                else pl.col(
+                    "escape_route"
+                    if enabled(ui.distinguish_escapees)
+                    else "escape_daughter"
+                )
+            )
             .otherwise(pl.col("type"))
-            .alias("event_group")
+            .alias("event_group"),
+            pl.col(
+                "escape_route"
+                if enabled(ui.distinguish_escapees)
+                else "escape_daughter"
+            ).alias("event_escape"),
         )
         selection_events = chosen_events
         mapped_regions = coordinate_regions(
@@ -816,6 +922,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         )
                     )
             member_events = events_for(positioned, members)
+            summary_events = member_events.filter(
+                pl.col("event_group").is_in(active_groups)
+            )
             plots = []
             if enabled(ui.show_events):
                 visible = layout_events(
@@ -872,18 +981,25 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         if name in members["fate"]
                     }
                     if tree:
+                        available = set(cumulative_members["fate"].drop_nulls())
+                        names = sorted(available - escapes.colors.keys()) + [
+                            key
+                            for key in escapes.keys(enabled(ui.distinguish_escapees))
+                            if key in available
+                        ]
                         row_colors = {
-                            name: fate_colors.get(name, COLORS["escape"])
-                            for name in cumulative_members["fate"]
-                            .drop_nulls()
-                            .unique()
-                            .sort()
+                            name: escapes.colors.get(
+                                name, fate_colors.get(name, COLORS["escape"])
+                            )
+                            for name in names
                         }
                     plots.append(
                         _cdf_plot(
                             cumulative_areas(
                                 cumulative_members,
-                                cumulative_events,
+                                cumulative_events.filter(
+                                    pl.col("event_group").is_in(active_groups)
+                                ),
                                 left_edge,
                                 right_edge,
                                 row_colors,
@@ -891,13 +1007,38 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                             ),
                             shared_x,
                             row_colors,
+                            labels=escapes.labels,
                         )
                     )
                 if enabled(ui.show_bars) and regional:
                     bars = regional_fractions(
-                        members, member_events, mapped_regions, denominator=denominator
+                        members, summary_events, mapped_regions, denominator=denominator
                     )
-                    bar = _bar_plot(bars, shared_x)
+                    escape_counts = (
+                        members.join(
+                            summary_events,
+                            left_on="terminal_event_id",
+                            right_on="id",
+                            how="inner",
+                        )
+                        .filter(pl.col("type") == "escape")
+                        .group_by("event_escape")
+                        .len()
+                    )
+                    counts = dict(escape_counts.iter_rows())
+                    escape_fractions = {
+                        key: counts[key]
+                        / max(members.height if denominator is None else denominator, 1)
+                        for key in escapes.keys(enabled(ui.distinguish_escapees))
+                        if key in counts
+                    }
+                    bar = _bar_plot(
+                        bars,
+                        shared_x,
+                        escapes=escape_fractions,
+                        escape_colors=escapes.colors,
+                        escape_labels=escapes.labels,
+                    )
                     if tree:
                         bar.yaxis.axis_label = "Events / realization"
                     if pathway_mode:
@@ -1045,6 +1186,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         (ui.fate, "active"),
         (ui.fate_facets, "active"),
         (ui.group_fragmentations, "active"),
+        (ui.group_escapes, "active"),
         (ui.separate_rejected, "active"),
         (ui.own_zones, "active"),
         (ui.spread_x, "active"),
@@ -1108,14 +1250,22 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         sync_collision_panels()
         update_selection()
 
+    def distinguish_changed(attr, old, new):
+        fate_colors.update(escapes.route_colors(bool(new)))
+        refresh_tree()
+        render()
+
+    ui.distinguish_escapees.on_change("active", distinguish_changed)
     ui.show_rates.on_change("active", show_rates_changed)
     if full_tree is not None:
         full_tree.on_change("active", control_changed)
     if scope is not None:
 
         def scope_changed(attr, old, new):
-            ui.show_cdf.active = [0]
-            render()
+            if enabled(ui.show_cdf):
+                render()
+            else:
+                ui.show_cdf.active = [0]
 
         scope.on_change("value", scope_changed)
 

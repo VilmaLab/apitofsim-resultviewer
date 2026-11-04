@@ -54,6 +54,8 @@ class Controls:
     fate_facets: CheckboxGroup
     separate_rejected: CheckboxGroup
     group_fragmentations: CheckboxGroup
+    group_escapes: CheckboxGroup
+    distinguish_escapees: CheckboxGroup
     own_zones: CheckboxGroup
     spread_x: CheckboxGroup
     event_options: dict[str, CheckboxGroup]
@@ -141,6 +143,8 @@ def create_controls(
     *,
     layout="viewport",
     pathway_mode=False,
+    tree_mode=False,
+    escape_options=None,
 ):
     """Build the frame and attach browser bridges for one document."""
     layout_policy = layout
@@ -150,9 +154,13 @@ def create_controls(
         for i, name in enumerate(fate_names)
         if name in fate_colors
     )
-    count_styles = "\n".join(
-        f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
-        for i, name in enumerate(fate_names)
+    count_styles = (
+        ""
+        if tree_mode
+        else "\n".join(
+            f'label:nth-child({i + 1}) span::after {{ content: " ({fate_counts[name]})"; font-style: italic; }}'
+            for i, name in enumerate(fate_names)
+        )
     )
     counts = Div(sizing_mode="stretch_width", styles={"overflow-wrap": "anywhere"})
     quality = Div(sizing_mode="stretch_width")
@@ -170,6 +178,12 @@ def create_controls(
     separate_rejected = checkbox("Separate rejected collisions")
     group_fragmentations = checkbox("Group fragmentations", True)
     group_fragmentations.visible = not pathway_mode
+    group_escapes = checkbox("Group escapes", True)
+    group_escapes.name = "group_escapes"
+    group_escapes.visible = tree_mode
+    distinguish_escapees = checkbox("Distinguish identical escapees by pathway")
+    distinguish_escapees.visible = False
+    distinguish_escapees.name = "distinguish_escapees"
     own_zones = checkbox("Place initial/escape in their own zones", True)
     spread_x = checkbox("Spread initial/escape X", True)
     event_options = (
@@ -179,6 +193,7 @@ def create_controls(
         }
         | {"rejected_collision": checkbox("Rejected collisions", True)}
         | {name: checkbox(name, True) for name in fragmentation_names}
+        | {key: checkbox(label, True) for key, label in (escape_options or {}).items()}
     )
     for kind, widget in event_options.items():
         widget.name = f"event:{kind}"
@@ -352,6 +367,7 @@ def create_controls(
             column(
                 x_markers,
                 group_fragmentations,
+                group_escapes,
                 separate_rejected,
                 own_zones,
                 spread_x,
@@ -545,6 +561,8 @@ def create_controls(
         fate=fate,
         fate_facets=fate_facets,
         group_fragmentations=group_fragmentations,
+        group_escapes=group_escapes,
+        distinguish_escapees=distinguish_escapees,
         separate_rejected=separate_rejected,
         own_zones=own_zones,
         spread_x=spread_x,

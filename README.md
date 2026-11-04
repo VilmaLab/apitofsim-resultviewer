@@ -121,16 +121,25 @@ select outcome leaves independently; parent checkboxes select their whole
 subtree. Folding preserves selection, and facets show complete histories.
 Routes reaching the same species remain separate. Facets show charged daughters;
 hover to see the full pathway. Escape repeats the current daughter. Unobserved
-branches are hidden by default; enable **Show full pathway tree** beneath the
+branches are hidden by default; enable **Show empty pathways** beneath the
 tree to reveal them. These branches do not consume pathway colors.
+
+Escape colors follow the final charged daughter, starting at green. When recorded
+routes share a daughter, **Distinguish identical escapees by pathway** enables
+separate route colors while retaining existing daughter colors where possible.
+**Group escapes**, available in cluster-tree mode, groups their realization markers
+by default. Individual
+fragmentation and escape event checkboxes also filter cumulative and bar counts
+without changing the selected-realization denominator.
 
 Regional bars count every recorded fragmentation per selected realization, so
 they can exceed one. The cumulative plot counts first-level fragmentations and
 escapes by default. Click the cumulative icon beside a branch to count that
 node's immediate outcomes instead; the denominator remains all selected
-histories in the facet. Before/after fragmentation rows share time and position,
-while species, energy, and motion remain independently inspectable. Rate panels
-follow the selected state's species. Interrupted histories remain incomplete.
+histories in the facet. Fragmentation details show → charged daughter, with the
+full pathway on hover. Before/after rows share time and position, while energy
+and motion remain independently inspectable. Rate panels follow the selected
+state's species. Interrupted histories remain incomplete.
 
 ## Developing
 

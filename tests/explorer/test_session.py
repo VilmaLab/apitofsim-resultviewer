@@ -1,6 +1,7 @@
 """Explorer session behavior."""
 
 import json
+from xml.etree import ElementTree
 
 import polars as pl
 import pytest
@@ -257,12 +258,13 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     assert controls[3].child.children[1].title == "Views"
     assert controls[4].child.children[0].labels == ["Use x markers"]
     assert controls[4].child.children[1].labels == ["Group fragmentations"]
-    assert controls[4].child.children[2].labels == ["Separate rejected collisions"]
-    assert controls[4].child.children[3].labels == [
+    assert controls[4].child.children[2].labels == ["Group escapes"]
+    assert controls[4].child.children[3].labels == ["Separate rejected collisions"]
+    assert controls[4].child.children[4].labels == [
         "Place initial/escape in their own zones"
     ]
-    assert controls[4].child.children[4].labels == ["Spread initial/escape X"]
-    assert [g.title for g in controls[4].child.children[5:]] == ["Events", "Y-axis"]
+    assert controls[4].child.children[5].labels == ["Spread initial/escape X"]
+    assert [g.title for g in controls[4].child.children[6:]] == ["Events", "Y-axis"]
     assert not event_plots[0].legend
     assert doc.to_json() is not None
 
@@ -344,7 +346,13 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     )
     frames = (
         *frames[:2],
-        pl.DataFrame({"pathway_id": [7], "pathway": ["Parent → A < B + C"]}),
+        pl.DataFrame(
+            {
+                "pathway_id": [7],
+                "pathway": ["Parent → A < B + C"],
+                "daughter": ["A < B"],
+            }
+        ),
         frames[3],
     )
     loads = []
@@ -383,9 +391,13 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     assert text_contains("Realization #1")
     assert text_contains("<em>Parent → A + B</em>")
     assert not text_contains("Pathway:")
-    assert not text_contains("Parent → A &lt; B + C")
     assert not text_contains("pathway #7")
     details = next(d for d in doc.select({"type": Div}) if "Realization #1" in d.text)
+    parsed = ElementTree.fromstring(f"<div>{details.text}</div>")
+    fragmentation = parsed.find(".//tr[@id='event-2']//span")
+    assert fragmentation.text == "→ A < B"
+    assert fragmentation.get("title") == "Parent → A < B + C"
+    assert "Parent → A < B + C" not in "".join(parsed.itertext())
     assert details.text.startswith("<button id='clear-selection'>")
     assert "background:#fde68a" in details.text
     assert "<th>Time (ns)</th>" in details.text
@@ -767,7 +779,7 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
         "Collision",
         "Parent → A + B",
         "Parent → C + D",
-        "Parent → Parent",
+        "Escape",
     ]
     for event_id, name in [
         (2, "Parent → A + B"),
@@ -775,23 +787,26 @@ def test_fragmentation_grouping_and_pathway_overrides(monkeypatch):
         (6, "Parent → Parent"),
     ]:
         assert event_points()[event_id] == colors[name]
-        assert f"color: {colors[name]}" in checkbox(name).stylesheets[0].css
+        assert (
+            f"color: {colors[name]}"
+            in checkbox("Escape" if name == "Parent → Parent" else name)
+            .stylesheets[0]
+            .css
+        )
     checkbox("Parent → A + B").active = []
     assert 2 not in event_points() and 4 in event_points()
     cumulative = next(p for p in doc.select({"type": figure}) if p.name == "cdf")
-    assert len(cumulative.renderers) == 3
+    assert len(cumulative.renderers) == 2
 
     fates.active = [fates.labels.index("Parent → C + D")]
     assert checkbox("Parent → A + B").disabled and not checkbox("Parent → A + B").active
-    assert checkbox("Parent → Parent").disabled and checkbox("Parent → Parent").active
+    assert checkbox("Escape").disabled and checkbox("Escape").active
     assert not checkbox("Parent → C + D").disabled and checkbox("Parent → C + D").active
     assert set(event_points()) == {3, 4}
     fates.active = list(range(len(fates.labels)))
     assert not checkbox("Parent → A + B").disabled
     assert not checkbox("Parent → A + B").active
-    assert (
-        checkbox("Parent → Parent").active and not checkbox("Parent → Parent").disabled
-    )
+    assert checkbox("Escape").active and not checkbox("Escape").disabled
     assert 2 not in event_points() and 6 in event_points()
     fates.active = [fates.labels.index("Parent → C + D")]
     facets.active = [0]

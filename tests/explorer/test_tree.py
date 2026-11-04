@@ -157,8 +157,15 @@ def test_fragmentation_details_share_spacetime_but_keep_both_states(tree_databas
     before_row = parsed.find(f".//tr[@id='event-{after['fragmentation_id']}']")
     after_row = parsed.find(f".//tr[@id='event-{after['id']}']")
     assert len(before_row.findall('td[@rowspan="2"]')) == 7
-    assert "Before · Parent" in "".join(before_row.itertext())
-    assert "After · A" in "".join(after_row.itertext())
+    assert "→ A" in "".join(before_row.itertext())
+    assert before_row.find(".//span").get("title") == "Parent → A + Neutral"
+    assert "Neutral" not in "".join(before_row.itertext())
+    assert "Species / state" not in html
+    assert (
+        after_row.find(".//button").get("aria-label") == f"Inspect event #{after['id']}"
+    )
+    assert len(before_row.findall("td")) == len(parsed.findall(".//th"))
+    assert len(after_row.findall("td")) == len(parsed.findall(".//th")) - 7
     assert "3e-20" in "".join(before_row.itertext())
     assert "6e-20" in "".join(after_row.itertext())
     assert "Parent → A + Neutral" in html
@@ -226,7 +233,7 @@ def test_browser_tree_selection_folding_and_scope(
         root = page.locator("details").first
         root_input = root.locator("summary").first.locator("input")
         expect(root_input).to_be_checked()
-        full_tree = page.get_by_label("Show full pathway tree", exact=True)
+        full_tree = page.get_by_label("Show empty pathways", exact=True)
         expect(full_tree).not_to_be_checked()
         unobserved = page.locator('.tree-leaf[data-observed="false"]').first
         expect(unobserved).not_to_be_visible()
@@ -274,7 +281,11 @@ def test_browser_tree_selection_folding_and_scope(
         )
         branch.locator("summary").first.click(position={"x": 3, "y": 3})
         expect(branch).not_to_have_attribute("open", "")
-        # A selection update must preserve folding and the independent cumulative scope.
+        # Lazy regeneration preserves folded branches and the independent cumulative scope.
+        full_tree.check()
+        expect(branch).not_to_have_attribute("open", "")
+        full_tree.uncheck()
+        expect(branch).not_to_have_attribute("open", "")
         leaf.uncheck()
         expect(branch).not_to_have_attribute("open", "")
         expect(button).to_have_attribute("aria-pressed", "true")
@@ -418,7 +429,8 @@ def test_browser_daughter_labels_in_other_modes(monkeypatch, page, pathway_mode)
         label = page.locator('label[title="Parent → A + B"]')
         expect(label).to_contain_text("→ A")
         assert "+ B" not in label.inner_text()
-        expect(page.get_by_label("Show full pathway tree", exact=True)).to_have_count(0)
+        expect(page.get_by_label("Show empty pathways", exact=True)).to_have_count(0)
+        expect(page.get_by_label("Group escapes", exact=True)).not_to_be_visible()
         if not pathway_mode:
             expect(page.locator('label[title="Parent → Parent"]')).to_contain_text(
                 "→ Parent"
@@ -456,6 +468,9 @@ def test_tree_colors_use_observed_pathways_without_changing_palette(tree_databas
         if pathway == "Escape":
             continue
         assert f"color:{color}" in html
+    assert "A → Neutral + Leaf · Stop" not in html
+    check(doc, "Show empty pathways").active = [0]
+    html = doc.select_one({"name": "fragmentation_tree"}).text
     assert "A → Neutral + Leaf · Stop" in html
     assert (
         "color:"
@@ -463,3 +478,28 @@ def test_tree_colors_use_observed_pathways_without_changing_palette(tree_databas
             -1
         ].split("</label>")[0]
     )
+
+
+def test_large_unobserved_tree_is_built_only_on_request(tree_database, monkeypatch):
+    frames = data.load_data(tree_database, 1, 1)
+    tree = ExecutionTree.load(tree_database, 1, 1, frames[2])
+    for node in range(100, 4100):
+        tree.nodes[10, node] = 4
+        tree.transitions[10, node] = (0, 9, node)
+    monkeypatch.setattr(session, "load_data", lambda *args: frames)
+    monkeypatch.setattr(ExecutionTree, "load", lambda *args: tree)
+    doc = Document()
+    session.build_document(tree_database, doc, 1, 1)
+    view = doc.select_one({"name": "fragmentation_tree"})
+    assert 'data-scope="10:4099"' not in view.text
+    assert len(view.text) < 100_000
+    fate = next(
+        w for w in doc.select({"type": CheckboxGroup}) if "10:escape:4099" in w.labels
+    )
+    assert len(fate.stylesheets[0].css) < 2_000
+    check(doc, "Show empty pathways").active = [0]
+    assert 'data-scope="10:4099"' in view.text
+    fate.active = [fate.labels.index("10:escape:3")]
+    check(doc, "Show empty pathways").active = []
+    assert 'data-scope="10:4099"' not in view.text
+    assert fate.labels[fate.active[0]] == "10:escape:3"

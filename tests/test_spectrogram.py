@@ -14,6 +14,13 @@ from playwright.sync_api import expect
 from apitofresview.plotting.spectrogram import bokeh_labels, matplotlib_spectrogram
 
 
+@pytest.fixture(scope="module", autouse=True)
+def headless_matplotlib():
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+
 @pytest.mark.parametrize("backend", ["matplotlib", "bokeh"])
 @pytest.mark.parametrize("labels", [True, False])
 def test_peak_labels(backend, labels):

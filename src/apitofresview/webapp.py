@@ -673,10 +673,11 @@ def spectrogram_bokeh(db, doc):
     plot = renderer.get_plot(spectrogram_plot(df, labels=labels, scale="sum"), doc)
     figure = plot.state
     figure.width *= 2
-    figure.y_range.end = 1
-    figure.y_range.reset_end = 1
+    y_max = 1.15 if labels else 1
+    figure.y_range.end = y_max
+    figure.y_range.reset_end = y_max
     figure.x_range.bounds = (0, 2 * figure.x_range.end)
-    figure.y_range.bounds = (0, 1)
+    figure.y_range.bounds = (0, y_max)
     figure.toolbar.logo = None
     figure.add_tools(FullscreenTool())
     root = layout(  # type: ignore[call-arg]

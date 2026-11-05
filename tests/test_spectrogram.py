@@ -54,6 +54,13 @@ def test_label_checkbox_controls_both_views(page, live_server):
         )
 
     expect_bokeh_labels(True)
+    page.wait_for_function(
+        """() => window.Bokeh.documents.some(doc =>
+            [...doc.all_models.values()].some(model =>
+                model.type === 'Figure' && model.y_range.end > 1
+            )
+        )"""
+    )
     checkbox.uncheck()
     expect(page).to_have_url(
         f"{live_server}/experiment/cluster/spectrogram?experiment=1&cluster=1&labels=false"

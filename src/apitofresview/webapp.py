@@ -17,7 +17,6 @@ from apitofsim.workflow.db import (
 )
 from bokeh.server.asgi import BokehASGI
 from mplbed import (
-    FigureCollector,
     mplbed_starlette,
     safe_html,
 )
@@ -483,32 +482,10 @@ async def cluster(request):
     )
 
 
-def spectrogram_plot(df, *, labels=True, scale=None):
-    import holoviews
-    from apitofsim.plotting.spectrogram import basic_spectrogram
-
-    plot = basic_spectrogram(df, scale=scale)
-    if labels:
-        peaks = df[df["intensity"] > 0]
-        names = holoviews.Labels(
-            (peaks["atomic_mass"], peaks["intensity"], peaks["product_name"]),
-            ["m/z", "Intensity"],
-            "Product",
-        ).opts(
-            holoviews.opts.Labels(rotation=45, backend="matplotlib"),
-            holoviews.opts.Labels(
-                angle=45, text_align="left", text_baseline="bottom", backend="bokeh"
-            ),
-        )
-        plot *= names
-    return plot
-
-
 def spectrogram_mpl(db, experiment, cluster, *, labels=True):
-    import holoviews  # type: ignore[reportMissingImports]
-    from apitofsim.plotting.spectrogram import (  # type: ignore[reportMissingImports]
-        get_intensities,
-    )
+    from apitofsim.plotting.spectrogram import get_intensities
+
+    from .plotting.spectrogram import matplotlib_spectrogram
 
     df = get_intensities(
         db,
@@ -516,11 +493,9 @@ def spectrogram_mpl(db, experiment, cluster, *, labels=True):
         cluster_id=cluster,
         is_single_pathway=get_is_single_pathway(db, experiment, cluster),  # type: ignore[arg-type]
     )
-    renderer = holoviews.renderer("matplotlib")
-    collector = FigureCollector(target="inline", on_close="remove")
-    with collector:
-        renderer.show(spectrogram_plot(df, labels=labels))
-    return collector.consume_one()
+    return safe_html.figure_html(
+        matplotlib_spectrogram(df, labels=labels), on_close="remove"
+    )
 
 
 def bokeh_document(request, path, *args, **kwargs):
@@ -643,9 +618,7 @@ def get_is_single_pathway(db, experiment, cluster):
 
 def spectrogram_bokeh(db, doc):
     import holoviews
-    from apitofsim.plotting.spectrogram import (
-        get_intensities,
-    )
+    from apitofsim.plotting.spectrogram import basic_spectrogram, get_intensities
     from apitofsim.transmission import transform_intensity
     from bokeh.layouts import layout
     from bokeh.models import FullscreenTool
@@ -670,7 +643,7 @@ def spectrogram_bokeh(db, doc):
     transform_intensity(df, transmission_model)
     renderer = holoviews.renderer("bokeh").instance(mode="server")
     labels = args.get("labels", [b"true"])[-1].decode().lower() == "true"
-    plot = renderer.get_plot(spectrogram_plot(df, labels=labels, scale="sum"), doc)
+    plot = renderer.get_plot(basic_spectrogram(df, scale="sum"), doc)
     figure = plot.state
     figure.width *= 2
     y_max = 1.15 if labels else 1
@@ -680,6 +653,10 @@ def spectrogram_bokeh(db, doc):
     figure.y_range.bounds = (0, y_max)
     figure.toolbar.logo = None
     figure.add_tools(FullscreenTool())
+    if labels:
+        from .plotting.spectrogram import bokeh_labels
+
+        bokeh_labels(figure, df)
     root = layout(  # type: ignore[call-arg]
         [[figure]], sizing_mode="fixed"
     )

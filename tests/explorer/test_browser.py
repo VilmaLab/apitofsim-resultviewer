@@ -1209,7 +1209,8 @@ def test_page_layout_flows_and_restores_after_fullscreen(monkeypatch, page, widt
 def set_details_layout(target, placement):
     target.get_by_role("button", name=placement, exact=True).click()
     # A click updates its own toggle immediately; the server then updates the
-    # other toggles and rebuilds the workspace. Wait for that whole transition.
+    # other toggles and rebuilds the workspace. Poll the current view rather
+    # than awaiting its replaceable `ready` promise during that transition.
     target.wait_for_function(
         """placement => {
         const doc = Bokeh.documents[0];
@@ -1218,15 +1219,15 @@ def set_details_layout(target, placement):
         const body = doc.roots()[0].children[0];
         const workspace = body.children[1];
         const left = body.children[0].children[1];
-        return doc.is_idle && Object.values(modes).every(value =>
+        const view = Bokeh.index.find_one(doc.roots()[0]);
+        const workspaceView = Bokeh.index.find_one(workspace);
+        return doc.is_idle && view?.has_finished() && workspaceView?.el.isConnected &&
+            Object.values(modes).every(value =>
             doc.get_model_by_name(`details_layout_${value}`).active === (value === mode)) &&
             (workspace.type === 'Column') === (mode === 'bottom') &&
-            Bokeh.index.find_one(left).el.checkVisibility() === left.visible;
+            Bokeh.index.find_one(left)?.el.checkVisibility() === left.visible;
     }""",
         arg=placement,
-    )
-    target.evaluate(
-        "async () => await Bokeh.index.find_one(Bokeh.documents[0].roots()[0]).ready"
     )
 
 

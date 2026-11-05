@@ -4,6 +4,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 
 import pytest
 from apitofsim.workflow.db import ExperimentDatabase
@@ -92,8 +93,8 @@ def _wait_until_serving(base_url, process):
     raise TimeoutError(f"Server did not start:\n{stdout}")
 
 
-@pytest.fixture(scope="session")
-def live_server(browser_database):
+@contextmanager
+def serve_database(database):
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     process = subprocess.Popen(
@@ -102,7 +103,7 @@ def live_server(browser_database):
             "-m",
             "apitofresview",
             "--database",
-            str(browser_database),
+            str(database),
             "--mode",
             "server",
             "--port",
@@ -122,3 +123,9 @@ def live_server(browser_database):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+
+@pytest.fixture(scope="session")
+def live_server(browser_database):
+    with serve_database(browser_database) as base_url:
+        yield base_url

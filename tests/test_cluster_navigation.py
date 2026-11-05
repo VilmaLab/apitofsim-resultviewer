@@ -6,10 +6,11 @@ from apitofsim.workflow.db import ExperimentDatabase
 from playwright.sync_api import Page, expect
 
 from tests.test_browser import assert_clean_browser, watch_browser_errors
+from tests.conftest import serve_database
 
 
 @pytest.fixture(scope="session", params=[True, False], ids=["shared", "missing"])
-def browser_database(browser_database, tmp_path_factory, request):
+def cluster_navigation_server(browser_database, tmp_path_factory, request):
     path = tmp_path_factory.mktemp("cluster-navigation") / "test.duckdb"
     shutil.copy2(browser_database, path)
     if not request.param:
@@ -21,14 +22,23 @@ def browser_database(browser_database, tmp_path_factory, request):
             )
         finally:
             db.close()
-    return path
+    with serve_database(path) as base_url:
+        yield base_url
 
 
 @pytest.mark.parametrize(
     "route", ["cluster", "report", "realizations", "explorer", "spectrogram"]
 )
-def test_switch_experiment_with_selected_cluster(page: Page, live_server, route):
+def test_switch_experiment_with_selected_cluster(
+    page: Page, cluster_navigation_server, route
+):
+    live_server = cluster_navigation_server
     errors = watch_browser_errors(page)
+    # Navigation does not need live Bokeh plot sessions.
+    page.route(
+        "**/bokeh/**",
+        lambda route: route.fulfill(body="", content_type="application/javascript"),
+    )
     page.set_default_navigation_timeout(60_000)
     path = "/report" if route == "report" else "/experiment/cluster"
     if route not in {"cluster", "report"}:

@@ -22,7 +22,7 @@ from mplbed import (
     safe_html,
 )
 from starlette.applications import Starlette
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -306,6 +306,8 @@ def nav_context(request):
     query_params = dict(request.query_params)
     query_params.pop("report", None)
     query_params.pop("cluster", None)
+    if cluster is not None:
+        query_params["cluster"] = cluster
     if report:
         query_params["report"] = report
     return {
@@ -356,6 +358,22 @@ async def experiment(request, params):
             ),
         },
     )
+
+
+async def select_experiment(request):
+    params = dict(request.query_params)
+    route = params.pop("next", "experiment")
+    routes = {name for _, name, _ in EXPERIMENT_VIEWS + CLUSTER_VIEWS}
+    if route not in routes:
+        route = "experiment"
+    experiment = lenient_int(params.get("experiment"))
+    clusters = get_cluster_choices(request.app.state.db, experiment)
+    cluster = selected_cluster(request, clusters)
+    if (params.get("cluster") and cluster is None) or (
+        route in {"spectrogram", "realizations", "explorer"} and cluster is None
+    ):
+        return RedirectResponse(url_with(request, "cluster", experiment=experiment))
+    return RedirectResponse(url_with(request, route, **params))
 
 
 async def comparison(request):
@@ -673,6 +691,7 @@ def create_app(database_path=None, debug=True):
         routes=[
             Route("/", overview, name="overview"),
             Route("/experiment", experiment, name="experiment"),
+            Route("/experiment/select", select_experiment, name="select_experiment"),
             Route("/report", report, name="report"),
             Route("/report/data", report_data, name="report_data"),
             Route("/report/download", report_download, name="report_download"),

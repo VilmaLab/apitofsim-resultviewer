@@ -1,4 +1,5 @@
-<form method="get" action="{{ url_for(route) }}" class="text-nowrap mx-4 flex items-center">
+<form method="get" action="{{ url_for('select_experiment') }}" class="text-nowrap mx-4 flex items-center">
+    <input type="hidden" name="next" value="{{ route }}">
     {% for key, value in query_params.items() if key != 'experiment' %}
         <input type="hidden" name="{{ key }}" value="{{ value }}">
     {% endfor %}

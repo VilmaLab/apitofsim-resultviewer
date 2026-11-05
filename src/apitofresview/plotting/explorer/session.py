@@ -5,6 +5,7 @@ import json
 from math import isfinite
 
 import polars as pl
+from bokeh.events import DocumentReady
 from bokeh.layouts import column, row
 from bokeh.models import Column, CustomJS, Div, FixedTicker, Range1d
 
@@ -1133,13 +1134,18 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             return
         state["updating"] = True
         try:
-            state["candidates"] = {}
-            selection_updates.clear()
-            chosen, chosen_events = prepare_cohort()
-            grouped, event_colors, active_groups = sync_event_controls()
-            sync_display_controls(event_colors)
-            assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups)
-            update_selection()
+            # Reconcile the model graph once after replacing controls/plots,
+            # rather than walking it after each intermediate layout change.
+            with doc.models.freeze():
+                state["candidates"] = {}
+                selection_updates.clear()
+                chosen, chosen_events = prepare_cohort()
+                grouped, event_colors, active_groups = sync_event_controls()
+                sync_display_controls(event_colors)
+                assemble_panels(
+                    chosen, chosen_events, grouped, event_colors, active_groups
+                )
+                update_selection()
         finally:
             state["updating"] = False
 
@@ -1289,4 +1295,19 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     for widget in (ui.share_rates, ui.all_pathways):
         widget.on_change("active", lambda attr, old, new: update_selection())
     ui.show_cdf.on_change("active", cdf_changed)
-    render()
+    if doc.session_context is not None:
+        ui.center_plots.children = [Div(text="Loading plots…")]
+        started = False
+
+        def ready(event):
+            nonlocal started
+            # Wait until the controls have reached the browser before building
+            # plots. DocumentReady can fire again after a layout change.
+            if not started:
+                started = True
+                render()
+
+        doc.on_event(DocumentReady, ready)
+    else:
+        render()
+    doc.add_root(ui.frame)

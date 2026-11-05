@@ -713,6 +713,9 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(explorer_server)
     page.get_by_role("button", name="☷", exact=True).click()
+    page.wait_for_function(
+        "() => window.Bokeh?.documents[0]?.get_model_by_name('events')?.inner_width > 0"
+    )
     page.evaluate("""() => {
         const plot = Bokeh.documents[0].get_model_by_name('events');
         const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;
@@ -1317,6 +1320,9 @@ def test_sidebar_bottom_controls_are_reachable(
         page.get_by_role("button", name="☷", exact=True).click()
         # Summary controls need a real selection: their callbacks hide them
         # again if only their client-side visibility has been changed.
+        page.wait_for_function(
+            "() => window.Bokeh?.documents[0]?.get_model_by_name('events')?.inner_width > 0"
+        )
         page.evaluate("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('events');
             const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;

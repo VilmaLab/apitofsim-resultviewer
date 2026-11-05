@@ -6,6 +6,7 @@ from xml.etree import ElementTree
 import polars as pl
 import pytest
 from bokeh.document import Document
+from bokeh.events import DocumentReady
 from bokeh.models import (
     Button,
     CheckboxGroup,
@@ -1162,6 +1163,11 @@ def test_live_packing_waits_for_dimensions_and_coalesces_updates(monkeypatch, la
 
     monkeypatch.setattr(plot, packing_name, pack)
     build_document(None, doc, 1, 1)
+    assert doc.select_one({"name": "events"}) is None
+    doc.callbacks.trigger_event(DocumentReady())
+    initial_plot = doc.select_one({"name": "events"})
+    doc.callbacks.trigger_event(DocumentReady())
+    assert doc.select_one({"name": "events"}) is initial_plot
     next(
         w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
     ).value = layout

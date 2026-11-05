@@ -36,6 +36,25 @@ def assert_clean_browser(page_errors, console_errors, failed_responses):
     assert failed_responses == []
 
 
+def test_explorer_loads_without_external_resources(page: Page, live_server):
+    errors = watch_browser_errors(page)
+    external = []
+
+    def local_only(route):
+        if not route.request.url.startswith(live_server + "/"):
+            external.append(route.request.url)
+            route.abort()
+        else:
+            route.continue_()
+
+    page.route("**/*", local_only)
+    page.goto(f"{live_server}/experiment/cluster/explorer?experiment=1&cluster=1")
+    # This fixture has no event geometry; even its fallback needs BokehJS.
+    expect(page.get_by_text("Explorer data unavailable:", exact=False)).to_be_visible()
+    assert external == []
+    assert_clean_browser(*errors)
+
+
 def test_navigation_and_report_workflow(page: Page, live_server):
     errors = watch_browser_errors(page)
 

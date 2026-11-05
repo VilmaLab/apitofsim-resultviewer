@@ -1,14 +1,21 @@
 {% extends "base.html" %}
+{% set bokeh_components = ['bokeh', 'bokeh-widgets', 'bokeh-gl'] %}
 
 {% block title %}Explorer{% endblock %}
 
 {% block content %}
     <div id="explorer-frame" class="explorer-frame">
+        {% for component in bokeh_components %}
+        <script src="{{ url_for('bokeh', path='static/js/' ~ component ~ '.min.js') }}"></script>
+        {% endfor %}
         {{ explorer_bokeh }}
     </div>
 {% endblock %}
 
 {% block extra_head %}
+{% for component in bokeh_components %}
+<link rel="preload" as="script" href="{{ url_for('bokeh', path='static/js/' ~ component ~ '.min.js') }}" />
+{% endfor %}
 <style>
     body { height: 100dvh; overflow: hidden; }
     .explorer-frame { padding: 6px; min-height: 0; background: #f8fafc; overflow: hidden; }

@@ -126,6 +126,12 @@ def spread_terminal_x(
         else diameter
     )
     positions = events["position"].to_list()
+    terminals = list(
+        events.with_row_index("index")
+        .filter(pl.col("type").is_in(["init", "escape"]))
+        .select("index", "type", "realization_number", "id")
+        .iter_rows()
+    )
     for kind, slot in (
         ("init", initial_slot(regions)),
         ("escape", escape_slot(regions)),
@@ -136,15 +142,15 @@ def spread_terminal_x(
         capacity = max(1, floor((hi - lo) * scale / diameter) + 1)
         count = events.filter(pl.col("type") == kind).height
         period = min(capacity, max(count, 1), max(2, ceil(diameter / row_spacing)))
-        for index, event in enumerate(events.iter_rows(named=True)):
-            if event["type"] != kind:
+        for index, event_type, realization_number, event_id in terminals:
+            if event_type != kind:
                 continue
             fraction = (
-                (event["realization_number"] % period) / (period - 1)
+                (realization_number % period) / (period - 1)
                 if mode == "realization" and period > 1
                 else 0.5
                 if mode == "realization"
-                else (sin(event["id"] * 78.233) * 43758.5453) % 1
+                else (sin(event_id * 78.233) * 43758.5453) % 1
             )
             positions[index] = lo + fraction * (hi - lo)
     return events.with_columns(pl.Series("position", positions, dtype=pl.Float64))

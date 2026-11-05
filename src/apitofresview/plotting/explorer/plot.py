@@ -609,11 +609,15 @@ def _event_plot(
                 for i, x, y in packed.select("id", "position", "plot_y").iter_rows()
             }
             for glyph in swarm_glyphs:
-                glyph.data_source.data = {
-                    **glyph.data_source.data,
-                    "x": [positions[i][0] for i in glyph.data_source.data["id"]],
-                    "y": [positions[i][1] for i in glyph.data_source.data["id"]],
-                }
+                ids = glyph.data_source.data["id"]
+                # Repacking changes only positions. Sending the full source
+                # repeats IDs, labels and hover text over the websocket.
+                glyph.data_source.patch(
+                    {
+                        axis: [(slice(0, len(ids)), [positions[i][index] for i in ids])]
+                        for index, axis in enumerate(("x", "y"))
+                    }
+                )
                 glyph.glyph.size = diameter
             if envelope_source is not None:
                 outline = beeswarm_envelope(

@@ -487,7 +487,6 @@ def create_controls(
             )
         ],
     )
-    doc.add_root(frame)
     fullscreen_button.js_on_click(
         CustomJS(
             args=dict(frame=frame, fullscreen_state=fullscreen_state),

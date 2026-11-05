@@ -566,6 +566,7 @@ async def explorer(request, params):
     script = bokeh_document(
         request,
         "/explorer",
+        resources=None,
         arguments={
             "experiment": params.experiment,
             "cluster": params.cluster,

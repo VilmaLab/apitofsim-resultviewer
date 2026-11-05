@@ -21,5 +21,14 @@
         <div x-show="current_tab === 'bokeh'" class="overflow-x-auto p-4">
             <div class="mx-auto w-max">{{ spectrogram_bokeh|safe }}</div>
         </div>
+        <form method="get" action="{{ url_for(route) }}" class="m-4" x-data="{ show_labels: {{ labels|tojson }} }">
+            <input type="hidden" name="experiment" value="{{ experiment }}">
+            <input type="hidden" name="cluster" value="{{ cluster }}">
+            <input type="hidden" name="labels" :value="show_labels">
+            <label class="inline-flex items-center gap-2">
+                <input type="checkbox" x-model="show_labels" @change="$nextTick(() => $el.form.requestSubmit())" {% if labels %}checked{% endif %}>
+                Show labels
+            </label>
+        </form>
     </div>
 {% endblock %}

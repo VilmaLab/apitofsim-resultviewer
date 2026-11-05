@@ -1306,10 +1306,32 @@ def test_sidebar_bottom_controls_are_reachable(
         page.goto(url)
         expect(page.get_by_label("X coordinate")).to_be_visible()
         if layout == "contained":
-            page.locator(".explorer-bokeh-frame").evaluate(
-                "el => el.parentElement.style.height = '240px'"
-            )
+            # Bokeh's mount uses display:contents, so it cannot supply a height.
+            page.locator(".explorer-bokeh-frame").evaluate("""el => {
+                const mount = el.parentElement;
+                const host = document.createElement('div');
+                host.style.height = '240px';
+                mount.before(host);
+                host.append(mount);
+            }""")
 
+        # The controls appear before the deferred plots, and changing the host
+        # height schedules another layout. Scroll only after both have settled.
+        page.wait_for_function(
+            """height => {
+                const doc = Bokeh.documents[0];
+                const plot = doc.get_model_by_name('events');
+                const root = Bokeh.index.find_one(doc.roots()[0]);
+                const controls = [...doc.all_models].find(model =>
+                    model.css_classes?.includes('explorer-controls'));
+                const view = Bokeh.index.find_one(controls);
+                const frame = document.querySelector('.explorer-bokeh-frame').getBoundingClientRect();
+                return doc.is_idle && root?.has_finished() && plot?.inner_width > 0 &&
+                    view?.el.isConnected && view.el.getBoundingClientRect().bottom <= frame.bottom + 1 &&
+                    (height === null || Math.abs(frame.height - height) <= 1);
+            }""",
+            arg=240 if layout == "contained" else None,
+        )
         controls = page.locator(".explorer-controls")
         controls.evaluate("el => el.scrollTop = el.scrollHeight")
         bottom_control = controls.get_by_text("Show readoff values", exact=True)
@@ -1321,9 +1343,6 @@ def test_sidebar_bottom_controls_are_reachable(
         page.get_by_role("button", name="☷", exact=True).click()
         # Summary controls need a real selection: their callbacks hide them
         # again if only their client-side visibility has been changed.
-        page.wait_for_function(
-            "() => window.Bokeh?.documents[0]?.get_model_by_name('events')?.inner_width > 0"
-        )
         page.evaluate("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('events');
             const source = plot.renderers.find(r => r.data_source?.data.id?.includes(1)).data_source;

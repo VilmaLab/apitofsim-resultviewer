@@ -527,31 +527,37 @@ def test_species_population_tracks_serial_history_and_ignores_event_filters(
             frame = renderer.data_source.data
             index = max(i for i, x in enumerate(frame["position"]) if x <= t)
             fractions[renderer.name] = frame["fraction"][index]
-        assert sum(fractions.values()) == pytest.approx(1)
         return {key: value for key, value in fractions.items() if value}
 
-    assert fractions_at(0) == {"Initial cluster (unfragmented)": 1}
-    assert fractions_at(1) == {
-        "Initial cluster (unfragmented)": 0.2,
-        "Simulated descendant · A": 0.6,
-        "Unknown history": 0.2,
-    }
-    assert fractions_at(3) == {
-        "Initial cluster (unfragmented)": 0.2,
-        "Simulated descendant · A": 0.2,
-        "Simulated descendant · Leaf": 0.2,
-        "Terminal product · Leaf": 0.2,
-        "Unknown history": 0.2,
-    }
-    assert fractions_at(5) == {
-        "Escaped · Initial cluster": 0.2,
-        "Escaped · A": 0.2,
-        "Escaped · Leaf": 0.2,
-        "Terminal product · Leaf": 0.2,
-        "Unknown history": 0.2,
-    }
-    doc.select_one({"name": "event:fragmentation"}).active = []
-    assert fractions_at(1)["Simulated descendant · A"] == 0.6
+    assert fractions_at(0) == {"Parent": 1}
+    assert fractions_at(1) == {"Parent": 0.2, "A": 0.6}
+    assert fractions_at(3) == {"Parent": 0.2, "A": 0.2, "Leaf": 0.4}
+    assert fractions_at(5) == fractions_at(3)
+    chart = doc.select_one({"name": "population"})
+    assert all(
+        3 not in r.data_source.data["position"]
+        and 5 not in r.data_source.data["position"]
+        for r in chart.renderers
+    )
+    colors = {r.name: r.glyph.fill_color for r in chart.renderers}
+    legend = doc.select_one({"name": "species_legend"})
+    assert all(f"color:{color}" in legend.text for color in colors.values())
+
+    check(doc, "Distinguish identical escapees by pathway").active = [0]
+    check(doc, "Group fragmentations").active = []
+    pathway = doc.select_one({"name": "event:Parent → A + Neutral"})
+    assert f"color: {colors['A']};" in pathway.stylesheets[0].css
+    pathway.active = []
+    assert fractions_at(1)["A"] == 0.6
+    assert {
+        r.name: r.glyph.fill_color
+        for r in doc.select_one({"name": "population"}).renderers
+    } == colors
+
+    mode.value = "schematic"
+    chart = doc.select_one({"name": "population"})
+    assert chart.x_range.start < 0
+    assert fractions_at(chart.x_range.start) == fractions_at(0) == {"Parent": 1}
 
     check(doc, "Facet histories").active = [0]
     assert len(list(doc.select({"name": "population"}))) == 5
@@ -583,5 +589,5 @@ def test_browser_population_band_hover(tree_database, monkeypatch, page):
                     y: bounds.top + view.frame.y_scale.compute(0.5)};
         }""").json_value()
         page.mouse.move(point["x"], point["y"])
-        expect(page.get_by_text("Simulated descendant · A", exact=True)).to_be_visible()
-        expect(page.get_by_text("60.0%", exact=True)).to_be_visible()
+        expect(page.get_by_text("Charged species", exact=True)).to_be_visible()
+        expect(page.get_by_text("0.600", exact=True)).to_be_visible()

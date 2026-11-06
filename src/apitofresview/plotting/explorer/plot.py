@@ -660,7 +660,10 @@ def _fraction_plot(areas, shared_x, colors, *, labels=None, population=False):
         sizing_mode="stretch_width",
         tools="pan,wheel_zoom,reset,save",
     )
-    plot.yaxis.axis_label = "Population fraction" if population else "Fraction"
+    if population:
+        top = max((frame["top"].max() for frame in areas.values()), default=0)
+        plot.y_range.end = max(1, top)
+    plot.yaxis.axis_label = "Ions / realization" if population else "Fraction"
     for name, frame in areas.items():
         area = plot.varea(
             x="position",
@@ -677,10 +680,12 @@ def _fraction_plot(areas, shared_x, colors, *, labels=None, population=False):
                 mode="mouse" if population else "vline",
                 tooltips=[
                     (
-                        "State" if population else "Pathway",
+                        "Species" if population else "Pathway",
                         (labels or {}).get(name, name),
                     ),
-                    ("Fraction", "@fraction{0.0%}"),
+                    ("Ions / realization", "@fraction{0.000}")
+                    if population
+                    else ("Fraction", "@fraction{0.0%}"),
                 ],
             )
         )

@@ -32,14 +32,13 @@ from .layout import (
 )
 from .plot import (
     COLORS,
-    PATHWAY_COLORS,
     _bar_plot,
     _event_plot,
     _fraction_plot,
     _pathway_colors,
     _schematic_plot,
 )
-from .population import INITIAL, UNKNOWN, population_areas, population_labels
+from .population import population_areas, species_catalog
 from .rates import RateViews
 from .tree import ExecutionTree, install_tree_controls
 
@@ -107,7 +106,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     )
     events = escapes.annotate(events)
     events = (
-        events.join(pathways, on="pathway_id", how="left", maintain_order="left")
+        events.join(
+            pathways.drop("charged_products", strict=False),
+            on="pathway_id",
+            how="left",
+            maintain_order="left",
+        )
         .rename({"pathway": "event_pathway"})
         .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
     )
@@ -187,12 +191,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         "setting_sizing": False,
     }
 
-    species_labels = population_labels(pathways, tree)
-    species_colors = {
-        key: PATHWAY_COLORS[i % len(PATHWAY_COLORS)]
-        for i, key in enumerate(species_labels)
-    }
-    species_colors.update({INITIAL: "#2563eb", UNKNOWN: "#94a3b8"})
+    species_labels, charged_products, species_colors = species_catalog(
+        cluster, realizations, pathways, events, fate_colors
+    )
     total = realizations.height
     ui = create_controls(
         doc,
@@ -794,7 +795,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             dedicated_zones,
         )
         population_events = (
-            position_events(chosen_events, mapped_regions, ui.mode.value, False)
+            position_events(
+                chosen_events, mapped_regions, ui.mode.value, terminal_slots=False
+            )
             if enabled(ui.show_population)
             else None
         )
@@ -879,6 +882,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             right_edge if regional else right_edge + margin,
         )
         panels = []
+        population_plots = []
+        shown_species = set()
         if enabled(ui.schematic) and spatial and regional and not chosen.is_empty():
             panels.append(
                 _schematic_plot(
@@ -978,21 +983,26 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     )
                 )
             if population_events is not None and not members.is_empty():
-                plots.append(
-                    _fraction_plot(
-                        population_areas(
-                            members,
-                            events_for(population_events, members),
-                            left_edge,
-                            shared_x.end,
-                            tree=tree,
-                        ),
-                        shared_x,
-                        species_colors,
-                        labels=species_labels,
-                        population=True,
-                    )
+                areas = population_areas(
+                    members,
+                    events_for(population_events, members),
+                    shared_x.start,
+                    shared_x.end,
+                    cluster,
+                    species_labels,
+                    charged_products,
+                    tree=bool(tree),
                 )
+                shown_species.update(areas)
+                chart = _fraction_plot(
+                    areas,
+                    shared_x,
+                    species_colors,
+                    labels=species_labels,
+                    population=True,
+                )
+                population_plots.append(chart)
+                plots.append(chart)
             if enabled(ui.show_cdf) or (enabled(ui.show_bars) and regional):
                 if enabled(ui.show_cdf):
                     # Cumulative escapes occur at the machine endpoint, not
@@ -1141,6 +1151,29 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     if pathway_mode
                     else "<p>No realizations in this cohort. Adjust the range or pathway filters.</p>"
                 ),
+            )
+        if population_plots:
+            top = max(plot.y_range.end for plot in population_plots)
+            for plot in population_plots:
+                plot.y_range.end = top
+            entries = [
+                f'<span><span style="color:{species_colors[species]}" aria-hidden="true">■</span> '
+                f"{escape(species_labels[species])}</span>"
+                for species in sorted(
+                    shown_species, key=lambda s: (s != cluster, species_labels[s], s)
+                )
+            ]
+            panels.append(
+                Div(
+                    text='<div style="display:flex;flex-wrap:wrap;gap:4px 12px">'
+                    + "<strong>Charged species</strong> "
+                    + " ".join(entries)
+                    + "</div>"
+                    if entries
+                    else "No charged species can be resolved for this selection.",
+                    name="species_legend",
+                    sizing_mode="stretch_width",
+                )
             )
         sync_collision_spacing(panels)
         ui.center_plots.children = [selection_notice, *panels]

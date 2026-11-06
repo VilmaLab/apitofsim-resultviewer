@@ -166,6 +166,7 @@ def test_adapter_resolves_results_and_preserves_ids(
     assert pathways.to_dict(as_series=False) == {
         "pathway_id": [7],
         "daughter": ["4A_5SA_negative"],
+        "charged_products": [[{"id": 2, "name": "4A_5SA_negative"}]],
         "pathway": ["5A_5SA_negative → 4A_5SA_negative + 1A_neutral"],
     }
     assert events["z_clamped"].sum() == (2 if negative_z else 0)

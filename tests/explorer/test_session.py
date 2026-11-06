@@ -130,7 +130,7 @@ def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
     assert details.text.index('data-event="1"') < details.text.index('data-event="2"')
     assert "<th>#</th><th>Type</th>" in details.text
     bridge = doc.roots[0].children[1]
-    bridge.text = "choose:101:3"
+    bridge.text = '["choose", "3"]'
     assert "Realization #2</h3>" in details.text
     assert 'id="event-3" style="background:#fde68a' in details.text
 
@@ -139,7 +139,7 @@ def test_overlapping_event_choice_and_stale_candidates(monkeypatch):
     next(
         w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
     ).value = "beeswarm"
-    bridge.text = "choose:100:1"
+    bridge.text = '["choose", "1"]'
     assert "Choose an event" not in details.text
     assert "Click an event" in details.text
 
@@ -417,9 +417,9 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
         if hasattr(r, "glyph")
     )
     bridge = doc.roots[0].children[1]
-    bridge.text = "1"
+    bridge.text = '["inspect", "1"]'
     assert 'id="event-1" style="background:#fde68a' in details.text
-    bridge.text = "999"
+    bridge.text = '["inspect", "999"]'
     assert 'id="event-1" style="background:#fde68a' in details.text
     checkbox("Collision").active = []
     assert text_contains("Selected hidden event #1")
@@ -568,7 +568,7 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
                 3: 5000,
                 4: 1000,
             }
-    bridge.text = "clear"
+    bridge.text = '["clear", null]'
     assert text_contains("Click an event")
     assert len(loads) == 1
     assert doc.to_json() is not None
@@ -1118,13 +1118,13 @@ def test_inspection_and_frame_changes_preserve_plots(monkeypatch, layout):
     )
     source.selected.indices = [source.data["id"].index(1)]
     bridge = doc.roots[0].children[1]
-    bridge.text = "2"
+    bridge.text = '["inspect", "2"]'
     clicked = next(r for r in p.renderers if getattr(r.glyph, "size", None) == 20)
     assert clicked.data_source.data["position"]
-    bridge.text = "clear"
+    bridge.text = '["clear", null]'
     assert not clicked.data_source.data["position"]
     source.selected.indices = [source.data["id"].index(1)]
-    bridge.text = "2"
+    bridge.text = '["inspect", "2"]'
     assert clicked.data_source.data["position"]
     next(
         w

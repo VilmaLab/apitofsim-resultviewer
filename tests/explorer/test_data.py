@@ -3,7 +3,11 @@
 import duckdb
 import polars as pl
 import pytest
-from apitofsim.workflow.db import RealizationDatabase
+from apitofsim.plotting.events import NoRecordedEventsError
+from apitofsim.recording import events_filename
+from apitofsim.workflow.db import ExperimentDatabase
+
+from tests.arrow_fixtures import event as recorded_event, publish_events
 
 from apitofresview.plotting.explorer import data
 
@@ -61,17 +65,9 @@ def test_adapter_resolves_results_and_preserves_ids(
     monkeypatch, negative_z, attached, tmp_path
 ):
     database_path = str(tmp_path / "explorer.duckdb")
-    db = RealizationDatabase(database_path)
+    db = ExperimentDatabase(database_path)
     db.create_tables()
     conn = db.db
-    for column, value in {
-        "velocity": "{'x':1,'y':2,'z':3}",
-        "omega": "{'x':4,'y':5,'z':6}",
-        "rot_energy": "1e-21",
-        "vibrational_energy": "2e-20",
-        "particle_index": "0",
-    }.items():
-        conn.execute(f"alter table event_info alter {column} set default {value}")
     conn.execute("""
         insert into cluster (id, common_name) values
         (1,'5A_5SA_negative'),(2,'4A_5SA_negative'),(3,'1A_neutral');
@@ -80,46 +76,58 @@ def test_adapter_resolves_results_and_preserves_ids(
         insert into experiment_run (id, experiment_config_id, simulation_mode)
         values (1,1,'SINGLE_CLUSTER'),(2,1,'SINGLE_CLUSTER');
         insert into multi_pathway_experiment_result (id,experiment_run_id,cluster_id)
-        values (10,1,1),(11,2,1);
+        values (10,1,1),(11,2,1),(9,1,1),(13,1,2);
         insert into single_pathway_experiment_result (id,experiment_run_id,pathway_id)
         values (12,1,7);
-        insert into realization values (100,10),(101,11),(102,12);
     """)
     conn.execute("update cluster set charge = case when id = 3 then 0 else -1 end")
-    conn.execute(
-        "insert into event_info (id,realization_id,event_type,postime) values (501,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
+    db.begin_execution(1, 1, None, [7], result_id=10, recorded=True)
+    db.begin_execution(2, 1, None, [], result_id=11)
+    db.begin_execution(1, 1, 7, [7], result_id=12, recorded=True)
+    db.begin_execution(1, 1, None, [], result_id=9, recorded=True)
+    db.begin_execution(1, 2, None, [], result_id=13, recorded=True)
+    publish_events(
+        db,
+        [
+            recorded_event(
+                10,
+                0,
+                10,
+                "fragmentation",
+                0.5,
+                -2e-6 if negative_z else 2,
+                transition_index=0,
+            ),
+            recorded_event(
+                10,
+                0,
+                2,
+                "collision",
+                0.5,
+                -1e-6 if negative_z else 0,
+                vx=1,
+                vy=2,
+                vz=3,
+                rot_energy=1e-21,
+                vibrational_energy=2e-20,
+                theta=0.75,
+                u_norm=-114.5,
+            ),
+            recorded_event(10, 0, 0, "init", 0, 0),
+            recorded_event(12, 0, 0, "escape", 2, 5),
+            recorded_event(9, 11, 0, "init", 0, 0),
+            recorded_event(9, 2, 0, "init", 0, 0),
+            recorded_event(13, 0, 0, "init", 0, 0),
+        ],
+        statuses={9: "failed", 13: "cancelled"},
     )
-    conn.execute(
-        "insert into event_info (id,realization_id,event_type,postime) values (502,100,'fragmentation', {'x':1,'y':2,'z':2,'t':1.5})"
-    )
-    conn.execute(
-        "insert into event_info (id,realization_id,event_type,postime) values (503,102,'escape', {'x':1,'y':2,'z':5,'t':2})"
-    )
-    conn.execute("insert into collision_event values (501,0.75,-114.5,false)")
-    conn.execute("insert into fragmentation_event (id,pathway_id) values (502,7)")
-    conn.execute(
-        "insert into event_info (id,realization_id,event_type,postime) values (500,100,'init', {'x':0,'y':0,'z':0,'t':0})"
-    )
-    if negative_z:
-        conn.execute(
-            "update event_info set postime = struct_update(postime, z := -0.000001) where id = 501"
-        )
-        conn.execute(
-            "update event_info set postime = struct_update(postime, z := -0.000002) where id = 502"
-        )
     monkeypatch.setattr(data, "get_geometry", lambda *args: None)
     monkeypatch.setattr(
         data, "lengths_to_cumulative_lengths", lambda *args: (0, 1, 2, 3, 4, 5)
     )
-    snapshots = {
-        table: conn.execute(f"select * from {table}").fetchall()
-        for table in (
-            "realization",
-            "collision_event",
-            "fragmentation_event",
-            "event_info",
-        )
-    }
+    snapshot = conn.sql(
+        "select * from event_details order by result_id, realization_index, event_index"
+    ).fetchall()
     db.close()
     if attached:
         cluster_path = str(tmp_path / "clusters.duckdb")
@@ -143,26 +151,37 @@ def test_adapter_resolves_results_and_preserves_ids(
         ).fetchall():
             source = "clusters" if table in ("cluster", "pathway") else "results"
             conn.execute(f"create view {table} as select * from {source}.{table}")
-        db = RealizationDatabase((conn, None))
+        db = ExperimentDatabase(
+            (conn, None), readonly=True, events_filename=events_filename(database_path)
+        )
         db.refresh_views()
     else:
-        db = RealizationDatabase(database_path, readonly=True)
+        db = ExperimentDatabase(database_path, readonly=True)
     conn = db.db
     realizations, events, pathways, regions = data.load_data(db, 1, 1)
-    assert realizations["id"].to_list() == [100, 102]
+    assert realizations["id"].to_list() == ["9:2", "9:11", "10:0", "12:0"]
     assert realizations["fate"].to_list() == [
+        "Incomplete",
+        "Incomplete",
         "5A_5SA_negative → 4A_5SA_negative + 1A_neutral",
         "5A_5SA_negative → 5A_5SA_negative",
     ]
-    assert events["id"].to_list() == [500, 501, 502, 503]
-    collision = events.filter(pl.col("id") == 501).row(0, named=True)
+    assert events["id"].to_list() == [
+        "9:2:0",
+        "9:11:0",
+        "10:0:0",
+        "10:0:2",
+        "10:0:10",
+        "12:0:0",
+    ]
+    collision = events.filter(pl.col("id") == "10:0:2").row(0, named=True)
     assert collision["theta"] == 0.75 and collision["u_norm"] == -114.5
     assert collision["accepted"] is False
     assert collision["velocity"] == {"x": 1, "y": 2, "z": 3}
     assert collision["rot_energy"] == 1e-21
     assert collision["vibrational_energy"] == 2e-20
     assert collision["particle_index"] == 0
-    assert events.filter(pl.col("id") == 502)["pathway_id"][0] == 7
+    assert events.filter(pl.col("id") == "10:0:10")["pathway_id"][0] == 7
     assert pathways.to_dict(as_series=False) == {
         "pathway_id": [7],
         "daughter": ["4A_5SA_negative"],
@@ -172,34 +191,17 @@ def test_adapter_resolves_results_and_preserves_ids(
     assert events["z_clamped"].sum() == (2 if negative_z else 0)
     if negative_z:
         assert events.filter(pl.col("z_clamped"))["z"].to_list() == [0, 0]
-        assert events.filter(pl.col("id") == 502)["region"][0] == 0
-    for table, snapshot in snapshots.items():
-        assert conn.execute(f"select * from {table}").fetchall() == snapshot
-    db.close()
-    db = RealizationDatabase(database_path)
-    conn = db.db
-    conn.execute(
-        "insert into multi_pathway_experiment_result (id,experiment_run_id,cluster_id) values (13,1,2)"
+        assert events.filter(pl.col("id") == "10:0:10")["region"][0] == 0
+    assert (
+        conn.sql(
+            "select * from event_details order by result_id, realization_index, event_index"
+        ).fetchall()
+        == snapshot
     )
-    conn.execute("insert into realization values (103,13),(104,10),(105,12)")
-    conn.execute(
-        "insert into event_info (id,realization_id,event_type,postime) "
-        "values (507,105,'fragmentation', {'x':0,'y':0,'z':2,'t':1})"
-    )
-    conn.execute(
-        "insert into event_info (id,realization_id,event_type,postime) values (504,101,'collision', {'x':1,'y':2,'z':0,'t':1}), (505,103,'collision', {'x':1,'y':2,'z':0,'t':1}), (506,100,'collision', {'x':1,'y':2,'z':0,'t':0.5})"
-    )
-    db.close()
-    db = RealizationDatabase(database_path, readonly=True)
-    conn = db.db
-    realizations, events, _, _ = data.load_data(db, 1, 1)
-    assert realizations["id"].to_list() == [100, 102, 104, 105]
-    assert realizations["fate"].to_list()[-2:] == ["Incomplete", "Incomplete"]
-    assert events["id"].to_list() == [500, 501, 506, 502, 503, 507]
-    assert events.filter(pl.col("id") == 506)["theta"][0] is None
-    assert events.filter(pl.col("id") == 507)["pathway_id"][0] is None
-    empty = data.load_data(db, 99, 1)
-    assert empty[0].is_empty() and empty[1].is_empty()
+    for run, cluster in [(2, 1), (1, 3), (99, 1)]:
+        with pytest.raises(NoRecordedEventsError):
+            data.load_data(db, run, cluster)
+    assert data.load_data(db, 1, 2)[0]["id"].to_list() == ["13:0"]
     db.close()
 
 
@@ -277,7 +279,7 @@ def test_pathway_cohorts_keep_simulated_pathway_for_escaped_and_empty_results(
     monkeypatch, tmp_path
 ):
     path = tmp_path / "independent.duckdb"
-    db = RealizationDatabase(path)
+    db = ExperimentDatabase(path)
     db.create_tables()
     db.db.execute("""
         insert into cluster (id,common_name) values (1,'Parent'),(2,'A'),(3,'B');
@@ -287,28 +289,23 @@ def test_pathway_cohorts_keep_simulated_pathway_for_escaped_and_empty_results(
         values (1,1,'PATHWAY_AT_A_TIME');
         insert into single_pathway_experiment_result (id,experiment_run_id,pathway_id)
         values (10,1,7),(11,1,8),(12,1,9);
-        insert into realization values (100,10),(200,11);
     """)
-    for column, value in {
-        "velocity": "{'x':1,'y':2,'z':3}",
-        "omega": "{'x':4,'y':5,'z':6}",
-        "rot_energy": "1e-21",
-        "vibrational_energy": "2e-20",
-        "particle_index": "0",
-    }.items():
-        db.db.execute(f"alter table event_info alter {column} set default {value}")
-    db.db.execute("""
-        insert into event_info (id,realization_id,event_type,postime) values
-        (1,100,'fragmentation',{'x':0,'y':0,'z':2,'t':1}),
-        (2,200,'escape',{'x':0,'y':0,'z':5,'t':2});
-        insert into fragmentation_event (id,pathway_id) values (1,7);
-    """)
+    db.begin_execution(1, 1, 7, [7], result_id=10, recorded=True)
+    db.begin_execution(1, 1, 8, [8], result_id=11, recorded=True)
+    db.begin_execution(1, 1, 9, [9], result_id=12)
+    publish_events(
+        db,
+        [
+            recorded_event(10, 0, 0, "fragmentation", 1, 2, transition_index=0),
+            recorded_event(11, 0, 0, "escape", 2, 5),
+        ],
+    )
     db.close()
     monkeypatch.setattr(data, "get_geometry", lambda *args: None)
     monkeypatch.setattr(
         data, "lengths_to_cumulative_lengths", lambda *args: (0, 1, 2, 3, 4, 5)
     )
-    db = RealizationDatabase(path, readonly=True)
+    db = ExperimentDatabase(path, readonly=True)
     try:
         members, events, pathways, _ = data.load_data(db, 1, 1)
         assert members["simulated_pathway_id"].to_list() == [7, 8]

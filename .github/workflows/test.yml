@@ -21,6 +21,14 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
+      # The draft builds apitofsim from trunk. Remove this step with the wheel pin.
+      - name: Install oneTBB for the apitofsim source build
+        run: |
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/VilmaLab/apitofsim/2d8a30df93c94787162e5f84495307a7b863af4b/ci/install_tbb.sh \
+            -o "$RUNNER_TEMP/install_tbb.sh"
+          sudo bash "$RUNNER_TEMP/install_tbb.sh"
+
       - name: Install dependencies
         run: uv sync --locked --group dev
 

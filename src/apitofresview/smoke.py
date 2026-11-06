@@ -158,7 +158,7 @@ def _check_beeswarm(failures):
 
         events = pl.DataFrame(
             {
-                "id": range(9),
+                "event_number": range(9),
                 "type": ["init"] * 3 + ["collision"] * 3 + ["escape"] * 3,
                 "position": [-0.325] * 3 + [0.5] * 3 + [1.325] * 3,
             }

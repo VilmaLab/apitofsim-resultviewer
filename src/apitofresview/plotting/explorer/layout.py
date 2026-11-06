@@ -115,7 +115,7 @@ def layout_events(events, mode):
         return events.with_columns((pl.col("radial") * 1000).alias("plot_y"))
     if mode == "strip":
         return events.with_columns(
-            (0.25 * (pl.col("id") * 12.9898).sin()).alias("plot_y")
+            (0.25 * (pl.col("event_number") * 12.9898).sin()).alias("plot_y")
         )
     return events.with_columns(pl.lit(0.0).alias("plot_y"))
 
@@ -134,7 +134,7 @@ def spread_terminal_x(
     terminals = list(
         events.with_row_index("index")
         .filter(pl.col("type").is_in(["init", "escape"]))
-        .select("index", "type", "realization_number", "id")
+        .select("index", "type", "realization_number", "event_number")
         .iter_rows()
     )
     for kind, slot in (
@@ -147,7 +147,7 @@ def spread_terminal_x(
         capacity = max(1, floor((hi - lo) * scale / diameter) + 1)
         count = events.filter(pl.col("type") == kind).height
         period = min(capacity, max(count, 1), max(2, ceil(diameter / row_spacing)))
-        for index, event_type, realization_number, event_id in terminals:
+        for index, event_type, realization_number, event_number in terminals:
             if event_type != kind:
                 continue
             fraction = (
@@ -155,7 +155,7 @@ def spread_terminal_x(
                 if mode == "realization" and period > 1
                 else 0.5
                 if mode == "realization"
-                else (sin(event_id * 78.233) * 43758.5453) % 1
+                else (sin(event_number * 78.233) * 43758.5453) % 1
             )
             positions[index] = lo + fraction * (hi - lo)
     return events.with_columns(pl.Series("position", positions, dtype=pl.Float64))
@@ -175,18 +175,16 @@ class PreparedBeeswarm:
 
 def prepare_beeswarm(events, terminal_regions=None):
     positions = events["position"].to_numpy().astype(np.float64, copy=False)
-    ids = events["id"].to_numpy()
-    order = np.lexsort((ids, positions))
+    numbers = events["event_number"].to_numpy()
+    order = np.lexsort((numbers, positions))
     empty = np.empty(0, dtype=np.int64)
     if terminal_regions is None:
         return PreparedBeeswarm(positions, order, order, empty, empty, None)
     initial = (events["type"] == "init").to_numpy()
     escaped = (events["type"] == "escape").to_numpy()
     ordinary = order[~(initial | escaped)[order]]
-    terminals = []
-    for mask in (initial, escaped):
-        indices = np.flatnonzero(mask)
-        terminals.append(indices[np.argsort(ids[indices], kind="stable")])
+    by_number = np.argsort(numbers)
+    terminals = (by_number[initial[by_number]], by_number[escaped[by_number]])
     slots = np.array([initial_slot(terminal_regions), escape_slot(terminal_regions)])
     return PreparedBeeswarm(positions, order, ordinary, *terminals, slots)
 

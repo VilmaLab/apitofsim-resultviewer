@@ -82,7 +82,7 @@ def _cells(
         kind = f'<span title="{pathway}">→ {daughter}</span>'
     if clickable:
         kind = (
-            f'<button type="button" aria-label="Inspect event #{event["id"]}">'
+            f'<button type="button" aria-label="Inspect event #{escape(str(event["id"]))}">'
             f"{kind}</button>"
         )
     coordinates = (
@@ -120,7 +120,7 @@ def _cells(
         text = format_value(value)
         if after and clickable and index == 0:
             text = (
-                f'<button type="button" aria-label="Inspect event #{event["id"]}">'
+                f'<button type="button" aria-label="Inspect event #{escape(str(event["id"]))}">'
                 f"{text}</button>"
             )
         cells.append(f"<td>{text}</td>")
@@ -166,7 +166,7 @@ def render_details(
         after = pair(event) is not None
         row_class = "explorer-event explorer-after" if after else "explorer-event"
         rows.append(
-            f'<tr class="{row_class}" data-event="{event["id"]}" id="event-{event["id"]}" '
+            f'<tr class="{row_class}" data-event="{escape(str(event["id"]))}" id="event-{escape(str(event["id"]))}" '
             f'style="background:{"#fde68a" if event["id"] == selected_event else "white"}">'
             + _cells(
                 event,
@@ -219,9 +219,9 @@ def render_choices(events, radial=True, summarise_energy=True):
     rows = []
     for event in events.iter_rows(named=True):
         rows.append(
-            f'<tr class="explorer-choice" data-realization="{event["realization_id"]}" '
-            f'data-event="{event["id"]}">'
-            f'<td><button type="button" aria-label="Inspect event #{event["id"]} '
+            f'<tr class="explorer-choice" data-realization="{escape(str(event["realization_id"]))}" '
+            f'data-event="{escape(str(event["id"]))}">'
+            f'<td><button type="button" aria-label="Inspect event #{escape(str(event["id"]))} '
             f'in realization #{event["realization_number"]}">{event["realization_number"]}</button></td>'
             + _cells(event, radial, motion_columns, detail_columns)
             + "</tr>"

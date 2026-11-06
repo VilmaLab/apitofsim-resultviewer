@@ -94,7 +94,7 @@ def population_areas(
     n = members.height
     if not n:
         return {}
-    # Events arrive sorted by realization, raw time, and event ID.
+    # Events arrive in numeric result, realization, and event index order.
     terminals = dict(members.select("id", "terminal_event_id").iter_rows())
     changes = defaultdict(Counter)
     for rid, rows in groupby(

@@ -221,11 +221,11 @@ def test_collision_velocity_scales_and_coordinates(rate_doc, monkeypatch):
     show_values.active = [0]
     assert fragmentation.visible
     assert doc.select_one({"name": "collision_event_readout"}).visible
-    doc.roots[0].children[1].text = "2"
+    doc.roots[0].children[1].text = '["inspect", "2"]'
     assert not fragmentation.visible  # Above the cached rate curve.
     assert calls[-1][1] == [6, 7, 8]
     bounds = (chart.y_range.start, chart.y_range.end)
-    doc.roots[0].children[1].text = "2"
+    doc.roots[0].children[1].text = '["inspect", "2"]'
     assert (chart.y_range.start, chart.y_range.end) == bounds
     assert (
         doc.select_one({"name": "collision_velocity"}).text
@@ -240,7 +240,7 @@ def test_collision_velocity_scales_and_coordinates(rate_doc, monkeypatch):
     source = doc.select_one({"name": "collision_rates_source"})
     assert len(source.data["rate"]) == 0
     assert any("no velocity" in d.text for d in doc.select({"type": Div}))
-    doc.roots[0].children[1].text = "clear"
+    doc.roots[0].children[1].text = '["clear", null]'
     assert calls[-1][1] == [0, 0, 0]
     mode = next(w for w in doc.select({"type": Select}) if w.title == "X coordinate")
     mode.value = "physical"
@@ -278,7 +278,7 @@ def test_collision_exact_readout_and_facet_spacing(monkeypatch):
     main = doc.select_one({"name": "events"})
     assert chart.margin == main.margin == 0
     select(doc, 1)
-    doc.roots[0].children[1].text = "2"
+    doc.roots[0].children[1].text = '["inspect", "2"]'
     readout = doc.select_one({"name": "collision_event_readout"})
     assert readout.y == pytest.approx(position**2 + 1)
     assert readout.text == f"{position**2 + 1:.4g} s⁻¹"
@@ -287,7 +287,7 @@ def test_collision_exact_readout_and_facet_spacing(monkeypatch):
     check(doc, "Facet pathways").active = [0]
     assert doc.select_one({"name": "collision_rates"}).margin is None
     assert all(p.margin is None for p in doc.select({"name": "events"}))
-    doc.roots[0].children[1].text = "clear"
+    doc.roots[0].children[1].text = '["clear", null]'
     assert not doc.select_one({"name": "collision_event_marker"}).visible
     assert not doc.select_one({"name": "collision_event_readout"}).visible
 
@@ -476,7 +476,7 @@ def test_collision_before_after_selection_keeps_spatial_highlight(monkeypatch):
         doc.select_one({"name": "pathway_rates"}).select_one({"type": Span}).location
     )
     assert before_energy == pytest.approx(2e-20, abs=1e-32)
-    doc.roots[0].children[1].text = "2"
+    doc.roots[0].children[1].text = '["inspect", "2"]'
     assert highlight.data == before_highlight
     assert (
         doc.select_one({"name": "collision_event_marker"}).location == before_position
@@ -486,7 +486,7 @@ def test_collision_before_after_selection_keeps_spatial_highlight(monkeypatch):
     assert doc.select_one({"name": "pathway_rates"}).select_one(
         {"type": Span}
     ).location == pytest.approx(3e-20, abs=1e-32)
-    doc.roots[0].children[1].text = "1"
+    doc.roots[0].children[1].text = '["inspect", "1"]'
     assert highlight.data == before_highlight
     assert (
         doc.select_one({"name": "pathway_rates"}).select_one({"type": Span}).location

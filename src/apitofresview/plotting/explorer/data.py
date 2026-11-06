@@ -79,6 +79,19 @@ def load_data(db, experiment: int, cluster: int):
     )
     pathways = pathway_query.pl().select(
         "pathway_id",
+        pl.concat_list(
+            [
+                pl.when(pl.col(f"product{i}_charge") != 0).then(
+                    pl.struct(
+                        pl.col(f"product{i}_id").alias("id"),
+                        pl.col(f"product{i}_common_name").alias("name"),
+                    )
+                )
+                for i in (1, 2)
+            ]
+        )
+        .list.drop_nulls()
+        .alias("charged_products"),
         pl.concat_str(
             pl.when(pl.col("product1_charge") != 0).then(
                 pl.col("product1_common_name")
@@ -121,11 +134,11 @@ def load_data(db, experiment: int, cluster: int):
         )
     )
     events = preprocess_events(events, regions)
-    cluster_name = (
+    cluster_name, cluster_charge = (
         db.clusters_query()
         .filter(duckdb.ColumnExpression("id") == duckdb.ConstantExpression(cluster))
-        .select("common_name")
-        .fetchone()[0]
+        .select("common_name, charge")
+        .fetchone()
     )
     if tree_mode:
         names = dict(db.db.execute("select id, common_name from cluster").fetchall())
@@ -156,7 +169,10 @@ def load_data(db, experiment: int, cluster: int):
             .sort("id")
         )
     return (
-        classified,
+        classified.with_columns(
+            pl.lit(cluster_name).alias("initial_species"),
+            pl.lit(cluster_charge not in (0, None)).alias("initial_charged"),
+        ),
         events,
         pathways,
         regions,

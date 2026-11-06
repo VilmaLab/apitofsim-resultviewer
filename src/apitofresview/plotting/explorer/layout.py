@@ -61,7 +61,7 @@ def initial_slot(regions):
     return start - width, start
 
 
-def position_events(events, regions, mode, own_zones=True):
+def position_events(events, regions, mode, own_zones=True, *, terminal_slots=True):
     if mode in ("time", "physical"):
         position = pl.col("t") if mode == "time" else pl.col("z") * 1000
     else:
@@ -85,21 +85,26 @@ def position_events(events, regions, mode, own_zones=True):
                 .then(mapped)
                 .otherwise(position)
             )
-        position = (
-            pl.when(pl.col("type") == "init")
-            .then(
-                pl.lit(
-                    sum(initial_slot(regions)) / 2 if own_zones else regions["left"][0]
+        if terminal_slots:
+            position = (
+                pl.when(pl.col("type") == "init")
+                .then(
+                    pl.lit(
+                        sum(initial_slot(regions)) / 2
+                        if own_zones
+                        else regions["left"][0]
+                    )
                 )
-            )
-            .when(pl.col("type") == "escape")
-            .then(
-                pl.lit(
-                    sum(escape_slot(regions)) / 2 if own_zones else regions["right"][-1]
+                .when(pl.col("type") == "escape")
+                .then(
+                    pl.lit(
+                        sum(escape_slot(regions)) / 2
+                        if own_zones
+                        else regions["right"][-1]
+                    )
                 )
+                .otherwise(position)
             )
-            .otherwise(position)
-        )
     return events.with_columns(position.alias("position"))
 
 

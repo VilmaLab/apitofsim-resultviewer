@@ -1,8 +1,9 @@
-"""Population fractions account for the whole facet through terminal events."""
+"""Charged species persist across escape and follow axial history order."""
 
 import polars as pl
 
 from apitofresview.plotting.explorer import population
+from apitofresview.plotting.explorer.data import events_for
 from apitofresview.plotting.explorer.layout import coordinate_regions, position_events
 
 from .helpers import cohort, event
@@ -20,18 +21,26 @@ def test_axial_population_preserves_history_order_and_handles_missing_histories(
         event(7, "collision", 3, 3, 4),
     )
     events = position_events(
-        events.with_columns(pl.lit("A").alias("daughter")),
+        events,
         coordinate_regions(regions, "physical"),
         "physical",
     )
-    areas = population.population_areas(members, events, 0, 5200)
-    product = areas["product", "A"]
+    labels = {1: "Parent", 2: "A", 3: "B"}
+    products = {7: (2, 3)}
+    areas = population.population_areas(members, events, 0, 5200, 1, labels, products)
+    product = areas[2]
     assert product.filter(pl.col("fraction") > 0)["position"][0] == 3000
     assert product["fraction"][-1] == 0.25
-    assert areas["escaped", None]["fraction"][-1] == 0.25
-    assert areas[population.UNKNOWN]["fraction"][-1] == 0.5
-    assert areas[population.UNKNOWN]["top"].to_list() == [1.0] * product.height
+    assert areas[3]["fraction"][-1] == 0.25
+    assert areas[1]["fraction"][-1] == 0.25
+    assert 5000 not in areas[1]["position"].to_list()  # Escape does not change species.
+    single = members.head(1)
+    split = population.population_areas(
+        single, events_for(events, single), 0, 5200, 1, labels, products
+    )
+    assert split[3]["top"][-1] == 2  # Each charged product contributes an ion.
 
-    no_events = population.population_areas(members, events.head(0), 0, 5200)
-    assert set(no_events) == {population.UNKNOWN}
-    assert no_events[population.UNKNOWN]["fraction"].to_list() == [1.0, 1.0]
+    no_events = population.population_areas(
+        members, events.head(0), 0, 5200, 1, labels, products
+    )
+    assert no_events == {}

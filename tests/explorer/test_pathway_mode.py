@@ -1,5 +1,6 @@
 """Independent pathway cohorts retain their own outcomes and denominators."""
 
+import polars as pl
 import pytest
 from bokeh.document import Document
 from bokeh.models import CheckboxGroup, Div, HoverTool, RangeSlider, Select
@@ -27,7 +28,16 @@ def points(chart):
 
 @pytest.fixture
 def pathway_doc(monkeypatch):
-    monkeypatch.setattr(session, "load_data", lambda *args: pathway_cohort())
+    members, events, pathways, regions = pathway_cohort()
+    pathways = pathways.with_columns(
+        pl.Series(
+            "charged_products",
+            [[{"id": i, "name": name}] for i, name in enumerate("ACEG", start=2)],
+        )
+    )
+    monkeypatch.setattr(
+        session, "load_data", lambda *args: (members, events, pathways, regions)
+    )
     doc = Document()
     build_document(None, doc, 2, 1)
     return doc
@@ -158,8 +168,8 @@ def test_species_populations_normalize_each_simulated_pathway(pathway_doc):
         }
 
     assert final_fractions(first) == {
-        "Escaped · Initial cluster": 0.25,
-        "Unknown history": 0.75,
+        "Initial cluster": 0.25,
+        "A": 0.25,
     }
-    assert final_fractions(second) == {"Escaped · Initial cluster": 1}
+    assert final_fractions(second) == {"Initial cluster": 1}
     assert first.x_range is second.x_range

@@ -141,6 +141,23 @@ full pathway on hover. Before/after rows share time and position, while energy
 and motion remain independently inspectable. Rate panels follow the selected
 state's species. Interrupted histories remain incomplete.
 
+Enable **Species populations** under **Views** to see the fraction of selected
+realizations in each state. Each facet has its own denominator, including
+incomplete realizations. The initial cluster has its own band. Continuing
+splits switch to the persisted simulated daughter, and routes reaching the same
+daughter contribute to the same band. A terminal split moves the realization
+into a band for its charged product or product set. An escape moves it into a
+band for the escaping species. Both terminal states persist through the end of
+the plot. A history with no usable events, or one that ends or loses continuity
+before a validated terminal outcome, contributes to **Unknown history** after
+its last reliable position. Hover over a band to see its state and fraction.
+
+Population plots follow the selected X coordinate. Time uses recorded event
+times. For axial distance and schematic coordinates, a state change uses the
+furthest recorded axial position reached so far, so backtracking cannot
+reverse the order of changes. The population view uses complete selected
+histories and is independent of event checkboxes and cumulative subtree scope.
+
 ## Developing
 
 ```bash

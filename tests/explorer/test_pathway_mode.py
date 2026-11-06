@@ -143,3 +143,23 @@ def test_recorded_pathways_without_histories_remain_visible(monkeypatch):
     assert next(iter(doc.select({"type": RangeSlider}))).disabled
     assert len(charts(doc, "events")) == 3
     assert all("0 shown / 0 in range" in p.title.text for p in charts(doc, "events"))
+
+
+def test_species_populations_normalize_each_simulated_pathway(pathway_doc):
+    doc = pathway_doc
+    checkbox(doc, "Species populations").active = [0]
+    first, second = charts(doc, "population")
+
+    def final_fractions(plot):
+        return {
+            r.name: r.data_source.data["fraction"][-1]
+            for r in plot.renderers
+            if r.data_source.data["fraction"][-1]
+        }
+
+    assert final_fractions(first) == {
+        "Escaped · Initial cluster": 0.25,
+        "Unknown history": 0.75,
+    }
+    assert final_fractions(second) == {"Escaped · Initial cluster": 1}
+    assert first.x_range is second.x_range

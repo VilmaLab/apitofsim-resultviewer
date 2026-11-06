@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 from apitofsim.workflow.db import RealizationDatabase
 from bokeh.document import Document
-from bokeh.models import CheckboxGroup
+from bokeh.models import CheckboxGroup, Select
 
 from apitofresview.plotting.explorer import aggregation, data, session
 from apitofresview.plotting.explorer.details import render_details
@@ -503,3 +503,85 @@ def test_large_unobserved_tree_is_built_only_on_request(tree_database, monkeypat
     check(doc, "Show empty pathways").active = []
     assert 'data-scope="10:4099"' not in view.text
     assert fate.labels[fate.active[0]] == "10:escape:3"
+
+
+def test_species_population_tracks_serial_history_and_ignores_event_filters(
+    tree_database,
+):
+    doc = Document()
+    session.build_document(tree_database, doc, 1, 1)
+    mode = next(
+        widget
+        for widget in doc.select({"type": Select})
+        if widget.title == "X coordinate"
+    )
+    mode.value = "time"
+    check(doc, "Species populations").active = [0]
+    check(doc, "Realizations").active = []
+    assert not check(doc, "Cumulative").active
+
+    def fractions_at(t):
+        plot = doc.select_one({"name": "population"})
+        fractions = {}
+        for renderer in plot.renderers:
+            frame = renderer.data_source.data
+            index = max(i for i, x in enumerate(frame["position"]) if x <= t)
+            fractions[renderer.name] = frame["fraction"][index]
+        assert sum(fractions.values()) == pytest.approx(1)
+        return {key: value for key, value in fractions.items() if value}
+
+    assert fractions_at(0) == {"Initial cluster (unfragmented)": 1}
+    assert fractions_at(1) == {
+        "Initial cluster (unfragmented)": 0.2,
+        "Simulated descendant · A": 0.6,
+        "Unknown history": 0.2,
+    }
+    assert fractions_at(3) == {
+        "Initial cluster (unfragmented)": 0.2,
+        "Simulated descendant · A": 0.2,
+        "Simulated descendant · Leaf": 0.2,
+        "Terminal product · Leaf": 0.2,
+        "Unknown history": 0.2,
+    }
+    assert fractions_at(5) == {
+        "Escaped · Initial cluster": 0.2,
+        "Escaped · A": 0.2,
+        "Escaped · Leaf": 0.2,
+        "Terminal product · Leaf": 0.2,
+        "Unknown history": 0.2,
+    }
+    doc.select_one({"name": "event:fragmentation"}).active = []
+    assert fractions_at(1)["Simulated descendant · A"] == 0.6
+
+    check(doc, "Facet histories").active = [0]
+    assert len(list(doc.select({"name": "population"}))) == 5
+
+
+def test_browser_population_band_hover(tree_database, monkeypatch, page):
+    from playwright.sync_api import expect
+
+    from .test_browser import serve_explorer
+
+    frames = data.load_data(tree_database, 1, 1)
+    with serve_explorer(monkeypatch, frames, tree_database) as url:
+        page.set_viewport_size({"width": 1280, "height": 900})
+        page.goto(url)
+        page.get_by_label("X coordinate").select_option(label="Elapsed time (s)")
+        page.get_by_label("Species populations", exact=True).check()
+        page.get_by_label("Realizations", exact=True).uncheck()
+        point = page.wait_for_function("""() => {
+            const doc = Bokeh.documents[0];
+            const plots = doc.get_model_by_name('explorer_plots').children;
+            const plot = plots.find(p => p.name === 'population');
+            const view = plot && Bokeh.index.find_one(plot);
+            if (plots.some(p => p.name === 'events') || !plot?.inner_width ||
+                !plot.below.some(axis => axis.axis_label === 'Elapsed time (s)') ||
+                !view?.el?.isConnected)
+                return false;
+            const bounds = view.canvas_view.events_el.getBoundingClientRect();
+            return {x: bounds.left + view.frame.x_scale.compute(1.5),
+                    y: bounds.top + view.frame.y_scale.compute(0.5)};
+        }""").json_value()
+        page.mouse.move(point["x"], point["y"])
+        expect(page.get_by_text("Simulated descendant · A", exact=True)).to_be_visible()
+        expect(page.get_by_text("60.0%", exact=True)).to_be_visible()

@@ -32,12 +32,14 @@ from .layout import (
 )
 from .plot import (
     COLORS,
+    PATHWAY_COLORS,
     _bar_plot,
-    _cdf_plot,
     _event_plot,
+    _fraction_plot,
     _pathway_colors,
     _schematic_plot,
 )
+from .population import INITIAL, UNKNOWN, population_areas, population_labels
 from .rates import RateViews
 from .tree import ExecutionTree, install_tree_controls
 
@@ -185,6 +187,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         "setting_sizing": False,
     }
 
+    species_labels = population_labels(pathways, tree)
+    species_colors = {
+        key: PATHWAY_COLORS[i % len(PATHWAY_COLORS)]
+        for i, key in enumerate(species_labels)
+    }
+    species_colors.update({INITIAL: "#2563eb", UNKNOWN: "#94a3b8"})
     total = realizations.height
     ui = create_controls(
         doc,
@@ -262,6 +270,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     screen_height
                     - 175
                     - (175 if enabled(ui.show_cdf) else 0)
+                    - (175 if enabled(ui.show_population) else 0)
                     - (155 if enabled(ui.show_bars) and regional else 0),
                 ),
             )
@@ -724,6 +733,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             (
                 enabled(ui.show_events),
                 enabled(ui.show_cdf),
+                enabled(ui.show_population),
                 enabled(ui.show_bars) and regional,
             )
         ):
@@ -783,6 +793,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             ui.mode.value,
             dedicated_zones,
         )
+        population_events = (
+            position_events(chosen_events, mapped_regions, ui.mode.value, False)
+            if enabled(ui.show_population)
+            else None
+        )
         slot = escape_slot(mapped_regions)
         use_x_markers = enabled(ui.x_markers) and not ui.x_markers.disabled
         rows = (
@@ -840,6 +855,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 0,
                 max_position if max_position is not None else 1,
             )
+        if population_events is not None:
+            positions = population_events["position"]
+            population_max = positions.filter(positions.is_finite()).max()
+            if population_max is not None:
+                right_edge = max(right_edge, population_max)
         if right_edge <= left_edge:
             right_edge = left_edge + 1
         screen_width = int(ui.viewport_width.text.split(",")[0])
@@ -957,6 +977,22 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                         doc=doc,
                     )
                 )
+            if population_events is not None and not members.is_empty():
+                plots.append(
+                    _fraction_plot(
+                        population_areas(
+                            members,
+                            events_for(population_events, members),
+                            left_edge,
+                            shared_x.end,
+                            tree=tree,
+                        ),
+                        shared_x,
+                        species_colors,
+                        labels=species_labels,
+                        population=True,
+                    )
+                )
             if enabled(ui.show_cdf) or (enabled(ui.show_bars) and regional):
                 if enabled(ui.show_cdf):
                     # Cumulative escapes occur at the machine endpoint, not
@@ -995,7 +1031,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                             for name in names
                         }
                     plots.append(
-                        _cdf_plot(
+                        _fraction_plot(
                             cumulative_areas(
                                 cumulative_members,
                                 cumulative_events.filter(
@@ -1202,6 +1238,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         (ui.schematic, "active"),
         (ui.guides, "active"),
         (ui.show_events, "active"),
+        (ui.show_population, "active"),
         (ui.x_markers, "active"),
         (ui.show_bars, "active"),
         (ui.show_pager, "active"),
@@ -1235,7 +1272,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     def sync_collision_spacing(panels):
         tight = rates.collision_plot in panels and not enabled(ui.fate_facets)
         first = next(
-            (panel for panel in panels if panel.name in ("events", "cdf", "bars")), None
+            (
+                panel
+                for panel in panels
+                if panel.name in ("events", "population", "cdf", "bars")
+            ),
+            None,
         )
         if first is not None:
             first.margin = 0 if tight else None

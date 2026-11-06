@@ -68,6 +68,7 @@ class Controls:
     guides: CheckboxGroup
     show_events: CheckboxGroup
     x_markers: CheckboxGroup
+    show_population: CheckboxGroup
     show_cdf: CheckboxGroup
     show_bars: CheckboxGroup
     show_pager: CheckboxGroup
@@ -232,6 +233,7 @@ def create_controls(
     guides = checkbox("Guides", True)
     show_events = checkbox("Realizations", True)
     x_markers = checkbox("Use x markers", True)
+    show_population = checkbox("Species populations")
     show_cdf = checkbox("Cumulative")
     show_bars = checkbox("Bar chart")
     show_pager = checkbox("Realizations pager")
@@ -355,7 +357,12 @@ def create_controls(
                 group(
                     "Views",
                     column(
-                        collision_rates, show_events, show_cdf, show_bars, spacing=4
+                        collision_rates,
+                        show_events,
+                        show_population,
+                        show_cdf,
+                        show_bars,
+                        spacing=4,
                     ),
                 ),
                 show_pager,
@@ -575,6 +582,7 @@ def create_controls(
         guides=guides,
         show_events=show_events,
         x_markers=x_markers,
+        show_population=show_population,
         show_cdf=show_cdf,
         show_bars=show_bars,
         show_pager=show_pager,

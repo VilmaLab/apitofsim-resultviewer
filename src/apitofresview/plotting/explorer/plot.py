@@ -648,9 +648,9 @@ def _event_plot(
     return plot
 
 
-def _cdf_plot(areas, shared_x, fate_colors, *, labels=None):
+def _fraction_plot(areas, shared_x, colors, *, labels=None, population=False):
     plot = figure(
-        name="cdf",
+        name="population" if population else "cdf",
         title=None,
         height=175,
         min_height=150,
@@ -660,22 +660,26 @@ def _cdf_plot(areas, shared_x, fate_colors, *, labels=None):
         sizing_mode="stretch_width",
         tools="pan,wheel_zoom,reset,save",
     )
-    plot.yaxis.axis_label = "Fraction"
+    plot.yaxis.axis_label = "Population fraction" if population else "Fraction"
     for name, frame in areas.items():
         area = plot.varea(
             x="position",
             y1="bottom",
             y2="top",
             source=_source(frame),
-            fill_color=fate_colors[name],
+            fill_color=colors[name],
             fill_alpha=0.85,
+            name=labels[name] if population else None,
         )
         plot.add_tools(
             HoverTool(
                 renderers=[area],
-                mode="vline",
+                mode="mouse" if population else "vline",
                 tooltips=[
-                    ("Pathway", (labels or {}).get(name, name)),
+                    (
+                        "State" if population else "Pathway",
+                        (labels or {}).get(name, name),
+                    ),
                     ("Fraction", "@fraction{0.0%}"),
                 ],
             )

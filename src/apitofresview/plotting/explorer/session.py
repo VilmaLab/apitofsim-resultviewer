@@ -44,6 +44,9 @@ from .rates import RateViews
 from .tree import ExecutionTree, install_tree_controls
 
 
+MAX_COLLISIONS = 100_000
+
+
 def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport"):
     """Build one Bokeh session; every control uses the same cohort and X mapping."""
     if layout not in ("viewport", "page", "contained"):
@@ -89,6 +92,21 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         )
         if pathway_mode
         else realizations.with_row_index("realization_number", offset=1)
+    )
+    # Count once per session; subsequent budget checks only touch realizations.
+    realizations = realizations.join(
+        events.group_by("realization_id").agg(
+            (pl.col("type") == "collision").cast(pl.UInt64).sum().alias("collisions")
+        ),
+        left_on="id",
+        right_on="realization_id",
+        how="left",
+        maintain_order="left",
+    ).with_columns(pl.col("collisions").fill_null(0))
+    collision_realizations = int(
+        (
+            realizations["collisions"].sort(descending=True).cum_sum() <= MAX_COLLISIONS
+        ).sum()
     )
     fate_names = realizations["fate"].unique().sort().to_list()
     if tree:
@@ -544,9 +562,25 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             else pl.col("fate").is_in(["Incomplete", "Ambiguous"])
         ).height
         clamped = chosen_events["z_clamped"].sum()
+        collision_count = chosen["collisions"].sum()
+        collision_notice = ""
+        if collision_count > MAX_COLLISIONS:
+            collision_notice = (
+                f"Collisions hidden: {collision_count:,} exceeds the {MAX_COLLISIONS:,} "
+                "collision limit. "
+            )
+            collision_notice += (
+                "Use the realizations pager to view no more than "
+                f"{collision_realizations:,} realization{'s' if collision_realizations != 1 else ''} "
+                "in total to enable the collision checkbox."
+                if collision_realizations
+                else "Use the realizations pager to select histories with fewer collisions; "
+                "a single realization can exceed the limit."
+            )
         ui.quality.text = "<br>".join(
             message
             for message in (
+                collision_notice,
                 f"{clamped} events with negative z position have been clamped to 0"
                 if clamped
                 else "",
@@ -646,6 +680,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             else fate_colors[kind]
             for kind in kinds
         }
+        collisions_limited = chosen["collisions"].sum() > MAX_COLLISIONS
         for kind, widget in ui.event_options.items():
             if kind == "escape":
                 available = (
@@ -685,7 +720,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     or kind not in fate_names
                     or kind in selected_fates
                 ) and kind in available_events["event_pathway"]
-            widget.disabled = not available
+            widget.disabled = not available or (
+                kind in ("collision", "rejected_collision") and collisions_limited
+            )
         ui.event_options["escape"].labels = ["Escape"]
         children = []
         for kind in kinds:

@@ -45,18 +45,21 @@ def cumulative_total(doc):
 def ambiguous_frames(tree_database):
     members, events, pathways, regions = data.load_data(tree_database, 1, 1)
     terminal = events.filter(
-        (pl.col("realization_id") == 100) & (pl.col("type") == "escape")
+        (pl.col("realization_id") == "10:0") & (pl.col("type") == "escape")
     )
     added = terminal.with_columns(
-        pl.lit(1000).cast(events.schema["id"]).alias("id"),
-        pl.lit(105).cast(events.schema["realization_id"]).alias("realization_id"),
+        pl.lit("10:5:0").alias("id"),
+        pl.lit(5).cast(events.schema["realization_index"]).alias("realization_index"),
+        pl.lit(0).cast(events.schema["event_index"]).alias("event_index"),
+        pl.lit(events.height + 1)
+        .cast(events.schema["event_number"])
+        .alias("event_number"),
+        pl.lit("10:5").alias("realization_id"),
         pl.lit(4).cast(events.schema["particle_index"]).alias("particle_index"),
     )
-    member = members.filter(pl.col("id") == 100).with_columns(
-        pl.lit(105).cast(members.schema["id"]).alias("id"),
-        pl.lit(1000)
-        .cast(members.schema["terminal_event_id"])
-        .alias("terminal_event_id"),
+    member = members.filter(pl.col("id") == "10:0").with_columns(
+        pl.lit("10:5").alias("id"),
+        pl.lit("10:5:0").alias("terminal_event_id"),
         pl.lit("10:escape:4").alias("fate"),
     )
     return pl.concat([members, member]), pl.concat([events, added]), pathways, regions
@@ -157,35 +160,42 @@ def test_tree_ambiguity_control_and_colors(
     distinguish = check(doc, "Distinguish identical escapees by pathway")
     assert distinguish.visible and distinguish.active == []
     assert check(doc, "Group escapes").active == [0]
-    assert set(event_colors(doc)[id] for id in (6, 8, 12, 1000)) == {COLORS["escape"]}
+    assert set(
+        event_colors(doc)[id] for id in ("10:0:5", "10:1:1", "10:2:3", "10:5:0")
+    ) == {COLORS["escape"]}
     check(doc, "Group escapes").active = []
     before = event_colors(doc)
     check(doc, "Cumulative").active = [0]
     check(doc, "Bar chart").active = [0]
     doc.select_one({"name": "cumulative_scope"}).value = "10:4"
     assert cumulative_total(doc) == pytest.approx(1 / 6)
-    assert doc.select_one({"name": "cdf"}).renderers[0].glyph.fill_color == before[1000]
+    assert (
+        doc.select_one({"name": "cdf"}).renderers[0].glyph.fill_color
+        == before["10:5:0"]
+    )
     assert (
         len(
             [r for r in doc.select_one({"name": "bars"}).renderers if r.glyph.left == 9]
         )
         == 3
     )
-    assert before[6] == before[1000] and before[6] != before[8]
-    assert before[8] == COLORS["escape"]
+    assert before["10:0:5"] == before["10:5:0"] and before["10:0:5"] != before["10:1:1"]
+    assert before["10:1:1"] == COLORS["escape"]
     assert any(group.title == "Escapes" for group in doc.select({"type": GroupBox}))
     assert doc.select_one({"name": "event:escape:daughter:4"}).labels == ["→ Leaf"]
     distinguish.active = [0]
     after = event_colors(doc)
-    assert after[6] != after[1000]
-    assert doc.select_one({"name": "cdf"}).renderers[0].glyph.fill_color == after[1000]
+    assert after["10:0:5"] != after["10:5:0"]
+    assert (
+        doc.select_one({"name": "cdf"}).renderers[0].glyph.fill_color == after["10:5:0"]
+    )
     assert (
         len(
             [r for r in doc.select_one({"name": "bars"}).renderers if r.glyph.left == 9]
         )
         == 4
     )
-    assert all(after[id] == before[id] for id in (6, 8, 12))
+    assert all(after[id] == before[id] for id in ("10:0:5", "10:1:1", "10:2:3"))
     assert doc.select_one({"name": "event:10:escape:4"}).labels == ["→ Leaf"]
     distinguish.active = []
     assert event_colors(doc) == before
@@ -197,7 +207,7 @@ def test_tree_ambiguity_control_and_colors(
     doc.select_one({"name": "cumulative_scope"}).value = "root"
     doc.select_one({"name": "event:Parent → A + Neutral"}).active = []
     assert cumulative_total(doc) == pytest.approx(2 / 6)
-    assert 2 not in event_colors(doc) and 6 in event_colors(doc)
+    assert "10:0:1" not in event_colors(doc) and "10:0:5" in event_colors(doc)
 
 
 def test_tree_without_recorded_ambiguity_hides_distinction(tree_database):
@@ -270,7 +280,7 @@ def test_browser_escape_groups_and_ambiguity(
         page.wait_for_function("""() => {
             const chart = Bokeh.documents[0].get_model_by_name('explorer_plots').children.find(p => p.name === 'events');
             const ids = chart.renderers.flatMap(r => r.data_source?.data.id ?? []);
-            return !ids.includes(6) && ids.includes(1000);
+            return !ids.includes('10:0:5') && ids.includes('10:5:0');
         }""")
         page.screenshot(path=str(tmp_path / "escape-groups.png"))
         assert not errors

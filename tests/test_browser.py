@@ -49,8 +49,10 @@ def test_explorer_loads_without_external_resources(page: Page, live_server):
 
     page.route("**/*", local_only)
     page.goto(f"{live_server}/experiment/cluster/explorer?experiment=1&cluster=1")
-    # This fixture has no event geometry; even its fallback needs BokehJS.
-    expect(page.get_by_text("Explorer data unavailable:", exact=False)).to_be_visible()
+    # Even an unrecorded selection needs the local BokehJS bundle.
+    expect(
+        page.get_by_text("No events were recorded for this experiment run and cluster.")
+    ).to_be_visible()
     assert external == []
     assert_clean_browser(*errors)
 

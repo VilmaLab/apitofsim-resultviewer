@@ -1365,7 +1365,7 @@ def test_separate_rejected_collisions_and_visibility_transitions(monkeypatch):
         d for d in doc.select({"type": Div}) if "Realization #1</h3>" in d.text
     )
     assert all(f'id="event-{id}"' in details.text for id in range(1, 7))
-    doc.roots[0].children[1].text = "2"
+    doc.roots[0].children[1].text = '["inspect", "2"]'
     assert any("Selected hidden event #1" in d.text for d in doc.select({"type": Div}))
 
 

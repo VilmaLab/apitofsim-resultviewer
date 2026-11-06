@@ -237,6 +237,7 @@ dependencies = [
     { name = "numpy" },
     { name = "panel" },
     { name = "polars" },
+    { name = "portalocker", extra = ["win32"], marker = "sys_platform == 'win32'" },
     { name = "pywebview", marker = "sys_platform != 'linux'" },
     { name = "starlette" },
     { name = "starlette-htmx" },
@@ -267,6 +268,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "panel", specifier = "==1.10.0a3" },
     { name = "polars", specifier = ">=2.0.0" },
+    { name = "portalocker", extras = ["win32"], marker = "sys_platform == 'win32'", specifier = ">=4.4.2" },
     { name = "pywebview", marker = "sys_platform != 'linux'", specifier = ">=6.2.1" },
     { name = "starlette", specifier = ">=1.4.1" },
     { name = "starlette-htmx", specifier = ">=0.1.1" },
@@ -1087,6 +1089,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/43/bca094221a0f9f592fe1e982d090a92075aa302ecaa92c94cc6268a39b2c/portalocker-4.4.2-py3-none-any.whl", hash = "sha256:e661b91af34fc1806740f8e0e42990fe55cd85cbae55675ac48a400a9656a51b", size = 129702, upload-time = "2026-10-28T00:24:56.625Z" },
 ]
 
+[package.optional-dependencies]
+win32 = [
+    { name = "pywin32" },
+]
+
 [[package]]
 name = "progress-table"
 version = "3.3.4"
@@ -1458,6 +1465,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/59/4a/05307135dafba67778669d194bd1a3822a7685ec9ee8a6d7e70856c1a551/pywebview-6.2.1.tar.gz", hash = "sha256:71b7136752e40824655304d938efb62014218d1a90bd8e87e1cbdb1ce9c466af", size = 513126, upload-time = "2026-04-15T09:02:16.595Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3d/25/9491695c22c4842c5b3903b4dc172e0eecf67a27c0af34a71512c9b76a0a/pywebview-6.2.1-py3-none-any.whl", hash = "sha256:9d07275f53894ab4d5e2e0e996227193e7187dec276d9b624dccbce029216b46", size = 525463, upload-time = "2026-04-15T09:02:10.186Z" },
+]
+
+[[package]]
+name = "pywin32"
+version = "312"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/21/82/3bf86d2e2808902013132e1ce905a7da0da53790f3836c64bf44d55e24f3/pywin32-312-cp314-cp314-win_amd64.whl", hash = "sha256:a4dd3a848290ef724347b19f301045831d8e802fa4464f491b98b1e0a081432e", size = 7024157, upload-time = "2026-06-04T07:49:45.34Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/cd/7e1de64a4a6f69c04214169657ccab0d93a670ea50e35eb8f489d7378249/pywin32-312-cp315-cp315-win_amd64.whl", hash = "sha256:c2f03a0f73f804a13c2735b99392b0cd426bb4f2c4d0178e5ac966a0f21618d5", size = 7025293, upload-time = "2026-06-04T07:49:54.857Z" },
 ]
 
 [[package]]

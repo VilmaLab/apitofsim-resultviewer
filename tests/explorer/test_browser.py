@@ -1276,11 +1276,16 @@ def assert_region_scrolling(target):
             )
         except PlaywrightTimeoutError:
             pytest.fail(f"{selector} does not overflow: {target.evaluate(geometry)}")
-        before = target.evaluate(geometry)
-        region.evaluate("el => el.scrollTop = 25")
-        assert region.evaluate("el => el.scrollTop") == 25
+        # Capture both snapshots in one browser task so pending server layout
+        # updates cannot land between the scroll and the measurement.
+        before, after = region.evaluate(f"""el => {{
+            const geometry = {geometry};
+            const before = geometry();
+            el.scrollTop = 25;
+            return [before, geometry()];
+        }}""")
         before[index][-1] = 25
-        assert target.evaluate(geometry) == before
+        assert after == before
         # Reaching an arbitrary scroll offset does not prove that the bottom is
         # usable: the scrollport itself may extend past the clipped frame.
         region.evaluate("el => el.scrollTop = el.scrollHeight")

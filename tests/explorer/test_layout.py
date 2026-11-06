@@ -65,13 +65,15 @@ def test_layouts_and_envelope():
     )
     assert event_layout.layout_events(events, "strip")[
         "plot_y"
-    ].to_list() == pytest.approx([0.25 * sin(i * 12.9898) for i in events["id"]])
+    ].to_list() == pytest.approx(
+        [0.25 * sin(i * 12.9898) for i in events["event_number"]]
+    )
 
     def pack(frame):
         return event_layout.pack_beeswarm(frame, 0, 5000, 600, 380)[0]
 
     packed = pack(events)
-    assert packed["plot_y"].to_list() == pytest.approx([-10, 0, 10, 0, 0])
+    assert packed["plot_y"].to_list() == pytest.approx([0, 10, -10, 0, 0])
     assert_frame_equal(
         packed.select("id", "plot_y").sort("id"),
         pack(events.reverse()).select("id", "plot_y").sort("id"),
@@ -103,7 +105,7 @@ def test_beeswarm_circles_touch_without_overlaps(width, height):
     # A dense stack exercises more than the old seven levels; nearby columns
     # exercise diagonal tangencies and resizing.
     points = pl.DataFrame(
-        {"id": range(80), "position": [i // 20 * 0.005 for i in range(80)]}
+        {"event_number": range(80), "position": [i // 20 * 0.005 for i in range(80)]}
     )
     packed, diameter = event_layout.pack_beeswarm(points, 0, 1, width, height)
     centers = list(zip(packed["position"] * width, packed["plot_y"], strict=True))

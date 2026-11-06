@@ -392,9 +392,7 @@ def _highlight(plot, get_events, selection):
         visible = (
             events.head(0)
             if selection["selected"] is None
-            else events.filter(pl.col("realization_id") == selection["selected"]).sort(
-                "t", "id"
-            )
+            else events.filter(pl.col("realization_id") == selection["selected"])
         )
         clicked = (
             visible.head(0)

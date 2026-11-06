@@ -86,7 +86,11 @@ class ExecutionTree:
         )
         rows = []
         for member in members.join(
-            histories, left_on="id", right_on="realization_id", how="left"
+            histories,
+            left_on="id",
+            right_on="realization_id",
+            how="left",
+            maintain_order="left",
         ).iter_rows(named=True):
             result, node = member["experiment_result_id"], member["particle_index"]
             if (
@@ -116,13 +120,13 @@ class ExecutionTree:
         return pl.DataFrame(
             rows,
             schema={
-                "id": pl.Int64,
-                "experiment_result_id": pl.Int64,
+                "id": members.schema["id"],
+                "experiment_result_id": members.schema["experiment_result_id"],
                 "fate": pl.String,
-                "terminal_event_id": pl.Int64,
+                "terminal_event_id": events.schema["id"],
             },
             orient="row",
-        ).sort("id")
+        )
 
     def branches(self):
         """Return branch labels and leaf keys; repeated species stay separate."""
@@ -213,16 +217,12 @@ class ExecutionTree:
             condition = (pl.col("experiment_result_id") == result) & (
                 pl.col("particle_index") == node
             )
-        outcomes = (
-            events.filter(
-                condition
-                & pl.col("type").is_in(["fragmentation", "escape"])
-                & (pl.col("provenance") == "persisted")
-                & pl.col("continuity_valid").fill_null(False)
-            )
-            .sort("realization_id", "t", "id")
-            .unique("realization_id", keep="first", maintain_order=True)
-        )
+        outcomes = events.filter(
+            condition
+            & pl.col("type").is_in(["fragmentation", "escape"])
+            & (pl.col("provenance") == "persisted")
+            & pl.col("continuity_valid").fill_null(False)
+        ).unique("realization_id", keep="first", maintain_order=True)
         outcomes = outcomes.with_columns(
             pl.when(pl.col("type") == "escape")
             .then(

@@ -151,7 +151,7 @@ def test_rate_selection_modes_and_layout(rate_doc):
         for p in doc.select({"name": "pathway_rates"})
     )
     bridge = doc.roots[0].children[1]
-    bridge.text = "2"
+    bridge.text = '["inspect", "2"]'
     assert sorted(
         m.location
         for p in doc.select({"name": "pathway_rates"})
@@ -344,7 +344,7 @@ def test_chooser_hides_rates_until_realization_selected(rate_doc):
     source.selected.indices = [source.data["id"].index(1), source.data["id"].index(2)]
     assert not check(doc, "Show rate constants").visible
     assert check(doc, "Show rate constants").active
-    doc.roots[0].children[1].text = "choose:1:2"
+    doc.roots[0].children[1].text = '["choose", "2"]'
     assert check(doc, "Show rate constants").visible
     assert check(doc, "Show rate constants").active
 

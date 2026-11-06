@@ -533,14 +533,14 @@ def create_controls(
         view.el.addEventListener('click', event => {
             const path = event.composedPath().filter(node => node instanceof Element);
             if (path.some(node => node.matches('#clear-selection'))) {
-                bridge.text = 'clear';
+                bridge.text = JSON.stringify(['clear', null]);
                 return;
             }
             const row = path.find(node => node.matches('.explorer-event, .explorer-choice'));
             if (row) {
-                bridge.text = row.dataset.realization
-                    ? `choose:${row.dataset.realization}:${row.dataset.event}`
-                    : row.dataset.event;
+                bridge.text = JSON.stringify([
+                    row.dataset.realization ? 'choose' : 'inspect', row.dataset.event,
+                ]);
             }
         });
     """,

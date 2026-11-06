@@ -6,9 +6,14 @@ realization start timestamp in the database.
 
 import duckdb
 import polars as pl
-from apitofsim.plotting.events import get_geometry, lengths_to_cumulative_lengths
+from apitofsim.plotting.events import (
+    NoRecordedEventsError,
+    get_geometry,
+    lengths_to_cumulative_lengths,
+)
 
 from apitofresview.modes import simulation_mode
+from apitofresview.recordings import NO_RECORDED_EVENTS
 
 from .tree import ExecutionTree
 
@@ -39,20 +44,11 @@ def load_data(db, experiment: int, cluster: int):
     mode = simulation_mode(db, experiment)
     pathway_mode = mode == "PATHWAY_AT_A_TIME"
     tree_mode = mode == "CLUSTER_TREE"
-    realizations = (
-        db.realizations_query(run_id=experiment, parent=cluster)
-        .select(
-            "realization_id as id, experiment_result_id"
-            + (", pathway_id as simulated_pathway_id" if pathway_mode else "")
-        )
-        .order("id")
-        .pl()
-    )
     events = (
         (
             db.tree_events_query(run_id=experiment, parent=cluster)
             if tree_mode
-            else db.events_query(run_id=experiment, parent=cluster, sort=True)
+            else db.events_query(run_id=experiment, parent=cluster)
         )
         .pl()
         .rename({"event_id": "id", "event_type": "type"})
@@ -63,6 +59,27 @@ def load_data(db, experiment: int, cluster: int):
         )
         .with_columns(pl.col("z").clip(lower_bound=0))
     )
+    if events.is_empty():
+        raise NoRecordedEventsError(NO_RECORDED_EVENTS)
+    realizations = (
+        events.select(
+            pl.col("realization_id").alias("id"),
+            "experiment_result_id",
+            "realization_index",
+        )
+        .unique(maintain_order=True)
+        .sort("experiment_result_id", "realization_index")
+        .drop("realization_index")
+    )
+    if pathway_mode:
+        realizations = realizations.join(
+            db.results_query(run_id=experiment, parent=cluster)
+            .select("experiment_result_id, pathway_id as simulated_pathway_id")
+            .pl(),
+            on="experiment_result_id",
+            how="left",
+            maintain_order="left",
+        )
     pathway_query = (
         db.db.sql(
             """select p.* from pathway_report p where p.cluster_id in (
@@ -152,21 +169,21 @@ def load_data(db, experiment: int, cluster: int):
     else:
         classified = classify(realizations, events, pathways, cluster_name)
     if pathway_mode:
-        classified = (
-            classified.join(
-                realizations.select("id", "simulated_pathway_id"), on="id", how="left"
-            )
-            .join(
-                pathways.select("pathway_id", "pathway").rename(
-                    {
-                        "pathway_id": "simulated_pathway_id",
-                        "pathway": "simulated_pathway",
-                    }
-                ),
-                on="simulated_pathway_id",
-                how="left",
-            )
-            .sort("id")
+        classified = classified.join(
+            realizations.select("id", "simulated_pathway_id"),
+            on="id",
+            how="left",
+            maintain_order="left",
+        ).join(
+            pathways.select("pathway_id", "pathway").rename(
+                {
+                    "pathway_id": "simulated_pathway_id",
+                    "pathway": "simulated_pathway",
+                }
+            ),
+            on="simulated_pathway_id",
+            how="left",
+            maintain_order="left",
         )
     return (
         classified.with_columns(
@@ -180,7 +197,6 @@ def load_data(db, experiment: int, cluster: int):
 
 
 def _pair_states(events, kind, valid):
-    events = events.sort("realization_id", "t", "id")
     paired = (
         (pl.col("type") == f"post{kind}") & (pl.col("type").shift() == kind) & valid
     )
@@ -220,13 +236,12 @@ def preprocess_events(events, regions):
             (pl.col("z") < hi) | ((index == last) & (pl.col("z") == hi))
         )
         region = pl.when(inside).then(pl.lit(index)).otherwise(region)
-    return (
-        pair_fragmentations(pair_collisions(events))
-        .with_columns(
-            region.alias("region"),
-            (pl.col("x").pow(2) + pl.col("y").pow(2)).sqrt().alias("radial"),
-        )
-        .sort("realization_id", "t", "id")
+    events = events.sort(
+        "result_id", "realization_index", "event_index"
+    ).with_row_index("event_number", offset=1)
+    return pair_fragmentations(pair_collisions(events)).with_columns(
+        region.alias("region"),
+        (pl.col("x").pow(2) + pl.col("y").pow(2)).sqrt().alias("radial"),
     )
 
 
@@ -250,9 +265,19 @@ def classify(realizations, events, pathways, cluster_name):
     )
     return (
         realizations.join(
-            histories, left_on="id", right_on="realization_id", how="left"
+            histories,
+            left_on="id",
+            right_on="realization_id",
+            how="left",
+            maintain_order="left",
         )
-        .join(pathways, left_on="last_pathway", right_on="pathway_id", how="left")
+        .join(
+            pathways,
+            left_on="last_pathway",
+            right_on="pathway_id",
+            how="left",
+            maintain_order="left",
+        )
         .with_columns(
             pl.when(pl.col("terminal_count") > 1)
             .then(pl.lit("Ambiguous"))
@@ -265,7 +290,6 @@ def classify(realizations, events, pathways, cluster_name):
             pl.when(valid).then(pl.col("last_id")).alias("terminal_event_id"),
         )
         .select("id", "experiment_result_id", "fate", "terminal_event_id")
-        .sort("id")
     )
 
 

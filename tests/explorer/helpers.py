@@ -25,7 +25,14 @@ def event(id, kind, rid, t, z, pathway=None, clamped=False):
 def cohort(ids, *events, boundaries=BOUNDARIES):
     regions = data.make_regions(boundaries)
     events = data.preprocess_events(
-        pl.DataFrame(events, schema=EVENT_SCHEMA, orient="row"), regions
+        pl.DataFrame(events, schema=EVENT_SCHEMA, orient="row")
+        .sort("realization_id", "t", "id")
+        .with_row_index("event_index")
+        .with_columns(
+            pl.lit(10).alias("result_id"),
+            pl.col("realization_id").alias("realization_index"),
+        ),
+        regions,
     )
     realizations = pl.DataFrame(
         {"id": ids, "experiment_result_id": [10] * len(ids)},

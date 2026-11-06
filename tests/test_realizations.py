@@ -2,15 +2,20 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from shutil import copyfile
+
+import duckdb
 
 import pytest
 from apitofsim.api import Q_
 from apitofsim.plotting import events
-from apitofsim.workflow.db import RealizationDatabase
+from apitofsim.workflow.db import ExperimentDatabase
 from bokeh.document import Document
 from mplbed.asgi import MplbedMiddleware
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
+
+from tests.arrow_fixtures import event, publish_events
 
 from apitofresview import webapp
 from apitofresview.plotting.explorer import build_document
@@ -20,7 +25,7 @@ from apitofresview.plotting.explorer import data as explorer_data
 @pytest.fixture
 def outcome_app(tmp_path, monkeypatch):
     path = tmp_path / "outcomes.duckdb"
-    db = RealizationDatabase(path)
+    db = ExperimentDatabase(path)
     db.create_tables()
     db.db.execute("""
         insert into cluster (id,common_name) values (1,'Parent'),(2,'A'),(3,'B');
@@ -36,16 +41,22 @@ def outcome_app(tmp_path, monkeypatch):
             (id,experiment_run_id,pathway_id) values (11,2,7);
         insert into cluster_tree_experiment_result
             (id,experiment_run_id,cluster_id) values (12,3,1);
-        insert into realization values (100,10),(101,10),(102,10);
-        insert into event_info
-            (id,realization_id,event_type,postime,velocity,omega,
-             rot_energy,vibrational_energy,particle_index) values
-            (1,100,'fragmentation',{'x':0,'y':0,'z':0.002,'t':1},
-             {'x':0,'y':0,'z':1},{'x':0,'y':0,'z':0},0,0,0),
-            (2,101,'escape',{'x':0,'y':0,'z':0.005,'t':2},
-             {'x':0,'y':0,'z':1},{'x':0,'y':0,'z':0},0,0,0);
-        insert into fragmentation_event (id,pathway_id) values (1,7);
     """)
+    db.begin_execution(1, 1, None, [7], result_id=10, recorded=True)
+    db.begin_execution(2, 1, 7, [7], result_id=11, recorded=True)
+    db.begin_execution(3, 1, None, [], result_id=12, recorded=True)
+    db.begin_execution(1, 2, None, [], result_id=13)
+    publish_events(
+        db,
+        [
+            event(10, 0, 0, "fragmentation", 1, 0.002, transition_index=0),
+            event(10, 1, 0, "escape", 2, 0.005),
+            event(10, 2, 0, "init", 0, 0),
+            event(11, 0, 0, "init", 0, 0),
+            event(12, 0, 0, "init", 0, 0),
+        ],
+        statuses={10: "cancelled"},
+    )
     db.close()
     monkeypatch.setattr(events, "get_geometry", lambda *args: [Q_(1, "mm")] * 5)
     app = webapp.create_app(path)
@@ -126,4 +137,52 @@ def test_tree_explorer_explains_missing_execution_tree(outcome_app, monkeypatch)
     assert len(doc.roots) == 1
     assert (
         doc.roots[0].text == "No recorded cluster-tree executions for this selection."
+    )
+
+
+@pytest.mark.parametrize("run,cluster", [(1, 2), (2, 2), (3, 2), (99, 1)])
+def test_unrecorded_selection(outcome_app, run, cluster):
+    result = response(outcome_app, f"experiment={run}&cluster={cluster}")
+    assert (
+        result.context["notice"]
+        == "No events were recorded for this experiment run and cluster."
+    )
+    assert not result.context["fig"]
+    doc = Document()
+    build_document(outcome_app.state.db, doc, run, cluster)
+    assert doc.roots[0].text == result.context["notice"]
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_required_sidecar_has_a_distinct_open_error(outcome_app, tmp_path, missing):
+    source = outcome_app.state.db.events_path
+    path = tmp_path / "copy.duckdb"
+    copyfile(source.with_name("outcomes.duckdb"), path)
+    if missing:
+        with pytest.raises(FileNotFoundError, match="matching .events.arrow sidecar"):
+            webapp.create_app(path)
+    else:
+        path.with_suffix(".events.arrow").write_bytes(b"wrong archive")
+        with pytest.raises(ValueError, match="sidecar identity/size"):
+            webapp.create_app(path)
+
+
+def test_legacy_event_database_requires_migration(tmp_path):
+    path = tmp_path / "legacy.duckdb"
+    with duckdb.connect(str(path)) as conn:
+        conn.execute("create table event_info (id integer)")
+    with pytest.raises(ValueError, match="Legacy relational-event database"):
+        webapp.create_app(path)
+
+
+def test_recorded_cohort_with_hidden_events(outcome_app, monkeypatch):
+    monkeypatch.setattr(explorer_data, "get_geometry", events.get_geometry)
+    doc = Document()
+    build_document(outcome_app.state.db, doc, 1, 1)
+    for kind in explorer_data.EVENT_TYPES:
+        doc.select_one({"name": f"event:{kind}"}).active = []
+    plots = doc.select_one({"name": "explorer_plots"})
+    assert any(
+        getattr(child, "text", "") == "<p>No events match the current filters.</p>"
+        for child in plots.children
     )

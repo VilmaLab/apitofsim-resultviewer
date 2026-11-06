@@ -2,6 +2,7 @@
 
 import json
 import importlib.util
+from contextlib import asynccontextmanager
 from importlib.resources import files
 from io import StringIO
 from math import ceil
@@ -12,9 +13,7 @@ from functools import partial
 
 import duckdb
 from apitofsim.plotting.report import get_report
-from apitofsim.workflow.db import (
-    RealizationDatabase,
-)
+from apitofsim.workflow.db import ExperimentDatabase
 from bokeh.server.asgi import BokehASGI
 from mplbed import (
     mplbed_starlette,
@@ -36,6 +35,7 @@ from workingtitle.pydanticstarlette import (
 )
 
 from .modes import mode_label, simulation_mode
+from .recordings import NO_RECORDED_EVENTS
 
 # This is a guard against a Panel bug with BokehASGI if we accidentally end up with Panel installed.
 # Can probably be removed at some point.
@@ -538,7 +538,11 @@ async def spectrogram_page(request, params):
 
 @query_params(RealizationsParams)
 async def realizations(request, params):
-    from apitofsim.plotting.events import PANELS, plot_events_cluster
+    from apitofsim.plotting.events import (
+        PANELS,
+        NoRecordedEventsError,
+        plot_events_cluster,
+    )
 
     db = request.app.state.db
     experiment_id = params.experiment
@@ -546,21 +550,32 @@ async def realizations(request, params):
     is_single_pathway = get_is_single_pathway(db, experiment_id, cluster_id)
     notice = None
     fig_html = ""
-    if simulation_mode(db, experiment_id) == "CLUSTER_TREE":
-        notice = "Realization outcome plots do not yet support cluster-tree histories."
-    elif is_single_pathway:
-        notice = "Realization outcome plots do not support pathway-at-a-time runs. Use the Explorer to inspect their recorded events."
+    mode = simulation_mode(db, experiment_id)
+    if mode in ("CLUSTER_TREE", "PATHWAY_AT_A_TIME") or is_single_pathway:
+        if (
+            db.events_query(run_id=experiment_id, parent=cluster_id).limit(1).fetchone()
+            is None
+        ):
+            notice = NO_RECORDED_EVENTS
+        elif mode == "CLUSTER_TREE":
+            notice = "Realization outcome plots do not yet support cluster-tree histories. Use the Explorer to inspect their recorded events."
+        else:
+            notice = "Realization outcome plots do not support pathway-at-a-time runs. Use the Explorer to inspect their recorded events."
     else:
         panels = PANELS if params.panel == "all" else ("schematic", params.panel)
-        fig = plot_events_cluster(
-            db,
-            experiment_id,
-            is_single_pathway,
-            cluster_id,
-            rescale=params.rescale,
-            panels=panels,
-        )
-        fig_html = safe_html.figure_html(fig)
+        try:
+            fig = plot_events_cluster(
+                db,
+                experiment_id,
+                is_single_pathway,
+                cluster_id,
+                rescale=params.rescale,
+                panels=panels,
+            )
+        except NoRecordedEventsError:
+            notice = NO_RECORDED_EVENTS
+        else:
+            fig_html = safe_html.figure_html(fig)
     return templates.TemplateResponse(
         request,
         "realizations.html",
@@ -682,19 +697,31 @@ def explorer_bokeh(db, doc, *, layout="viewport"):
     build_document(db, doc, experiment, cluster, layout=layout)
 
 
-def create_app(database_path=None, debug=True):
+def create_app(database_path=None, debug=True, *, events_filename=None):
     """Build the Starlette application around the given experiment database.
 
     ``database_path`` defaults to the ``$DATABASE`` environment variable,
     which keeps the ``uvicorn apitofresview:app`` way of running
-    working unchanged.
+    working unchanged. For attached connections, pass the sidecar path
+    explicitly with ``events_filename``.
     """
     if database_path is None:
         database_path = environ["DATABASE"]
 
-    db = RealizationDatabase(database_path, readonly=True)
+    db = ExperimentDatabase(
+        database_path, readonly=True, events_filename=events_filename
+    )
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            db.close()
+
     app = Starlette(
         debug=debug,
+        lifespan=lifespan,
         routes=[
             Route("/", overview, name="overview"),
             Route("/experiment", experiment, name="experiment"),

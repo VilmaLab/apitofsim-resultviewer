@@ -40,6 +40,12 @@ export DATABASE=/path/to/experiments.duckdb
 apitofresview
 ```
 
+If the run has recorded events, keep the matching `experiments.events.arrow`
+sidecar next to `experiments.duckdb` when copying, moving, or serving the
+results. Summary and spectrogram views work for runs without recordings.
+For legacy databases with relational event tables, use a compatible older
+viewer or migrate the database explicitly.
+
 ### Options
 
 | Option            | Effect                                           |
@@ -51,6 +57,10 @@ apitofresview
 | `--debug`         | Show tracebacks in the browser                   |
 
 ## Embedding the Explorer
+
+Pass an `apitofsim.workflow.db.ExperimentDatabase` opened with `readonly=True`.
+File-backed opens derive the sidecar path. When wrapping an attached DuckDB
+connection, pass the results archive path explicitly as `events_filename`.
 
 `explorer_bokeh(db, doc, layout=...)` (`apitofresview.webapp`) and
 `build_document(db, doc, experiment, cluster, layout=...)`

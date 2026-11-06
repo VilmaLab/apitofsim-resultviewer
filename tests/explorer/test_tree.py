@@ -1,12 +1,15 @@
 """Serial histories use persisted routes and count splits independently of outcomes."""
 
+import json
 from xml.etree import ElementTree
 
 import polars as pl
 import pytest
-from apitofsim.workflow.db import RealizationDatabase
+from apitofsim.workflow.db import ExperimentDatabase
 from bokeh.document import Document
 from bokeh.models import CheckboxGroup, Select
+
+from tests.arrow_fixtures import event as recorded_event, publish_events
 
 from apitofresview.plotting.explorer import aggregation, data, session
 from apitofresview.plotting.explorer.details import render_details
@@ -17,72 +20,70 @@ from apitofresview.plotting.explorer.tree import ExecutionTree
 @pytest.fixture
 def tree_database(tmp_path, monkeypatch):
     path = tmp_path / "tree.duckdb"
-    db = RealizationDatabase(path)
+    db = ExperimentDatabase(path)
     db.create_tables()
     db.db.execute("""
         insert into cluster (id,common_name,charge) values (1,'Parent',-1),(2,'A',-1),(3,'Neutral',0),(4,'Leaf',-1);
         insert into pathway values (7,1,2,3),(8,1,3,2),(9,2,4,3),(10,4,4,3),(11,3,1,2),(12,2,3,4);
         insert into experiment_config (id) values (1);
         insert into experiment_run (id,experiment_config_id,simulation_mode) values (1,1,'CLUSTER_TREE'),(2,1,'CLUSTER_TREE');
-        insert into cluster_tree_experiment_result (id,experiment_run_id,cluster_id,total_us) values (10,1,1,100);
-        insert into cluster_tree_node values (10,0,1),(10,1,2),(10,2,2),(10,3,4),(10,4,4);
+        insert into cluster_tree_experiment_result (id,experiment_run_id,cluster_id,total_us) values (10,1,1,100),(20,1,2,100);
+        insert into cluster_tree_node values (10,0,1),(10,1,2),(10,2,2),(10,3,4),(10,4,4),(20,0,2);
         insert into cluster_tree_transition values (10,0,0,7,1),(10,1,0,8,2),(10,2,1,9,3),(10,3,2,9,4),(10,4,3,10,NULL),(10,5,2,12,NULL);
-        insert into realization values (100,10),(101,10),(102,10),(103,10),(104,10);
     """)
-    next_id = 0
+    db.begin_execution(1, 1, None, [7, 8, 9, 9, 10, 12], result_id=10, recorded=True)
+    db.begin_execution(1, 2, None, [], result_id=20, recorded=True)
+    rows = [recorded_event(20, 0, 0, "init", 0, 0)]
+    indices = {}
 
-    def event(rid, kind, node, t, transition=None, dest=None, pathway=None):
-        nonlocal next_id
-        next_id += 1
-        db.db.execute(
-            """
-            insert into event_info values (?, ?, ?, {'x':0,'y':0,'z':?,'t':?},
-            {'x':0,'y':0,'z':?}, {'x':0,'y':0,'z':0}, ?, ?, ?)
-        """,
-            [
-                next_id,
-                rid,
+    def event(rid, kind, node, t, transition=-1, dest=-1):
+        index = indices.get(rid, 0)
+        indices[rid] = index + 1
+        rows.append(
+            recorded_event(
+                10,
+                rid - 100,
+                index,
                 kind,
                 t,
                 t,
-                node + 1,
-                (node + 1) * 1e-20,
-                (node + 1) * 2e-20,
-                node,
-            ],
-        )
-        if kind == "fragmentation":
-            db.db.execute(
-                "insert into fragmentation_event values (?,?,?,?)",
-                [next_id, transition, dest, pathway],
+                particle_index=node,
+                vx=0,
+                vy=0,
+                vz=node + 1,
+                rot_energy=(node + 1) * 1e-20,
+                vibrational_energy=(node + 1) * 2e-20,
+                transition_index=transition,
+                next_particle_index=dest,
             )
-        return next_id
+        )
 
     for rid in range(100, 105):
         event(rid, "init", 0, 0)
         if rid == 101:
             event(rid, "escape", 0, 5)
             continue
-        node, transition, pathway = (2, 1, 8) if rid == 102 else (1, 0, 7)
-        event(rid, "fragmentation", 0, 1, transition, node, pathway)
+        node, transition = (2, 1) if rid == 102 else (1, 0)
+        event(rid, "fragmentation", 0, 1, transition, node)
         if rid == 103:
             continue  # Recording interrupted at a continuing split.
         event(rid, "postfragmentation", node, 1)
         if rid == 102:
             event(rid, "escape", node, 5)
             continue
-        event(rid, "fragmentation", node, 2, 2, 3, 9)
+        event(rid, "fragmentation", node, 2, 2, 3)
         event(rid, "postfragmentation", 3, 2)
         if rid == 104:
-            event(rid, "fragmentation", 3, 3, 4, -1, 10)
+            event(rid, "fragmentation", 3, 3, 4, -1)
         else:
             event(rid, "escape", 3, 5)
+    publish_events(db, rows, statuses={10: "cancelled"})
     db.close()
     monkeypatch.setattr(data, "get_geometry", lambda *args: None)
     monkeypatch.setattr(
         data, "lengths_to_cumulative_lengths", lambda *args: (0, 1, 2, 3, 4, 5)
     )
-    db = RealizationDatabase(path, readonly=True)
+    db = ExperimentDatabase(path, readonly=True)
     try:
         yield db
     finally:
@@ -99,6 +100,9 @@ def test_tree_identity_classification_and_after_states(tree_database):
         "10:stop:4",
     ]
     assert members["terminal_event_id"].null_count() == 1
+    other_members, other_events, _, _ = data.load_data(tree_database, 1, 2)
+    assert other_members["fate"].to_list() == ["20:incomplete:0"]
+    assert other_events["current_cluster_id"].to_list() == [2]
     assert (
         events.filter(pl.col("type") == "postfragmentation")[
             "fragmentation_id"
@@ -143,11 +147,11 @@ def test_all_splits_in_bars_and_immediate_splits_in_cumulative(tree_database):
 
 def test_fragmentation_details_share_spacetime_but_keep_both_states(tree_database):
     members, events, pathways, _ = data.load_data(tree_database, 1, 1)
-    members = members.filter(pl.col("id") == 100).with_row_index(
+    members = members.filter(pl.col("id") == "10:0").with_row_index(
         "realization_number", offset=1
     )
     events = (
-        events.filter(pl.col("realization_id") == 100)
+        events.filter(pl.col("realization_id") == "10:0")
         .join(pathways, on="pathway_id", how="left")
         .rename({"pathway": "event_pathway"})
     )
@@ -200,7 +204,7 @@ def test_session_scope_selection_and_complete_history_facets(tree_database):
     ids = [id for r in chart.renderers for id in r.data_source.data.get("id", [])]
     members, events, _, _ = data.load_data(tree_database, 1, 1)
     history = events.filter(
-        (pl.col("realization_id") == 100) & (pl.col("type") != "postfragmentation")
+        (pl.col("realization_id") == "10:0") & (pl.col("type") != "postfragmentation")
     )
     assert set(ids) == set(history["id"])
     source = next(r.data_source for r in chart.renderers if "id" in r.data_source.data)
@@ -233,6 +237,22 @@ def test_browser_tree_selection_folding_and_scope(
         root = page.locator("details").first
         root_input = root.locator("summary").first.locator("input")
         expect(root_input).to_be_checked()
+        if width == 1280:
+            # Select an Arrow-backed split, then inspect its paired state in the DOM.
+            page.wait_for_function("""() =>
+                Bokeh.documents[0].get_model_by_name('events')?.inner_width > 0
+            """)
+            page.evaluate("""() => {
+                const plot = Bokeh.documents[0].get_model_by_name('events');
+                const source = plot.renderers.find(
+                    r => r.data_source?.data.id?.includes('10:0:1')
+                ).data_source;
+                source.selected.indices = [source.data.id.indexOf('10:0:1')];
+            }""")
+            after = page.locator('[data-event="10:0:2"]')
+            after.get_by_role("button", name="Inspect event #10:0:2").click()
+            expect(after).to_have_attribute("style", "background:#fde68a")
+            page.get_by_role("button", name="Clear selection").click()
         full_tree = page.get_by_label("Show empty pathways", exact=True)
         expect(full_tree).not_to_be_checked()
         unobserved = page.locator('.tree-leaf[data-observed="false"]').first
@@ -339,7 +359,7 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
     doc = Document()
     session.build_document(tree_database, doc, 1, 1)
     check(doc, "Gas collision rate").active = [0]
-    select(doc, 2)  # First fragmentation, before: Parent.
+    select(doc, "10:0:1")  # First fragmentation, before: Parent.
     check(doc, "Show rate constants").active = [0]
     assert curve_reads == [1]
     assert len(doc.select_one({"name": "pathway_rates"}).renderers) == 2
@@ -351,7 +371,9 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
             if getattr(r.glyph, "line_color", None) == "#f59e0b"
         )
     )
-    doc.roots[0].children[1].text = "3"  # Same split, after: A.
+    doc.roots[0].children[1].text = json.dumps(
+        ["inspect", "10:0:2"]
+    )  # Same split, after: A.
     assert curve_reads == [1, 2]
     assert profile_reads[-1] == 2
     assert len(doc.select_one({"name": "pathway_rates"}).renderers) == 1
@@ -367,7 +389,7 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
         if getattr(r.glyph, "line_color", None) == "#f59e0b"
     )
     assert highlight.data == before_highlight
-    doc.roots[0].children[1].text = "2"
+    doc.roots[0].children[1].text = json.dumps(["inspect", "10:0:1"])
     assert curve_reads == [1, 2]  # Cached separately for each species.
     assert profile_reads[-1] == 1
     assert len(doc.select_one({"name": "pathway_rates"}).renderers) == 2
@@ -377,32 +399,33 @@ def test_empty_tree_run(tree_database):
     doc = Document()
     session.build_document(tree_database, doc, 2, 1)
     assert (
-        doc.roots[0].text == "No recorded cluster-tree executions for this selection."
+        doc.roots[0].text
+        == "No events were recorded for this experiment run and cluster."
     )
 
 
 def test_inconsistent_recording_stays_incomplete_and_does_not_pair(tree_database):
     members, events, pathways, _ = data.load_data(tree_database, 1, 1)
     events = events.with_columns(
-        pl.when(pl.col("id") == 3)
+        pl.when(pl.col("id") == "10:0:2")
         .then(pl.lit(False))
         .otherwise(pl.col("continuity_valid"))
         .alias("continuity_valid")
     )
     tree = ExecutionTree.load(tree_database, 1, 1, pathways)
     classified = tree.classify(members.select("id", "experiment_result_id"), events)
-    assert classified.filter(pl.col("id") == 100)["terminal_event_id"][0] is None
+    assert classified.filter(pl.col("id") == "10:0")["terminal_event_id"][0] is None
     assert (
-        data.pair_fragmentations(events).filter(pl.col("id") == 3)["fragmentation_id"][
-            0
-        ]
+        data.pair_fragmentations(events).filter(pl.col("id") == "10:0:2")[
+            "fragmentation_id"
+        ][0]
         is None
     )
-    member = classified.filter(pl.col("id") == 100).with_row_index(
+    member = classified.filter(pl.col("id") == "10:0").with_row_index(
         "realization_number", offset=1
     )
     assert "Recording diagnostics: unresolved continuity" in render_details(
-        member, events.filter(pl.col("realization_id") == 100), 3
+        member, events.filter(pl.col("realization_id") == "10:0"), "10:0:2"
     )
 
 

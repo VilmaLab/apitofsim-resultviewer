@@ -5,6 +5,7 @@ import json
 from math import isfinite
 
 import polars as pl
+from apitofsim.plotting.events import NoRecordedEventsError
 from bokeh.events import DocumentReady
 from bokeh.layouts import column, row
 from bokeh.models import Column, CustomJS, Div, FixedTicker, Range1d
@@ -47,8 +48,14 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     """Build one Bokeh session; every control uses the same cohort and X mapping."""
     if layout not in ("viewport", "page", "contained"):
         raise ValueError(f"Unknown Explorer layout: {layout!r}")
+    if experiment is None or cluster is None:
+        doc.add_root(Div(text="Select an experiment run and cluster."))
+        return
     try:
         realizations, events, pathways, regions = load_data(db, experiment, cluster)
+    except NoRecordedEventsError as exc:
+        doc.add_root(Div(text=escape(str(exc))))
+        return
     except Exception as exc:
         # Non-realization databases and older configs have no Explorer data.
         doc.add_root(Div(text=f"Explorer data unavailable: {escape(str(exc))}"))
@@ -420,7 +427,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if state["candidates"]:
             candidates = selection_events.filter(
                 pl.col("id").is_in(state["candidates"])
-            ).sort("realization_id", "t", "id")
+            )
             ui.details.text = render_choices(
                 candidates, enabled(ui.summarise_motion), enabled(ui.summarise_energy)
             )
@@ -479,7 +486,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if not hidden.is_empty():
             highlighted = hidden.row(0, named=True)
             notice = (
-                f"<b>Selected hidden event #{highlighted['id']}</b> · "
+                f"<b>Selected hidden event #{escape(str(highlighted['id']))}</b> · "
                 f"{highlighted['type']} · t={highlighted['t']:.6g} s · "
                 f"Axial distance={highlighted['z'] * 1000:.6g} mm"
             )
@@ -488,20 +495,26 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             update()
 
     def sidebar_event(attr, old, new):
-        if new == "clear":
+        if not new:
+            return
+        ui.detail_bridge.text = ""
+        try:
+            action, event = json.loads(new)
+        except ValueError, TypeError:
+            return
+        if action == "clear":
             set_selection(None, None)
-        elif new.startswith("choose:"):
-            parts = new.split(":")
-            if len(parts) == 3 and all(part.isdigit() for part in parts[1:]):
-                rid, event_id = map(int, parts[1:])
-                if state["candidates"].get(event_id) == rid:
+        elif action == "choose":
+            for event_id, rid in state["candidates"].items():
+                if str(event_id) == event:
                     set_selection(rid, event_id)
-        elif new.isdigit() and state["selected"] is not None:
+                    break
+        elif action == "inspect" and state["selected"] is not None:
             history = events.filter(pl.col("realization_id") == state["selected"])
-            if int(new) in history["id"]:
-                set_selection(state["selected"], int(new))
-        if new:
-            ui.detail_bridge.text = ""
+            for event_id in history["id"]:
+                if str(event_id) == event:
+                    set_selection(state["selected"], event_id)
+                    break
 
     ui.detail_bridge.on_change("text", sidebar_event)
 
@@ -1143,6 +1156,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     else "Zone"
                 )
             panels.extend(plots)
+        if (
+            enabled(ui.show_events)
+            and not chosen.is_empty()
+            and positioned.filter(pl.col("event_group").is_in(active_groups)).is_empty()
+        ):
+            panels.insert(0, Div(text="<p>No events match the current filters.</p>"))
         if chosen.is_empty() and (not pathway_mode or not rows):
             panels.insert(
                 0,

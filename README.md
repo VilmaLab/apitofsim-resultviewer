@@ -2,6 +2,9 @@
 
 Read-only web viewer for APi-ToF simulation results.
 
+To report a problem, open a new issue in the
+[GitHub issue tracker](https://github.com/VilmaLab/apitofsim-resultviewer/issues).
+
 ## Installing
 
 Download the build for your platform from the

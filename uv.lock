@@ -250,13 +250,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apitofsim", extras = ["plot"], marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "apitofsim", extras = ["plot"], marker = "(platform_machine != 'AMD64' and platform_machine != 'arm64' and platform_machine != 'x86_64') or (platform_machine == 'AMD64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
     { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.28.0/apitofsim-0.28.0-cp313-abi3-macosx_11_0_arm64.whl" },
     { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.28.0/apitofsim-0.28.0-cp313-abi3-manylinux_2_34_x86_64.whl" },
     { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.28.0/apitofsim-0.28.0-cp313-abi3-win_amd64.whl" },
     { name = "bokeh", specifier = "==3.10" },
     { name = "duckdb", specifier = ">=1.5.5" },
-    { name = "mplbed", specifier = ">=0.3.0" },
+    { name = "mplbed", specifier = ">=0.3.1" },
     { name = "numba", specifier = ">=0.68.0" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "panel", specifier = "==1.10.0a3" },
@@ -768,7 +768,7 @@ wheels = [
 
 [[package]]
 name = "mplbed"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozendict" },
@@ -776,9 +776,9 @@ dependencies = [
     { name = "starlette" },
     { name = "tornado" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/6a/9cfe2b9aedf6f868da45bbd266ada0853b55a68c1129d0330e79a4bec5ea/mplbed-0.3.0.tar.gz", hash = "sha256:264d0ddecd0753089e62011fd6adc9a5e89157e08ab56161c8a71fe3589e90cf", size = 28775, upload-time = "2026-08-24T11:14:52.069Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/da/9be1f682c1c7c052b0de10d1796672a397459f23e75365e31971badd84fa/mplbed-0.3.1.tar.gz", hash = "sha256:96d378e33a8f8f6e90e8a44c20e9c9a7fe6c975ac6a9f0ac0a04770d4c5a50df", size = 30786, upload-time = "2026-11-06T09:14:23.092Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/63/f8bb65a9549355904f06f4cd5293626a2898ffba788e00d8579ae7016d1c/mplbed-0.3.0-py3-none-any.whl", hash = "sha256:17da861362755ebebe507535fa9c96320afe53dcb31220346ac30f7daa4a0197", size = 38360, upload-time = "2026-08-24T11:14:51.064Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/0c/41970bfa3632359960da1c900731dd4593a3363cb2faec0ce2035f249477/mplbed-0.3.1-py3-none-any.whl", hash = "sha256:d6f13cf32a8412933f21cea4b9d6c03780f928f533cdfd794790321a95f6eb09", size = 38819, upload-time = "2026-11-06T09:14:22.108Z" },
 ]
 
 [[package]]

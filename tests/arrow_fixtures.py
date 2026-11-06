@@ -25,7 +25,6 @@ def publish_events(db, rows, *, statuses=None):
         }
         for row in rows
     ]
-    table = pa.Table.from_pylist(values, schema=schema)
     statuses = statuses or {}
     ids = sorted({row["result_id"] for row in values})
     metadata = {str(id): {"status": statuses.get(id, "complete")} for id in ids}
@@ -34,13 +33,21 @@ def publish_events(db, rows, *, statuses=None):
         schema,
         metadata={b"apitofsim:executions": json.dumps(metadata).encode()},
     ) as writer:
-        writer.write_table(table)
-    for id in ids:
+        # Scoped readers use execution batch ranges; mirror the recorder's layout.
+        for id in ids:
+            writer.write_batch(
+                pa.RecordBatch.from_pylist(
+                    [row for row in values if row["result_id"] == id], schema=schema
+                )
+            )
+    for batch_start, id in enumerate(ids):
         db.db.execute(
-            "update event_execution set recorded=true,status=?,event_count=? where result_id=?",
+            "update event_execution set recorded=true,status=?,event_count=?,"
+            "batch_start=?,batch_count=1 where result_id=?",
             [
                 statuses.get(id, "complete"),
                 sum(row["result_id"] == id for row in values),
+                batch_start,
                 id,
             ],
         )

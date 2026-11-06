@@ -15,6 +15,8 @@ dependencies = [
     "starlette>=1.4.1",
     "starlette-htmx>=0.1.1",
     "uvicorn[standard]>=0.52.1",
+    # Arrow sidecar readers require true shared file locks on Windows.
+    "portalocker[win32]>=4.4.2; sys_platform == 'win32'",
     # No native window on Linux: pywebview needs PyGObject/WebKitGTK there,
     # which cannot be frozen reliably, so we open the system browser instead.
     "pywebview>=6.2.1; sys_platform != 'linux'",

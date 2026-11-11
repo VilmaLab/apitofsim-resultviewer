@@ -70,7 +70,7 @@ class ExecutionTree:
         result, node = map(int, scope.split(":"))
         return self.species[self.nodes[result, node]]
 
-    def classify(self, members, events):
+    def classify(self, members, events, *, validate=True):
         histories = events.group_by("realization_id").agg(
             pl.col("id").last().alias("terminal_event_id"),
             pl.col("type").last(),
@@ -78,8 +78,12 @@ class ExecutionTree:
             pl.col("transition_index").last(),
             pl.col("next_particle_index").last(),
             (
-                (pl.col("provenance") == "persisted")
-                & pl.col("continuity_valid").fill_null(False)
+                (
+                    (pl.col("provenance") == "persisted")
+                    & pl.col("continuity_valid").fill_null(False)
+                )
+                if validate
+                else pl.lit(True)
             )
             .all()
             .alias("valid"),

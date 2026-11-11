@@ -1,12 +1,13 @@
-"""Small, explicit IPC fixtures for query tests, independent of the simulator."""
+"""Small, explicit event archives for query tests, independent of the simulator."""
 
 import json
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 from apitofsim.recording import EVENT_SCHEMA
 
 
-def publish_events(db, rows, *, statuses=None):
+def publish_events(db, rows, *, statuses=None, format="arrow"):
     db._release_event_reader()
     identity, generation, _ = db.db.execute(
         "select archive_id,generation,file_size from event_recording_state"
@@ -28,18 +29,25 @@ def publish_events(db, rows, *, statuses=None):
     statuses = statuses or {}
     ids = sorted({row["result_id"] for row in values})
     metadata = {str(id): {"status": statuses.get(id, "complete")} for id in ids}
-    with pa.ipc.new_file(
-        str(db.events_path),
-        schema,
-        metadata={b"apitofsim:executions": json.dumps(metadata).encode()},
-    ) as writer:
-        # Scoped readers use execution batch ranges; mirror the recorder's layout.
-        for id in ids:
-            writer.write_batch(
-                pa.RecordBatch.from_pylist(
-                    [row for row in values if row["result_id"] == id], schema=schema
+    if format == "parquet":
+        db.events_path = db.events_path.with_suffix(".parquet")
+        schema = schema.with_metadata(
+            {**schema.metadata, b"apitofsim:generation": str(generation + 1).encode()}
+        )
+        pq.write_table(pa.Table.from_pylist(values, schema=schema), db.events_path)
+    else:
+        with pa.ipc.new_file(
+            str(db.events_path),
+            schema,
+            metadata={b"apitofsim:executions": json.dumps(metadata).encode()},
+        ) as writer:
+            # Scoped readers use execution batch ranges; mirror the recorder's layout.
+            for id in ids:
+                writer.write_batch(
+                    pa.RecordBatch.from_pylist(
+                        [row for row in values if row["result_id"] == id], schema=schema
+                    )
                 )
-            )
     for batch_start, id in enumerate(ids):
         db.db.execute(
             "update event_execution set recorded=true,status=?,event_count=?,"
@@ -52,8 +60,12 @@ def publish_events(db, rows, *, statuses=None):
             ],
         )
     db.db.execute(
-        "update event_recording_state set generation=?,file_size=?",
-        [generation + 1, db.events_path.stat().st_size],
+        "update event_recording_state set schema_version=?,generation=?,file_size=?",
+        [
+            2 if format == "parquet" else 1,
+            generation + 1,
+            db.events_path.stat().st_size,
+        ],
     )
     db._ensure_event_reader()
 

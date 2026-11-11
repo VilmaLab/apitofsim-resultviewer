@@ -1,5 +1,6 @@
 """Cohort selection, controls, and rendering for one Explorer session."""
 
+from functools import lru_cache
 from html import escape
 import json
 from math import isfinite
@@ -20,7 +21,8 @@ from .controls import (
     group,
     prepare_toolbar,
 )
-from .data import EVENT_TYPES, events_for, load_data, select_realizations
+from .data import EVENT_TYPES, events_for, load_histories, select_realizations
+from .data import load_overview as load_data
 from .details import render_choices, render_details
 from .escapes import EscapeGroups
 from .layout import (
@@ -93,16 +95,21 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if pathway_mode
         else realizations.with_row_index("realization_number", offset=1)
     )
-    # Count once per session; subsequent budget checks only touch realizations.
-    realizations = realizations.join(
-        events.group_by("realization_id").agg(
-            (pl.col("type") == "collision").cast(pl.UInt64).sum().alias("collisions")
-        ),
-        left_on="id",
-        right_on="realization_id",
-        how="left",
-        maintain_order="left",
-    ).with_columns(pl.col("collisions").fill_null(0))
+    sparse = "collisions" in realizations.columns
+    if not sparse:
+        # Count once per session; subsequent budget checks only touch realizations.
+        realizations = realizations.join(
+            events.group_by("realization_id").agg(
+                (pl.col("type") == "collision")
+                .cast(pl.UInt64)
+                .sum()
+                .alias("collisions")
+            ),
+            left_on="id",
+            right_on="realization_id",
+            how="left",
+            maintain_order="left",
+        ).with_columns(pl.col("collisions").fill_null(0))
     collision_realizations = int(
         (
             realizations["collisions"].sort(descending=True).cum_sum() <= MAX_COLLISIONS
@@ -129,17 +136,35 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     escapes = EscapeGroups(
         events, cluster, tree, root_name=escape_name.split(" → ")[-1]
     )
-    events = escapes.annotate(events)
-    events = (
-        events.join(
-            pathways.drop("charged_products", strict=False),
-            on="pathway_id",
-            how="left",
-            maintain_order="left",
+
+    def annotate_events(frame):
+        return (
+            escapes.annotate(frame)
+            .join(
+                pathways.drop("charged_products", strict=False),
+                on="pathway_id",
+                how="left",
+                maintain_order="left",
+            )
+            .rename({"pathway": "event_pathway"})
+            .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
         )
-        .rename({"pathway": "event_pathway"})
-        .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
-    )
+
+    @lru_cache(maxsize=2)
+    def histories(realization_ids, event_ids=None):
+        return annotate_events(
+            load_histories(
+                db,
+                experiment,
+                cluster,
+                regions,
+                realization_ids,
+                tree=bool(tree),
+                ids=event_ids,
+            )
+        )
+
+    events = annotate_events(events)
     fragmentation_names = (
         events.filter(pl.col("type") == "fragmentation")["event_pathway"]
         .unique()
@@ -442,10 +467,38 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             else chosen.filter(pl.col("id") == state["selected"])
         )
         selected_events = events_for(selection_events, selected)
+        if sparse and not selected.is_empty():
+            selected_events = histories(tuple(selected["id"])).join(
+                selected.select(
+                    pl.col("id").alias("realization_id"), "realization_number"
+                ),
+                on="realization_id",
+                how="left",
+                maintain_order="left",
+            )
+            selected_events = group_events(
+                selected_events, state["grouped"] and not pathway_mode
+            )
         if state["candidates"]:
             candidates = selection_events.filter(
                 pl.col("id").is_in(state["candidates"])
             )
+            if sparse:
+                candidates = (
+                    histories(
+                        tuple(candidates["realization_id"].unique()),
+                        tuple(state["candidates"]),
+                    )
+                    .filter(pl.col("id").is_in(state["candidates"]))
+                    .join(
+                        chosen.select(
+                            pl.col("id").alias("realization_id"), "realization_number"
+                        ),
+                        on="realization_id",
+                        how="left",
+                        maintain_order="left",
+                    )
+                )
             ui.details.text = render_choices(
                 candidates, enabled(ui.summarise_motion), enabled(ui.summarise_energy)
             )
@@ -528,7 +581,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     set_selection(rid, event_id)
                     break
         elif action == "inspect" and state["selected"] is not None:
-            history = events.filter(pl.col("realization_id") == state["selected"])
+            history = (
+                histories((state["selected"],))
+                if sparse
+                else events.filter(pl.col("realization_id") == state["selected"])
+            )
             for event_id in history["id"]:
                 if str(event_id) == event:
                     set_selection(state["selected"], event_id)
@@ -543,6 +600,16 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if state["selected"] not in chosen_ids:
             state["selected"] = state["event"] = None
         chosen_events = events_for(events, chosen)
+        if (
+            sparse
+            and not chosen.is_empty()
+            and chosen["collisions"].sum() <= MAX_COLLISIONS
+            and (
+                enabled(ui.event_options["collision"])
+                or enabled(ui.event_options["rejected_collision"])
+            )
+        ):
+            chosen_events = histories(tuple(chosen["id"]))
         chosen_events = chosen_events.join(
             chosen.select(
                 pl.col("id").alias("realization_id"),
@@ -561,7 +628,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if tree
             else pl.col("fate").is_in(["Incomplete", "Ambiguous"])
         ).height
-        clamped = chosen_events["z_clamped"].sum()
+        clamped = (
+            chosen["clamped_events"].sum()
+            if sparse
+            else chosen_events["z_clamped"].sum()
+        )
         collision_count = chosen["collisions"].sum()
         collision_notice = ""
         if collision_count > MAX_COLLISIONS:
@@ -658,12 +729,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if pathway_mode
             else {fate_names[i] for i in ui.fate.active}
         )
-        available_events = events_for(
-            events,
+        available_members = (
             selected_cohort()
             if pathway_mode
-            else realizations.filter(pl.col("fate").is_in(selected_fates)),
+            else realizations.filter(pl.col("fate").is_in(selected_fates))
         )
+        available_events = events_for(events, available_members)
         kinds = [
             "init",
             "collision",
@@ -708,7 +779,16 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     matches &= rejected
                 elif separated:
                     matches &= ~rejected
-                available = not available_events.filter(matches).is_empty()
+                if sparse:
+                    rejected_count = available_members["rejected_collisions"].sum()
+                    count = available_members["collisions"].sum()
+                    if kind == "rejected_collision":
+                        count = rejected_count
+                    elif separated:
+                        count -= rejected_count
+                    available = count > 0
+                else:
+                    available = not available_events.filter(matches).is_empty()
             elif kind in EVENT_TYPES:
                 available = not available_events.filter(
                     pl.col("type") == kind
@@ -791,15 +871,13 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             state["auto_cdf"] = enabled(ui.show_bars) and not regional
             ui.show_cdf.active = [0]
 
-    def assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups):
-        """Position the cohort and assemble shared-axis plots and selection notices."""
-        nonlocal selection_events, collision_coordinates, collision_panels
+    def group_events(frame, grouped):
         rejected = (
             pl.col("accepted").eq(False).fill_null(False)
-            if "accepted" in chosen_events.columns
+            if "accepted" in frame.columns
             else pl.lit(False)
         )
-        chosen_events = chosen_events.with_columns(
+        return frame.with_columns(
             pl.when(
                 pl.lit(enabled(ui.separate_rejected))
                 & (pl.col("type") == "collision")
@@ -826,6 +904,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 else "escape_daughter"
             ).alias("event_escape"),
         )
+
+    def assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups):
+        """Position the cohort and assemble shared-axis plots and selection notices."""
+        nonlocal selection_events, collision_coordinates, collision_panels
+        chosen_events = group_events(chosen_events, grouped)
         selection_events = chosen_events
         mapped_regions = coordinate_regions(
             regions,
@@ -846,7 +929,15 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         )
         population_events = (
             position_events(
-                chosen_events, mapped_regions, ui.mode.value, terminal_slots=False
+                chosen_events.with_columns(
+                    pl.col("population_z").clip(lower_bound=0).alias("z"),
+                    pl.col("population_t").alias("t"),
+                )
+                if "population_z" in chosen_events.columns
+                else chosen_events,
+                mapped_regions,
+                ui.mode.value,
+                terminal_slots=False,
             )
             if enabled(ui.show_population)
             else None
@@ -884,7 +975,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 )
                 shared_y = Range1d(lo - 0.5, hi + 0.5)
             else:
-                maximum = events_for(events, population)["radial"].max() or 0
+                maximum = (
+                    population["max_radial"].max()
+                    if sparse
+                    else events_for(events, population)["radial"].max()
+                ) or 0
                 shared_y = Range1d(0, maximum * 1000 * 1.05 if maximum else 1)
         max_position = positioned["position"].max()
         if spatial:

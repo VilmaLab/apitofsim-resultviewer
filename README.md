@@ -41,8 +41,8 @@ apitofresview
 ```
 
 If the run has recorded events, keep the matching `experiments.events.arrow`
-sidecar next to `experiments.duckdb` when copying, moving, or serving the
-results. Summary and spectrogram views work for runs without recordings.
+or `experiments.events.parquet` sidecar next to `experiments.duckdb` when copying,
+moving, or serving the results. The database identifies the required format. Summary and spectrogram views work for runs without recordings.
 For legacy databases with relational event tables, use a compatible older
 viewer or migrate the database explicitly.
 

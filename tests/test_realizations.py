@@ -22,8 +22,8 @@ from apitofresview.plotting.explorer import build_document
 from apitofresview.plotting.explorer import data as explorer_data
 
 
-@pytest.fixture
-def outcome_app(tmp_path, monkeypatch):
+@pytest.fixture(params=["arrow", "parquet"])
+def outcome_app(tmp_path, monkeypatch, request):
     path = tmp_path / "outcomes.duckdb"
     db = ExperimentDatabase(path)
     db.create_tables()
@@ -56,6 +56,7 @@ def outcome_app(tmp_path, monkeypatch):
             event(12, 0, 0, "init", 0, 0),
         ],
         statuses={10: "cancelled"},
+        format=request.param,
     )
     db.close()
     monkeypatch.setattr(events, "get_geometry", lambda *args: [Q_(1, "mm")] * 5)
@@ -159,10 +160,12 @@ def test_required_sidecar_has_a_distinct_open_error(outcome_app, tmp_path, missi
     path = tmp_path / "copy.duckdb"
     copyfile(source.with_name("outcomes.duckdb"), path)
     if missing:
-        with pytest.raises(FileNotFoundError, match="matching .events.arrow sidecar"):
+        with pytest.raises(
+            FileNotFoundError, match=f"matching .events{source.suffix} sidecar"
+        ):
             webapp.create_app(path)
     else:
-        path.with_suffix(".events.arrow").write_bytes(b"wrong archive")
+        path.with_suffix(f".events{source.suffix}").write_bytes(b"wrong archive")
         with pytest.raises(ValueError, match="sidecar identity/size"):
             webapp.create_app(path)
 

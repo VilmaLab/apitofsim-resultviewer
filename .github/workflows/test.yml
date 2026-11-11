@@ -11,10 +11,17 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Match uv.lock's Playwright version and use its preinstalled OS libraries.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d
     steps:
       # Actions pinned to full commit SHAs (supply-chain hardening). Version
       # tags for reference: checkout@v4, setup-uv@v6.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
 
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
@@ -26,7 +33,7 @@ jobs:
 
       # The browser tests drive a real Chromium via pytest-playwright.
       - name: Install Playwright browsers
-        run: uv run --locked playwright install --with-deps chromium
+        run: uv run --locked playwright install chromium
 
       - name: Run tests
         run: uv run --locked pytest

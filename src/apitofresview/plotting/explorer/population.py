@@ -64,6 +64,7 @@ def history_species(history, terminal_id, start, cluster, labels, products, tree
             or not isfinite(x)
             or (
                 tree
+                and "provenance" in event
                 and (
                     event["provenance"] != "persisted" or not event["continuity_valid"]
                 )

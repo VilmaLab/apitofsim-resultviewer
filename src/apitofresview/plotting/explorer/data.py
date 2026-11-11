@@ -39,18 +39,56 @@ def make_regions(boundaries):
     )
 
 
-def load_data(db, experiment: int, cluster: int):
-    """Return realization, event, pathway and region frames for one cohort."""
-    mode = simulation_mode(db, experiment)
-    pathway_mode = mode == "PATHWAY_AT_A_TIME"
-    tree_mode = mode == "CLUSTER_TREE"
-    events = (
-        (
-            db.tree_events_query(run_id=experiment, parent=cluster)
-            if tree_mode
-            else db.events_query(run_id=experiment, parent=cluster)
+SUMMARY_COLUMNS = ("collisions", "rejected_collisions", "clamped_events", "max_radial")
+
+
+def _event_frame(
+    db, experiment, cluster, tree_mode, *, summary=False, members=None, ids=None
+):
+    query = (
+        db.tree_events_query(run_id=experiment, parent=cluster)
+        if tree_mode
+        else db.events_query(run_id=experiment, parent=cluster)
+    )
+    if members is not None:
+        query = query.filter(
+            duckdb.ColumnExpression("realization_id").isin(
+                *(duckdb.ConstantExpression(rid) for rid in members)
+            )
         )
-        .pl()
+    if summary:
+        partition = "partition by realization_id"
+        history = f"{partition} order by event_index rows unbounded preceding"
+        # Prefix maxima preserve population timing when hidden collisions move back.
+        # Keep the final event so collision-only/interrupted histories remain visible.
+        validity = (
+            f", bool_and(provenance = 'persisted' and coalesce(continuity_valid, false)) over ({partition}) as history_valid"
+            if tree_mode
+            else ""
+        )
+        query = query.select(f"""
+            * exclude (postime, velocity, omega, rot_energy, vibrational_energy, theta, u_norm),
+            count(*) filter (where event_type = 'collision') over ({partition}) as collisions,
+            count(*) filter (where event_type = 'collision' and accepted = false) over ({partition}) as rejected_collisions,
+            count(*) filter (where z < 0) over ({partition}) as clamped_events,
+            max(sqrt(x*x + y*y)) over ({partition}) as max_radial,
+            max(event_index) over ({partition}) as last_index,
+            max(z) over ({history}) as population_z,
+            max(t) over ({history}) as population_t
+            {validity}
+        """).filter(
+            "event_type not in ('collision', 'postcollision') or event_index = last_index"
+        )
+    if ids is not None:
+        query = query.filter(
+            duckdb.ColumnExpression("event_id").isin(
+                *(duckdb.ConstantExpression(id) for id in ids)
+            )
+        )
+    # One sort, after reducing to the requested rows and columns. Tree queries
+    # already guarantee numeric event order; filtering does not change it.
+    events = (
+        query.pl()
         .rename({"event_id": "id", "event_type": "type"})
         .with_columns(
             pl.col("type").cast(pl.String),
@@ -59,6 +97,40 @@ def load_data(db, experiment: int, cluster: int):
         )
         .with_columns(pl.col("z").clip(lower_bound=0))
     )
+    if tree_mode:
+        if summary:
+            events = events.with_columns(
+                pl.col("history_valid").alias("continuity_valid")
+            )
+        names = dict(db.db.execute("select id, common_name from cluster").fetchall())
+        events = events.with_columns(
+            pl.col("current_cluster_id")
+            .replace_strict(names, default=None, return_dtype=pl.String)
+            .alias("current_cluster_name")
+        )
+    return events
+
+
+def load_overview(db, experiment, cluster):
+    """Load sparse cohort events and per-realization totals, without motion fields."""
+    return load_data(db, experiment, cluster, summary=True)
+
+
+def load_histories(db, experiment, cluster, regions, members, *, tree=False, ids=None):
+    """Materialize only requested histories (or individual candidate event rows)."""
+    return preprocess_events(
+        _event_frame(db, experiment, cluster, tree, members=members, ids=ids),
+        regions,
+        sorted_events=tree,
+    )
+
+
+def load_data(db, experiment: int, cluster: int, *, summary=False):
+    """Return realization, event, pathway and region frames for one cohort."""
+    mode = simulation_mode(db, experiment)
+    pathway_mode = mode == "PATHWAY_AT_A_TIME"
+    tree_mode = mode == "CLUSTER_TREE"
+    events = _event_frame(db, experiment, cluster, tree_mode, summary=summary)
     if events.is_empty():
         raise NoRecordedEventsError(NO_RECORDED_EVENTS)
     realizations = (
@@ -150,7 +222,7 @@ def load_data(db, experiment: int, cluster: int):
             for v in lengths_to_cumulative_lengths(get_geometry(db, experiment))
         )
     )
-    events = preprocess_events(events, regions)
+    events = preprocess_events(events, regions, sorted_events=tree_mode and not summary)
     cluster_name, cluster_charge = (
         db.clusters_query()
         .filter(duckdb.ColumnExpression("id") == duckdb.ConstantExpression(cluster))
@@ -158,12 +230,6 @@ def load_data(db, experiment: int, cluster: int):
         .fetchone()
     )
     if tree_mode:
-        names = dict(db.db.execute("select id, common_name from cluster").fetchall())
-        events = events.with_columns(
-            pl.col("current_cluster_id")
-            .replace_strict(names, default=None, return_dtype=pl.String)
-            .alias("current_cluster_name")
-        )
         tree = ExecutionTree.load(db, experiment, cluster, pathways)
         classified = tree.classify(realizations, events)
     else:
@@ -182,6 +248,14 @@ def load_data(db, experiment: int, cluster: int):
                 }
             ),
             on="simulated_pathway_id",
+            how="left",
+            maintain_order="left",
+        )
+    if summary:
+        classified = classified.join(
+            events.group_by("realization_id").agg(pl.col(*SUMMARY_COLUMNS).first()),
+            left_on="id",
+            right_on="realization_id",
             how="left",
             maintain_order="left",
         )
@@ -227,7 +301,7 @@ def pair_fragmentations(events):
     return _pair_states(events, "fragmentation", valid)
 
 
-def preprocess_events(events, regions):
+def preprocess_events(events, regions, *, sorted_events=False):
     """Assign half-open regions, including the machine's final endpoint."""
     region = pl.lit(None, dtype=pl.Int64)
     last = regions.height - 1
@@ -236,9 +310,9 @@ def preprocess_events(events, regions):
             (pl.col("z") < hi) | ((index == last) & (pl.col("z") == hi))
         )
         region = pl.when(inside).then(pl.lit(index)).otherwise(region)
-    events = events.sort(
-        "result_id", "realization_index", "event_index"
-    ).with_row_index("event_number", offset=1)
+    if not sorted_events:
+        events = events.sort("result_id", "realization_index", "event_index")
+    events = events.with_row_index("event_number", offset=1)
     return pair_fragmentations(pair_collisions(events)).with_columns(
         region.alias("region"),
         (pl.col("x").pow(2) + pl.col("y").pow(2)).sqrt().alias("radial"),

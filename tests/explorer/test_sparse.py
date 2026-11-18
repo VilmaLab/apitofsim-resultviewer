@@ -3,11 +3,16 @@
 import json
 
 import polars as pl
+import pytest
+from apitofsim.workflow.db import ExperimentDatabase
 from bokeh.document import Document
 from bokeh.models import Div
 from polars.testing import assert_frame_equal
 
+from tests.arrow_fixtures import event as recorded_event, publish_events
+
 from apitofresview.plotting.explorer import data, session
+from apitofresview.plotting.explorer import _overview
 
 from . import test_tree
 from .helpers import collision_cohort
@@ -31,6 +36,75 @@ def test_overview_matches_tree_histories(tree_database):
         ),
         events.filter(pl.col("realization_id") == members["id"][0]),
     )
+
+
+@pytest.mark.parametrize("ordered", [True, False])
+def test_parquet_tree_overview_matches_sql(tmp_path, monkeypatch, ordered):
+    path = tmp_path / "tree.duckdb"
+    with ExperimentDatabase(path) as db:
+        db.create_tables()
+        db.db.execute("""
+            insert into cluster (id,common_name,charge) values (1,'Parent',-1),(2,'Product',-1);
+            insert into pathway values (7,1,2,2);
+            insert into experiment_config (id) values (1);
+            insert into experiment_run (id,experiment_config_id,simulation_mode) values (1,1,'CLUSTER_TREE');
+            insert into cluster_tree_experiment_result (id,experiment_run_id,cluster_id)
+                values (10,1,1),(20,1,1);
+            insert into cluster_tree_node values (10,0,1),(10,1,2),(20,0,1);
+            insert into cluster_tree_transition values (10,0,0,7,1);
+        """)
+        db.begin_execution(1, 1, None, [7], result_id=10, recorded=True)
+        db.begin_execution(1, 1, None, [], result_id=20, recorded=True)
+        rows = [
+            recorded_event(10, 0, 0, "init", 0, 0),
+            recorded_event(10, 0, 1, "collision", 4, 4, x=3, y=4, accepted=1),
+            recorded_event(10, 0, 2, "postcollision", 4, 4),
+            recorded_event(10, 0, 3, "collision", 3, -1, accepted=0),
+            recorded_event(
+                10,
+                0,
+                4,
+                "fragmentation",
+                3,
+                1,
+                transition_index=0,
+                next_particle_index=1,
+            ),
+            recorded_event(10, 0, 5, "postfragmentation", 3, 1, particle_index=1),
+            recorded_event(10, 0, 6, "escape", 3, 2, particle_index=1),
+            recorded_event(10, 1, 0, "init", 0, 0),
+            recorded_event(10, 1, 1, "collision", 1, 1, particle_index=3, accepted=1),
+            recorded_event(10, 1, 2, "postcollision", 1, 1),
+            recorded_event(10, 2, 0, "init", 0, 0),
+            recorded_event(
+                10,
+                2,
+                1,
+                "fragmentation",
+                1,
+                1,
+                transition_index=0,
+                next_particle_index=0,
+            ),
+            recorded_event(10, 2, 2, "escape", 2, 2),
+            recorded_event(20, 0, 0, "init", 0, 0),
+            recorded_event(20, 0, 1, "escape", 3, 3),
+        ]
+        if not ordered:
+            rows[1], rows[2] = rows[2], rows[1]
+        publish_events(db, rows, format="parquet")
+
+    with ExperimentDatabase(path, readonly=True) as db:
+        monkeypatch.setattr(data, "get_geometry", lambda *_: None)
+        monkeypatch.setattr(
+            data, "lengths_to_cumulative_lengths", lambda *_: (0, 1, 2, 3, 4, 5)
+        )
+        expected = data.load_overview(db, 1, 1)
+        monkeypatch.setattr(_overview, "MIN_STREAM_EVENTS", 1)
+        monkeypatch.setattr(_overview, "BATCH_SIZE", 2)
+        assert (_overview.stream_tree_overview(db, 1, 1) is not None) == ordered
+        for fast, sql in zip(data.load_overview(db, 1, 1), expected, strict=True):
+            assert_frame_equal(fast, sql, check_exact=True)
 
 
 def test_sparse_session_loads_complete_details_once(monkeypatch):

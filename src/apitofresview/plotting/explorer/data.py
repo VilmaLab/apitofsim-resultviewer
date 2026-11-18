@@ -15,6 +15,7 @@ from apitofsim.plotting.events import (
 from apitofresview.modes import simulation_mode
 from apitofresview.recordings import NO_RECORDED_EVENTS
 
+from ._overview import MOTION_COLUMNS, SUMMARY_COLUMNS, stream_tree_overview
 from .tree import ExecutionTree
 
 EVENT_TYPES = ("init", "collision", "fragmentation", "escape")
@@ -39,10 +40,7 @@ def make_regions(boundaries):
     )
 
 
-SUMMARY_COLUMNS = ("collisions", "rejected_collisions", "clamped_events", "max_radial")
-
-
-def _event_frame(
+def _event_query(
     db, experiment, cluster, tree_mode, *, summary=False, members=None, ids=None
 ):
     query = (
@@ -67,7 +65,7 @@ def _event_frame(
             else ""
         )
         query = query.select(f"""
-            * exclude (postime, velocity, omega, rot_energy, vibrational_energy, theta, u_norm),
+            * exclude ({MOTION_COLUMNS}),
             count(*) filter (where event_type = 'collision') over ({partition}) as collisions,
             count(*) filter (where event_type = 'collision' and accepted = false) over ({partition}) as rejected_collisions,
             count(*) filter (where z < 0) over ({partition}) as clamped_events,
@@ -85,11 +83,31 @@ def _event_frame(
                 *(duckdb.ConstantExpression(id) for id in ids)
             )
         )
+    return query
+
+
+def _event_frame(
+    db, experiment, cluster, tree_mode, *, summary=False, members=None, ids=None
+):
+    events = (
+        stream_tree_overview(db, experiment, cluster)
+        if tree_mode and summary and members is None and ids is None
+        else None
+    )
+    if events is None:
+        events = _event_query(
+            db,
+            experiment,
+            cluster,
+            tree_mode,
+            summary=summary,
+            members=members,
+            ids=ids,
+        ).pl()
     # One sort, after reducing to the requested rows and columns. Tree queries
     # already guarantee numeric event order; filtering does not change it.
     events = (
-        query.pl()
-        .rename({"event_id": "id", "event_type": "type"})
+        events.rename({"event_id": "id", "event_type": "type"})
         .with_columns(
             pl.col("type").cast(pl.String),
             pl.col("t", "x", "y", "z").cast(pl.Float64),

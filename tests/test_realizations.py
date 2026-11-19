@@ -3,6 +3,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from shutil import copyfile
+from threading import Barrier
 
 import duckdb
 
@@ -11,6 +12,7 @@ from apitofsim.api import Q_
 from apitofsim.plotting import events
 from apitofsim.workflow.db import ExperimentDatabase
 from bokeh.document import Document
+from bokeh.server.request import ServerRequest
 from mplbed.asgi import MplbedMiddleware
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -139,6 +141,39 @@ def test_tree_explorer_explains_missing_execution_tree(outcome_app, monkeypatch)
     assert (
         doc.roots[0].text == "No recorded cluster-tree executions for this selection."
     )
+
+
+def test_concurrent_explorer_sessions_have_independent_connections(
+    outcome_app, monkeypatch
+):
+    parent_db = outcome_app.state.db
+    path = parent_db.events_path.with_name("outcomes.duckdb")
+    ready_to_fetch = Barrier(2)
+    connections = []
+
+    def read_events(session_db, doc):
+        connections.append(session_db)
+        result = session_db.db.execute("select count(*) from _event_archive")
+        ready_to_fetch.wait(timeout=10)
+        assert result.fetchone() == (5,)
+
+    monkeypatch.setattr(webapp, "explorer_bokeh", read_events)
+    app = webapp.create_app(path, events_filename=parent_db.events_path)
+    core = next(route.app.core for route in app.routes if route.name == "bokeh")
+
+    async def run_sessions():
+        async with app.router.lifespan_context(app):
+            await core.start()
+            context = core.applications["/explorer"]
+            request = ServerRequest("GET", "/explorer", "/explorer")
+            await asyncio.gather(
+                *(core.create_session(context, request) for _ in range(2))
+            )
+            assert len({app.state.db.db, *(db.db for db in connections)}) == 3
+            assert all(not db.closed for db in connections)
+        assert all(db.closed for db in connections)
+
+    asyncio.run(run_sessions())
 
 
 @pytest.mark.parametrize("run,cluster", [(1, 2), (2, 2), (3, 2), (99, 1)])

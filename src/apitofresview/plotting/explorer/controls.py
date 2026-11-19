@@ -725,6 +725,63 @@ def prepare_toolbar(plot):
     plot.add_tools(FullscreenTool())
 
 
+def realization_range_bridge(doc, slider):
+    """Send the latest completed range, or the range held still for 100 ms."""
+    slider.syncable = False
+    bridge = Div(visible=False, name="realization_range_request")
+    doc.js_on_event(
+        DocumentReady,
+        CustomJS(
+            args=dict(slider=slider, bridge=bridge),
+            code="""
+            const view = Bokeh.index.find_one(slider);
+            if (!view || view.realizationRangeConnected) return;
+            view.realizationRangeConnected = true;
+
+            let timer;
+            let sent = [...slider.value];
+            let pending;
+            let sequence = 0;
+            let inFlight = false;
+
+            function sendLatest() {
+                if (inFlight || pending == null) return;
+                const range = pending;
+                pending = undefined;
+                if (range.every((value, i) => value === sent[i])) return;
+                sent = range;
+                inFlight = true;
+                bridge.text = JSON.stringify([++sequence, ...range]);
+            }
+
+            function commit() {
+                clearTimeout(timer);
+                pending = [...slider.value];
+                sendLatest();
+            }
+
+            bridge.properties.tags.change.connect(() => {
+                if (bridge.tags[0] !== sequence) return;
+                inFlight = false;
+                sendLatest();
+            });
+            slider.properties.value.change.connect(() => {
+                pending = undefined;
+                clearTimeout(timer);
+                timer = setTimeout(commit, 100);
+            });
+            // A release can return to the previous value_throttled after a
+            // linger sent a different range. Listen to noUiSlider's change.
+            if (view._noUiSlider != null)
+                view._noUiSlider.on("change.realizationRange", commit);
+            else
+                slider.properties.value_throttled.change.connect(commit);
+            """,
+        ),
+    )
+    return bridge
+
+
 def label_facets(doc, widget, labels):
     """Keep pathway identities while presenting charged daughters with hover context."""
     callback = CustomJS(

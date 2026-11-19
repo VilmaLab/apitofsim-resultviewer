@@ -20,8 +20,15 @@ from .controls import (
     label_facets,
     group,
     prepare_toolbar,
+    realization_range_bridge,
 )
-from .data import EVENT_TYPES, events_for, load_histories, select_realizations
+from .data import (
+    EVENT_TYPES,
+    CohortHistories,
+    events_for,
+    load_histories,
+    select_realizations,
+)
 from .data import load_overview as load_data
 from .details import history_page, render_choices, render_details
 from .escapes import EscapeGroups
@@ -150,8 +157,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             .with_columns(pl.col("event_pathway").fill_null("Unknown fragmentation"))
         )
 
-    @lru_cache(maxsize=2)
-    def histories(realization_ids, event_ids=None):
+    def load_annotated_histories(realization_ids, event_ids=None):
         return annotate_events(
             load_histories(
                 db,
@@ -164,6 +170,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             )
         )
 
+    histories = lru_cache(maxsize=2)(load_annotated_histories)
+    cohort_histories = CohortHistories(load_annotated_histories)
     events = annotate_events(events)
     fragmentation_names = (
         events.filter(pl.col("type") == "fragmentation")["event_pathway"]
@@ -290,6 +298,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     if pathway_mode:
         ui.selector.title = "Realization numbers per pathway (inclusive)"
         ui.selector.disabled = realizations.is_empty()
+    applied_range = tuple(ui.selector.value)
     selection_updates = []
     chosen = realizations.head(0)
     selection_events = events.head(0)
@@ -429,12 +438,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         lambda attr, old, new: apply_sidebars(ui.fullscreen_state.text == "full"),
     )
 
+    def realization_bounds():
+        return applied_range if enabled(ui.show_pager) else (1, int(ui.selector.end))
+
     def selected_cohort():
-        lo, hi = (
-            (int(v) for v in ui.selector.value)
-            if enabled(ui.show_pager)
-            else (1, int(ui.selector.end))
-        )
+        lo, hi = realization_bounds()
         if pathway_mode:
             return realizations.filter(
                 pl.col("simulated_pathway_id").is_in(
@@ -627,7 +635,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if state["selected"] not in chosen_ids:
             state["selected"] = state["event"] = None
             state["detail_page"] = None
-        chosen_events = events_for(events, chosen)
         selection_has_histories = not sparse
         if (
             sparse
@@ -638,8 +645,10 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 or enabled(ui.event_options["rejected_collision"])
             )
         ):
-            chosen_events = histories(tuple(chosen["id"]))
+            chosen_events = cohort_histories(tuple(chosen["id"]))
             selection_has_histories = True
+        else:
+            chosen_events = events_for(events, chosen)
         chosen_events = chosen_events.join(
             chosen.select(
                 pl.col("id").alias("realization_id"),
@@ -755,12 +764,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             "Accepted collisions" if separated else "Collision"
         ]
         selected_fates = (
-            set(selected_cohort()["fate"])
+            set(chosen["fate"])
             if pathway_mode
             else {fate_names[i] for i in ui.fate.active}
         )
         available_members = (
-            selected_cohort()
+            chosen
             if pathway_mode
             else realizations.filter(pl.col("fate").is_in(selected_fates))
         )
@@ -984,7 +993,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if enabled(ui.fate_facets) and not pathway_mode
             else [(chosen, "All selected pathways", None)]
         )
-        population = selected_cohort() if pathway_mode else chosen
         if pathway_mode:
             rows = [
                 (
@@ -997,18 +1005,13 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         shared_y = None
         if pathway_mode and ui.layout.value in ("realization", "radial"):
             if ui.layout.value == "realization":
-                lo = int(ui.selector.value[0]) if enabled(ui.show_pager) else 1
-                hi = (
-                    int(ui.selector.value[1])
-                    if enabled(ui.show_pager)
-                    else int(ui.selector.end)
-                )
+                lo, hi = realization_bounds()
                 shared_y = Range1d(lo - 0.5, hi + 0.5)
             else:
                 maximum = (
-                    population["max_radial"].max()
+                    chosen["max_radial"].max()
                     if sparse
-                    else events_for(events, population)["radial"].max()
+                    else events_for(events, chosen)["radial"].max()
                 ) or 0
                 shared_y = Range1d(0, maximum * 1000 * 1.05 if maximum else 1)
         max_position = positioned["position"].max()
@@ -1113,7 +1116,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             denominator = None
             if pathway_mode:
                 # Rows follow the pathway selector, including empty cohorts.
-                denominator = population.filter(
+                denominator = chosen.filter(
                     pl.col("simulated_pathway_id") == pid
                 ).height
                 if members.is_empty():
@@ -1437,6 +1440,39 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     ui.sizing.on_change("value", sizing_changed)
     drag_bridge.on_change("text", dragged)
 
+    def apply_range(bounds):
+        nonlocal applied_range
+        if bounds != applied_range:
+            applied_range = bounds
+            if enabled(ui.show_pager):
+                render()
+
+    def selector_changed(attr, old, new):
+        apply_range(tuple(int(value) for value in new))
+
+    ui.selector.on_change("value", selector_changed)
+    if doc.session_context is not None:
+        range_bridge = realization_range_bridge(doc, ui.selector)
+        ui.frame.children.append(range_bridge)
+
+        def range_requested(attr, old, new):
+            try:
+                sequence, lo, hi = json.loads(new)
+            except TypeError, ValueError:
+                return
+            if (
+                type(sequence) is int
+                and type(lo) is int
+                and type(hi) is int
+                and ui.selector.start <= lo <= hi <= ui.selector.end
+            ):
+                try:
+                    apply_range((lo, hi))
+                finally:
+                    range_bridge.tags = [sequence]
+
+        range_bridge.on_change("text", range_requested)
+
     for widget in ui.event_options.values():
         widget.on_change("active", control_changed)
     for widget, property_name in [
@@ -1457,7 +1493,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         (ui.x_markers, "active"),
         (ui.show_bars, "active"),
         (ui.show_pager, "active"),
-        (ui.selector, "value"),
     ]:
         widget.on_change(property_name, control_changed)
     ui.summarise_motion.on_change("active", lambda attr, old, new: update_selection())

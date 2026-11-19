@@ -222,5 +222,41 @@ def test_sparse_pager_loads_collisions_within_budget(monkeypatch):
     assert source.data["type"].count("collision") == 4
     source.selected.indices = [source.data["id"].index(3)]
     assert loads == [(1, 2)]
+
+    slider = doc.select_one({"type": RangeSlider})
+    slider.value = (2, 3)
+    assert loads == [(1, 2), (3,)]
+    slider.value = (3, 3)
+    assert loads == [(1, 2), (3,)]
+    slider.value = (1, 1)
+    assert loads == [(1, 2), (3,), (1,)]
     pager.active = []
     assert collision.disabled
+
+
+def test_cohort_history_cache_preserves_order_and_numbering():
+    from .helpers import cohort, event
+
+    _, events, _, _ = cohort(
+        [1, 2, 10],
+        event(1, "escape", 1, 1, 5),
+        event(2, "escape", 2, 1, 5),
+        event(3, "escape", 10, 1, 5),
+    )
+    events = events.with_columns(pl.col("realization_id").cast(pl.String))
+
+    def load(ids):
+        return (
+            events.filter(pl.col("realization_id").is_in(ids))
+            .drop("event_number")
+            .with_row_index("event_number", offset=1)
+        )
+
+    histories = data.CohortHistories(load)
+    histories(("2", "10"))
+    assert_frame_equal(histories(("1", "2", "10")), load(("1", "2", "10")))
+    assert_frame_equal(histories(("2",)), load(("2",)))
+
+    uncached = data.CohortHistories(load, max_bytes=0)
+    uncached(("1",))
+    assert uncached.events is None

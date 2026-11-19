@@ -93,6 +93,41 @@ def serve_explorer(monkeypatch, frames, db=None, *, layout="viewport"):
         thread.join(timeout=10)
 
 
+def test_realization_range_linger_and_release(monkeypatch, page):
+    frames = cohort([1, 2, 3, 4], *(event(i, "escape", i, 1, 5) for i in range(1, 5)))
+    with serve_explorer(monkeypatch, frames) as url:
+        page.goto(url)
+        page.get_by_label("Realizations pager", exact=True).check()
+        expect(page.get_by_text("4 selected / 4 total realizations")).to_be_visible()
+        handle = page.locator(".noUi-handle-lower")
+        track = page.locator(".noUi-target")
+
+        def drag_one(direction):
+            box = handle.bounding_box()
+            x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + direction * track.bounding_box()["width"] / 3, y)
+            return x, y
+
+        drag_one(1)
+        # The plot changes while the pointer is still held down.
+        expect(page.get_by_text("3 selected / 4 total realizations")).to_be_visible()
+        page.mouse.up()
+        handle.press("ArrowRight")
+        expect(page.get_by_text("2 selected / 4 total realizations")).to_be_visible()
+        request = "Bokeh.documents[0].get_model_by_name('realization_range_request')"
+        # One linger and one keyboard change, with no duplicate on release.
+        page.wait_for_function(f"{request}.tags[0] === 2")
+
+        x, y = drag_one(-1)
+        expect(page.get_by_text("3 selected / 4 total realizations")).to_be_visible()
+        page.mouse.move(x, y)
+        page.mouse.up()
+        expect(page.get_by_text("2 selected / 4 total realizations")).to_be_visible()
+        page.wait_for_function(f"{request}.tags[0] === 4")
+
+
 @pytest.fixture
 def explorer_server(monkeypatch):
     frames = cohort(

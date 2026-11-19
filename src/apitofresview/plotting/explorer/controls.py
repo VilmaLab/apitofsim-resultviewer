@@ -9,6 +9,7 @@ from bokeh.models import (
     Button,
     CheckboxGroup,
     Column,
+    ColumnDataSource,
     CustomJS,
     Div,
     FullscreenTool,
@@ -74,6 +75,7 @@ class Controls:
     show_pager: CheckboxGroup
     selector: RangeSlider
     details: Div
+    detail_selection: ColumnDataSource
     summarise_motion: CheckboxGroup
     summarise_energy: CheckboxGroup
     show_rates: CheckboxGroup
@@ -281,6 +283,7 @@ def create_controls(
             )
         ],
     )
+    detail_selection = ColumnDataSource(data=dict(event=[], pair=[]))
     summarise_motion = checkbox("Summarise non-axial motion", True)
     summarise_motion.visible = False
     summarise_energy = checkbox("Summarise energy", True)
@@ -529,11 +532,25 @@ def create_controls(
         window.addEventListener('resize', update);
         document.addEventListener('fullscreenchange', update);
         observer.observe(document.getElementById('content') ?? document.body);
+        const jump = input => {
+            if (input?.validity.valid && Number.isInteger(input.valueAsNumber))
+                bridge.text = JSON.stringify(['page', input.valueAsNumber - 1]);
+        };
         // Layout changes rebuild the details view, so delegate from the stable frame.
         view.el.addEventListener('click', event => {
             const path = event.composedPath().filter(node => node instanceof Element);
             if (path.some(node => node.matches('#clear-selection'))) {
                 bridge.text = JSON.stringify(['clear', null]);
+                return;
+            }
+            const page = path.find(node => node.matches('button[data-history-page]'));
+            if (page && !page.disabled) {
+                bridge.text = JSON.stringify(['page', Number(page.dataset.historyPage)]);
+                return;
+            }
+            const go = path.find(node => node.matches('[data-history-page-jump]'));
+            if (go) {
+                jump(go.closest('nav').querySelector('[data-history-page-input]'));
                 return;
             }
             const row = path.find(node => node.matches('.explorer-event, .explorer-choice'));
@@ -543,24 +560,50 @@ def create_controls(
                 ]);
             }
         });
+        view.el.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            const input = event.composedPath().find(
+                node => node instanceof Element && node.matches('[data-history-page-input]'));
+            if (input) {
+                event.preventDefault();
+                jump(input);
+            }
+        });
     """,
         ),
     )
 
-    details.js_on_change(
-        "text",
-        CustomJS(
-            code="""
+    scroll_to_event = CustomJS(
+        args=dict(details=details, selection=detail_selection, panel=right_controls),
+        code="""
         setTimeout(() => {
-            const view = Bokeh.index.find_one(cb_obj);
+            if (!panel.visible) return;
+            const view = Bokeh.index.find_one(details);
             const root = view?.shadow_el ?? view?.el?.shadowRoot ?? view?.el;
             if (!root) return;
-            const active = root.querySelector('.explorer-event[style*="fde68a"]');
+            const [event] = selection.data.event;
+            const [pair] = selection.data.pair;
+            const findRow = id => id == null ? null :
+                root.querySelector(`.explorer-event[data-event="${CSS.escape(id)}"]`);
+            const active = findRow(event);
+            const shared = findRow(pair);
+            const old = root.querySelector('.explorer-event[style*="fde68a"]');
+            if (old !== active) {
+                old?.setAttribute('style', 'background:white');
+                active?.setAttribute('style', 'background:#fde68a');
+            }
+            for (const cell of root.querySelectorAll('.explorer-event td[rowspan][style]'))
+                cell.removeAttribute('style');
+            for (const cell of shared?.querySelectorAll('td[rowspan]') ?? [])
+                cell.setAttribute('style', 'background:#fde68a');
             if (active) active.scrollIntoView({block: 'nearest'});
         }, 0);
-    """,
-        ),
+        """,
     )
+    details.js_on_change("text", scroll_to_event)
+    detail_selection.js_on_change("data", scroll_to_event)
+    right_controls.js_on_change("visible", scroll_to_event)
+    body.js_on_change("children", scroll_to_event)
     ui = Controls(
         counts=counts,
         quality=quality,
@@ -588,6 +631,7 @@ def create_controls(
         show_pager=show_pager,
         selector=selector,
         details=details,
+        detail_selection=detail_selection,
         summarise_motion=summarise_motion,
         summarise_energy=summarise_energy,
         show_rates=show_rates,

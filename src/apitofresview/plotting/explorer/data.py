@@ -16,6 +16,7 @@ from apitofresview.modes import simulation_mode
 from apitofresview.recordings import NO_RECORDED_EVENTS
 
 from ._overview import MOTION_COLUMNS, SUMMARY_COLUMNS, stream_tree_overview
+from ._parquet import parquet_history_queries
 from .tree import ExecutionTree
 
 EVENT_TYPES = ("init", "collision", "fragmentation", "escape")
@@ -40,15 +41,46 @@ def make_regions(boundaries):
     )
 
 
+def _history_keys(members):
+    keys = {}
+    for member in members:
+        try:
+            result, realization = map(int, member.split(":"))
+        except AttributeError, ValueError:
+            return None
+        if f"{result}:{realization}" != member or not all(
+            -(1 << 63) <= value < 1 << 63 for value in (result, realization)
+        ):
+            return None
+        keys.setdefault(result, set()).add(realization)
+    return {result: sorted(indices) for result, indices in keys.items()}
+
+
 def _event_query(
     db, experiment, cluster, tree_mode, *, summary=False, members=None, ids=None
 ):
-    query = (
-        db.tree_events_query(run_id=experiment, parent=cluster)
-        if tree_mode
-        else db.events_query(run_id=experiment, parent=cluster)
-    )
     if members is not None:
+        members = tuple(members)
+    keys = _history_keys(members) if members is not None else None
+    direct = parquet_history_queries(db, keys) if keys and not summary else None
+    queries = direct or db
+    read = queries.tree_events_query if tree_mode else queries.events_query
+    query = read(
+        run_id=experiment,
+        parent=cluster,
+        result_id=next(iter(keys)) if keys and len(keys) == 1 else None,
+    )
+    if keys is not None and direct is None:
+        # These are the tree window's partition keys. DuckDB can push the
+        # predicates down to the Parquet scan before evaluating continuity.
+        query = query.filter(
+            " or ".join(
+                f"(result_id = {result} and realization_index in ({','.join(map(str, indices))}))"
+                for result, indices in keys.items()
+            )
+            or "false"
+        )
+    elif keys is None and members is not None:
         query = query.filter(
             duckdb.ColumnExpression("realization_id").isin(
                 *(duckdb.ConstantExpression(rid) for rid in members)
@@ -78,10 +110,13 @@ def _event_query(
             "event_type not in ('collision', 'postcollision') or event_index = last_index"
         )
     if ids is not None:
+        ids = tuple(ids)
         query = query.filter(
             duckdb.ColumnExpression("event_id").isin(
                 *(duckdb.ConstantExpression(id) for id in ids)
             )
+            if ids
+            else "false"
         )
     return query
 

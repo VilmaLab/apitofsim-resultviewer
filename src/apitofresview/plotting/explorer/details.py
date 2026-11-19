@@ -1,7 +1,38 @@
 """HTML rendering and unit conversion for realization details."""
 
+from bisect import bisect_right
 from html import escape
 from math import hypot
+
+
+PAGE_SIZE = 50
+
+
+def history_page(events, selected_event, page=None):
+    """Resolve a page without putting the two states of an event on separate pages."""
+    pairs = [
+        column
+        for name in ("collision_id", "fragmentation_id")
+        if (column := events.get_column(name, default=None)) is not None
+    ]
+    bounds = [0]
+    while bounds[-1] < events.height:
+        end = min(bounds[-1] + PAGE_SIZE, events.height)
+        if end < events.height and any(column[end] is not None for column in pairs):
+            end += 1
+        bounds.append(end)
+    if not events.height:
+        return (0, 1, 0, 0)
+    if page is None:
+        index = (
+            events["id"].index_of(selected_event)
+            if selected_event is not None
+            else None
+        )
+        page = bisect_right(bounds, index or 0) - 1
+    last_page = len(bounds) - 2
+    page = min(max(page, 0), last_page)
+    return (page, last_page + 1, bounds[page], bounds[page + 1])
 
 
 def format_value(value):
@@ -139,7 +170,13 @@ def _energy(event):
 
 
 def render_details(
-    realization, events, selected_event, radial=True, summarise_energy=True
+    realization,
+    events,
+    selected_event,
+    radial=True,
+    summarise_energy=True,
+    *,
+    window=None,
 ):
     if realization.is_empty():
         return "<p><em>Click an event to inspect its realization.</em></p>"
@@ -152,7 +189,8 @@ def render_details(
     def pair(event):
         return event.get("collision_id") or event.get("fragmentation_id")
 
-    records = list(events.iter_rows(named=True))
+    page, pages, start, stop = window or history_page(events, selected_event)
+    records = list(events.slice(start, stop - start).iter_rows(named=True))
     paired = {pair(event) for event in records if pair(event) is not None}
     selected_pair = next(
         (
@@ -186,12 +224,8 @@ def render_details(
         else f"<p><em>{escape(member.get('fate_label', member['fate']))}</em></p>"
     )
     if "provenance" in events.columns:
-        diagnostics = {
-            event["provenance"]
-            for event in records
-            if event["provenance"] != "persisted"
-        }
-        if any(event["continuity_valid"] is not True for event in records):
+        diagnostics = set(events["provenance"].drop_nulls().unique()) - {"persisted"}
+        if not events["continuity_valid"].fill_null(False).all():
             diagnostics.add("unresolved continuity")
         if diagnostics:
             context += f"<p>Recording diagnostics: {escape(', '.join(sorted(diagnostics)))}</p>"
@@ -200,10 +234,24 @@ def render_details(
         if "simulated_pathway" in member
         else f"Realization #{member['realization_number']}"
     )
+    pagination = (
+        '<nav aria-label="History pages">'
+        f'<button type="button" data-history-page="{page - 1}"'
+        f"{' disabled' if page == 0 else ''}>Previous</button> "
+        f'<label>Page <input type="number" min="1" max="{pages}" value="{page + 1}"'
+        f' data-history-page-input="" style="width:5em"></label> of {pages} '
+        '<button type="button" data-history-page-jump="">Go</button> '
+        f'<button type="button" data-history-page="{page + 1}"'
+        f"{' disabled' if page + 1 == pages else ''}>Next</button>"
+        f"<div>Events {start + 1}–{stop} of {events.height}</div></nav>"
+        if pages > 1
+        else ""
+    )
     return (
         "<button id='clear-selection'>Clear selection</button>"
         f"<h3>{heading}</h3>"
         + context
+        + pagination
         + '<div style="overflow-x:auto"><table><thead><tr>'
         + "".join(f"<th>{heading}</th>" for heading in headings)
         + "</tr></thead><tbody>"

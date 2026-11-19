@@ -552,12 +552,12 @@ def _event_plot(
             else None
         )
         last_dimensions = None
-        pending = False
+        pending = None
         live = doc is not None and doc.session_context is not None
 
         def repack():
             nonlocal last_dimensions, packed, pending
-            pending = False
+            pending = None
             if live and plot.document is not doc:
                 return
             try:
@@ -602,20 +602,20 @@ def _event_plot(
                 )
             # Beeswarm sets its own Y range; cache the resulting bounds.
             last_dimensions = (*dimensions[:4], plot.y_range.start, plot.y_range.end)
-            positions = {
-                i: (x, y)
-                for i, x, y in packed.select("id", "position", "plot_y").iter_rows()
-            }
+            axes = (
+                {"x": "position", "y": "plot_y"}
+                if layout == "beeswarm"
+                else {"x": "position"}
+            )
             for glyph in swarm_glyphs:
-                ids = glyph.data_source.data["id"]
-                # Repacking changes only positions. Sending the full source
-                # repeats IDs, labels and hover text over the websocket.
-                glyph.data_source.patch(
-                    {
-                        axis: [(slice(0, len(ids)), [positions[i][index] for i in ids])]
-                        for index, axis in enumerate(("x", "y"))
-                    }
-                )
+                source = glyph.data_source
+                patch = {}
+                for axis, column in axes.items():
+                    values = packed[column].to_list()
+                    if values != source.data[axis]:
+                        patch[axis] = [(slice(0, len(values)), values)]
+                if patch:
+                    source.patch(patch)
                 glyph.glyph.size = diameter
             if envelope_source is not None:
                 outline = beeswarm_envelope(
@@ -629,9 +629,10 @@ def _event_plot(
         def schedule_repack(attr, old, new):
             nonlocal pending
             if live:
-                if not pending:
-                    pending = True
-                    doc.add_next_tick_callback(repack)
+                # Width and height can arrive in separate browser patches.
+                if pending is not None:
+                    doc.remove_timeout_callback(pending)
+                pending = doc.add_timeout_callback(repack, 50)
             else:
                 repack()
 

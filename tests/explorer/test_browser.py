@@ -197,6 +197,56 @@ def overlap_server(monkeypatch):
         yield url
 
 
+def test_long_history_opens_on_the_clicked_page_and_highlights_in_place(
+    monkeypatch,
+    page,
+):
+    import polars as pl
+
+    from apitofresview.plotting.explorer.data import pair_collisions
+
+    members, events, pathways, regions = cohort(
+        [1],
+        *(event(i, "collision", 1, i, 1) for i in range(1, 51)),
+        event(51, "postcollision", 1, 50, 1),
+        *(event(i, "collision", 1, i, 1) for i in range(52, 106)),
+        event(106, "escape", 1, 106, 5),
+    )
+    events = pair_collisions(
+        events.with_columns(
+            pl.lit(True).alias("accepted"),
+            pl.struct(x=pl.lit(0.0), y=pl.lit(0.0), z=pl.lit(1.0)).alias("velocity"),
+        )
+    )
+    with serve_explorer(monkeypatch, (members, events, pathways, regions)) as url:
+        page.set_viewport_size({"width": 1280, "height": 900})
+        page.goto(url)
+        page.wait_for_function("""() => {
+            const plot = window.Bokeh?.documents[0]?.get_model_by_name("events");
+            const source = plot?.renderers.find(r => r.data_source?.data.id?.includes(95))?.data_source;
+            if (!source) return false;
+            source.selected.indices = [source.data.id.indexOf(95)];
+            return true;
+        }""")
+        expect(page.get_by_text("Events 52–101 of 106")).to_be_visible()
+        expect(page.locator("#event-95")).to_have_attribute(
+            "style", "background:#fde68a"
+        )
+        expect(page.locator("#event-95")).to_be_in_viewport()
+        page.get_by_role("spinbutton", name="Page").fill("1")
+        page.get_by_role("spinbutton", name="Page").press("Enter")
+        expect(page.get_by_text("Events 1–51 of 106")).to_be_visible()
+        before, after = page.locator("#event-50"), page.locator("#event-51")
+        expect(before.locator('td[rowspan="2"]')).not_to_have_count(0)
+        after.evaluate("el => { el.dataset.retained = 'yes'; }")
+        after.get_by_role("button").click()
+        expect(after).to_have_attribute("style", "background:#fde68a")
+        expect(after).to_have_attribute("data-retained", "yes")
+        page.get_by_role("button", name="Next", exact=True).click()
+        expect(page.get_by_text("Events 52–101 of 106")).to_be_visible()
+        expect(after).to_have_count(0)
+
+
 @pytest.mark.parametrize(
     "details_layout", ["Right sidebar", "Right (half width)", "Bottom"]
 )

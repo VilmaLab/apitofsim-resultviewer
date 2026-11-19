@@ -12,7 +12,7 @@ from polars.testing import assert_frame_equal
 from tests.arrow_fixtures import event as recorded_event, publish_events
 
 from apitofresview.plotting.explorer import data, session
-from apitofresview.plotting.explorer import _overview
+from apitofresview.plotting.explorer import _overview, _parquet
 
 from . import test_tree
 from .helpers import collision_cohort
@@ -92,7 +92,7 @@ def test_parquet_tree_overview_matches_sql(tmp_path, monkeypatch, ordered):
         ]
         if not ordered:
             rows[1], rows[2] = rows[2], rows[1]
-        publish_events(db, rows, format="parquet")
+        publish_events(db, rows, format="parquet", row_group_size=3)
 
     with ExperimentDatabase(path, readonly=True) as db:
         monkeypatch.setattr(data, "get_geometry", lambda *_: None)
@@ -105,6 +105,23 @@ def test_parquet_tree_overview_matches_sql(tmp_path, monkeypatch, ordered):
         assert (_overview.stream_tree_overview(db, 1, 1) is not None) == ordered
         for fast, sql in zip(data.load_overview(db, 1, 1), expected, strict=True):
             assert_frame_equal(fast, sql, check_exact=True)
+
+        # Keep realizations scoped to their execution, including in the chooser.
+        keys = ("10:1", "20:0")
+        ids = ("10:1:2", "20:0:1")
+        baseline = data._event_frame(db, 1, 1, True).filter(
+            pl.col("realization_id").is_in(keys) & pl.col("id").is_in(ids)
+        )
+        indexed = _parquet.parquet_history_queries(db, data._history_keys(keys))
+        assert indexed is not None
+        result = data._event_frame(db, 1, 1, True, members=keys, ids=ids)
+        assert result["continuity_valid"].to_list() == [False, True]
+        assert_frame_equal(result, baseline, check_exact=True)
+
+        # Missing statistics must fall back to the exact numeric SQL lookup.
+        monkeypatch.setattr(_parquet, "_row_group_index", lambda *_: None)
+        result = data._event_frame(db, 1, 1, True, members=keys, ids=ids)
+        assert_frame_equal(result, baseline, check_exact=True)
 
 
 def test_sparse_session_loads_complete_details_once(monkeypatch):
@@ -154,13 +171,16 @@ def test_sparse_pager_loads_collisions_within_budget(monkeypatch):
     from .helpers import cohort, event
 
     members, events, pathways, regions = cohort(
-        [1, 2],
+        [1, 2, 3],
         event(1, "collision", 1, 0, 1),
         event(2, "collision", 1, 1, 2),
         event(3, "escape", 1, 2, 5),
         event(4, "collision", 2, 0, 1),
         event(5, "collision", 2, 1, 2),
         event(6, "escape", 2, 2, 5),
+        event(7, "collision", 3, 0, 1),
+        event(8, "collision", 3, 1, 2),
+        event(9, "escape", 3, 2, 5),
     )
     members = members.with_columns(
         pl.lit(2).alias("collisions"),
@@ -179,7 +199,7 @@ def test_sparse_pager_loads_collisions_within_budget(monkeypatch):
         session, "load_data", lambda *args: (members, sparse, pathways, regions)
     )
     monkeypatch.setattr(session, "load_histories", load)
-    monkeypatch.setattr(session, "MAX_COLLISIONS", 2)
+    monkeypatch.setattr(session, "MAX_COLLISIONS", 4)
     doc = Document()
     session.build_document(None, doc, 1, 1)
     assert not loads
@@ -191,15 +211,16 @@ def test_sparse_pager_loads_collisions_within_budget(monkeypatch):
         if w.labels == ["Realizations pager"]
     )
     pager.active = [0]
-    doc.select_one({"type": RangeSlider}).value = (1, 1)
-    assert loads == [(1,)]
+    doc.select_one({"type": RangeSlider}).value = (1, 2)
+    assert loads == [(1, 2)]
     assert not collision.disabled
     source = next(
         r.data_source
         for r in doc.select_one({"name": "events"}).renderers
         if hasattr(r, "data_source") and "id" in r.data_source.data
     )
-    assert source.data["type"].count("collision") == 2
+    assert source.data["type"].count("collision") == 4
+    source.selected.indices = [source.data["id"].index(3)]
+    assert loads == [(1, 2)]
     pager.active = []
-    assert loads == [(1,)]
     assert collision.disabled

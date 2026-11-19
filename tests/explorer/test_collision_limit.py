@@ -138,3 +138,72 @@ def test_collision_limit_browser(monkeypatch, page):
         expect(page.get_by_text("Collisions hidden:")).to_have_count(0)
         page.get_by_label("Realizations pager", exact=True).uncheck()
         expect(collision).to_be_disabled()
+
+
+def test_details_reveal_one_collision_above_the_limit(monkeypatch, page):
+    from playwright.sync_api import expect
+
+    from .helpers import collision_cohort
+    from .test_browser import serve_explorer
+
+    members, events, pathways, regions = collision_cohort()
+    overview = members.with_columns(
+        pl.lit(3).alias("collisions"),
+        pl.lit(1).alias("rejected_collisions"),
+        pl.lit(0).alias("clamped_events"),
+        pl.lit(5.0).alias("max_radial"),
+    )
+    sparse = events.filter(pl.col("type") == "escape")
+    monkeypatch.setattr(session, "load_histories", lambda *args, **kwargs: events)
+    monkeypatch.setattr(session, "MAX_COLLISIONS", 1)
+    with serve_explorer(monkeypatch, (overview, sparse, pathways, regions)) as url:
+        page.set_viewport_size({"width": 1280, "height": 900})
+        page.goto(url)
+        expect(page.get_by_label("Collision", exact=True)).to_be_disabled()
+        page.get_by_label("X coordinate").select_option(label="Axial distance (mm)")
+        page.wait_for_function("""() => {
+            const plots = Bokeh.documents[0].get_model_by_name('explorer_plots');
+            const plot = plots.children.find(p => p.name === 'events');
+            const source = plot?.renderers.find(r => r.data_source?.data.id?.includes(6))?.data_source;
+            if (!plot?.inner_width || source?.data.x[0] !== 5000) return false;
+            source.selected.indices = [0];
+            return true;
+        }""")
+
+        def check_plot(temporary_x, highlight_x):
+            page.wait_for_function(
+                """([temporaryX, highlightX]) => {
+                    const plots = Bokeh.documents[0].get_model_by_name('explorer_plots');
+                    const plot = plots.children.find(p => p.name === 'events');
+                    const temporary = plot.renderers.find(
+                        r => r.data_source?.name === 'selected_hidden_collision'
+                    )?.data_source.data;
+                    const highlight = plot.renderers.find(
+                        r => r.glyph?.size?.value === 20
+                    ).data_source.data;
+                    const plotted = plot.renderers.flatMap(r => r.data_source?.data.id ?? []);
+                    return plotted.length === 1 && plotted[0] === 6 &&
+                        temporary?.x.length === (temporaryX === null ? 0 : 1) &&
+                        (temporaryX === null || (temporary.x[0] === temporaryX && temporary.y[0] === 1)) &&
+                        highlight.position.length === (highlightX === null ? 0 : 1) &&
+                        (highlightX === null || (highlight.position[0] === highlightX && highlight.plot_y[0] === 1));
+                }""",
+                arg=[temporary_x, highlight_x],
+                timeout=5000,
+            )
+
+        # The paired after-state shares the before-state's location on the plot.
+        page.get_by_role("button", name="Inspect event #2", exact=True).click()
+        expect(page.get_by_text("Selected hidden event #1")).to_be_visible()
+        check_plot(1000, 1000)
+        page.locator("#event-3 td").nth(1).click()
+        expect(page.get_by_text("Selected hidden event #3")).to_be_visible()
+        check_plot(2000, 2000)
+        page.get_by_role("button", name="Inspect event #6", exact=True).click()
+        expect(page.get_by_text("Selected hidden event")).to_have_count(0)
+        check_plot(None, 5000)
+        page.get_by_role("button", name="Inspect event #1", exact=True).click()
+        check_plot(1000, 1000)
+        page.get_by_role("button", name="Clear selection", exact=True).click()
+        expect(page.get_by_text("Selected hidden event")).to_have_count(0)
+        check_plot(None, None)

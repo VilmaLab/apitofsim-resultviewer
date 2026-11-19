@@ -361,10 +361,13 @@ def _physical_guides(plot, regions):
     )
 
 
-def _highlight(plot, get_events, selection):
+def _highlight(plot, get_events, selection, realization_ids, marker, size):
     """Keep selection overlays alive and update them from displayed coordinates."""
     source = ColumnDataSource(dict(position=[], plot_y=[]))
     clicked_source = ColumnDataSource(dict(position=[], plot_y=[]))
+    hidden_source = ColumnDataSource(
+        dict(x=[], y=[], color=[]), name="selected_hidden_collision"
+    )
     plot.line("position", "plot_y", source=source, color="#111827", line_width=2.5)
     plot.scatter(
         "position",
@@ -375,6 +378,9 @@ def _highlight(plot, get_events, selection):
         fill_alpha=0,
         line_color="#111827",
         line_width=2,
+    )
+    plot.scatter(
+        "x", "y", source=hidden_source, marker=marker, size=size, color="color"
     )
     plot.scatter(
         "position",
@@ -401,10 +407,20 @@ def _highlight(plot, get_events, selection):
                 pl.col("id") == selection.get("plot_event", selection["event"])
             )
         )
+        hidden = selection["hidden_collision"]
+        hidden_data = dict(x=[], y=[], color=[])
+        clicked_data = clicked.select("position", "plot_y").to_dict(as_series=False)
+        if (
+            clicked.is_empty()
+            and hidden is not None
+            and hidden["realization_id"] in realization_ids
+        ):
+            x, y = hidden["position"], hidden["plot_y"]
+            hidden_data = dict(x=[x], y=[y], color=[COLORS[hidden["event_group"]]])
+            clicked_data = dict(position=[x], plot_y=[y])
+        hidden_source.data = hidden_data
         source.data = visible.select("position", "plot_y").to_dict(as_series=False)
-        clicked_source.data = clicked.select("position", "plot_y").to_dict(
-            as_series=False
-        )
+        clicked_source.data = clicked_data
 
     update()
     return update
@@ -423,6 +439,8 @@ def _event_plot(
     on_selected,
     event_colors,
     realization_bounds=(1, 1),
+    *,
+    realization_ids,
     y_range=None,
     spread_terminals=False,
     selection_updates=None,
@@ -473,6 +491,8 @@ def _event_plot(
                 line_alpha=0.25,
                 color="#64748b",
             )
+    marker = "circle" if layout == "beeswarm" else "x" if use_x_markers else "dot"
+    size = 10 if layout == "beeswarm" else 6
     if not events.is_empty():
         source = _source(
             events.select(
@@ -498,12 +518,8 @@ def _event_plot(
             "x",
             "y",
             source=source,
-            marker="circle"
-            if layout == "beeswarm"
-            else "x"
-            if use_x_markers
-            else "dot",
-            size=10 if layout == "beeswarm" else 6,
+            marker=marker,
+            size=size,
             color="color",
             line_width=0 if layout == "beeswarm" else 1,
         )
@@ -542,7 +558,9 @@ def _event_plot(
         source.selected.on_change("indices", on_selected(source))
     plot.select_one(TapTool).renderers = swarm_glyphs
     packed = events
-    update_highlight = _highlight(plot, lambda: packed, selection)
+    update_highlight = _highlight(
+        plot, lambda: packed, selection, realization_ids, marker, size
+    )
     if selection_updates is not None:
         selection_updates.append(update_highlight)
     if layout == "beeswarm" or spread_terminals:

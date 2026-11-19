@@ -242,6 +242,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         "escape_keys": escapes.keys(),
         "separated": False,
         "plot_event": None,
+        "hidden_collision": None,
         "auto_cdf": False,
         "syncing_sidebar": False,
         "sidebar": {False: [True, False], True: [False, False]},
@@ -587,6 +588,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             )
         )
         selection_notice.visible = not hidden.is_empty()
+        state["hidden_collision"] = None
         notice = ""
         if not hidden.is_empty():
             highlighted = hidden.row(0, named=True)
@@ -595,6 +597,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 f"{highlighted['type']} · t={highlighted['t']:.6g} s · "
                 f"Axial distance={highlighted['z'] * 1000:.6g} mm"
             )
+            if highlighted["type"] == "collision":
+                state["hidden_collision"] = layout_events(
+                    position_events(hidden, collision_coordinates[0], ui.mode.value),
+                    ui.layout.value,
+                ).row(0, named=True)
         selection_notice.text = notice
         for update in selection_updates:
             update()
@@ -1154,6 +1161,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                             members["realization_number"].min() or 1,
                             members["realization_number"].max() or 1,
                         ),
+                        realization_ids=members["id"],
                         y_range=shared_y,
                         spread_terminals=spread_terminals,
                         selection_updates=selection_updates,

@@ -9,6 +9,8 @@ import polars as pl
 from bokeh.events import DocumentReady
 from bokeh.models import CustomJS, Div, InlineStyleSheet, Select
 
+from .browser import ON_FRAME
+
 
 @dataclass
 class ExecutionTree:
@@ -289,7 +291,9 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         if not selected:
             color = None
         swatch = (
-            f'<span style="color:{color}" aria-hidden="true">■</span> ' if color else ""
+            f'<span data-swatch="{key}" style="color:{color}" aria-hidden="true">■</span> '
+            if color
+            else ""
         )
         text = tree.short_label(key, label)
         control = f'<label title="{escape(label, quote=True)}"><input type="checkbox" data-leaves="{value}" checked> {swatch}{escape(text)} <i>({selected})</i></label>'
@@ -316,6 +320,8 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
         return html
 
     html = make_html()
+    observed_scopes = list(scopes)
+    full_scopes = None
     view = Div(
         text=html,
         name="fragmentation_tree",
@@ -352,22 +358,29 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
     ]
     ui.fate_facets.labels = ["Facet histories"]
 
-    def show_full(attr, old, new):
-        view.text = make_html(bool(new))
-        scope.options = list(scopes)
-        if scope.value not in {key for key, _ in scopes}:
+    def show_full(full):
+        nonlocal full_scopes
+        if full and full_scopes is None:
+            view.text = make_html(full=True)
+            full_scopes = list(scopes)
+        scope.options = full_scopes if full else observed_scopes
+        if scope.value not in dict(scope.options):
             scope.value = "root"
 
-    full_tree.on_change("active", show_full)
+    def recolor(route_colors):
+        view.tags = [route_colors]
+
     sync = CustomJS(
         args=dict(
             view=view, fate=ui.fate, scope=scope, full_tree=full_tree, cdf=ui.show_cdf
         ),
-        code="""
+        code=ON_FRAME
+        + """
         const el = Bokeh.index.find_one(view);
         const root = el?.shadow_el ?? el?.el?.shadowRoot ?? el?.el;
         if (!root) return;
         const sync = () => {
+            const routeColors = view.tags[0] ?? {};
             for (const branch of root.querySelectorAll('[data-observed="false"]'))
                 branch.hidden = !full_tree.active.length;
             for (const branch of root.querySelectorAll('details[data-branch]')) {
@@ -383,6 +396,10 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
             }
             for (const button of root.querySelectorAll('button[data-scope]'))
                 button.setAttribute('aria-pressed', String(button.dataset.scope === scope.value));
+            for (const swatch of root.querySelectorAll('[data-swatch]')) {
+                const color = routeColors[swatch.dataset.swatch];
+                if (color) swatch.style.color = color;
+            }
         };
         if (!root._treeInstalled) {
             root._treeInstalled = true;
@@ -399,7 +416,6 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
                     if (input.checked) active.add(i); else active.delete(i);
                 }
                 fate.active = [...active].sort((a, b) => a - b);
-                sync();
             });
             root.addEventListener('click', event => {
                 const button = event.target.closest('button[data-scope]');
@@ -410,8 +426,7 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
                 }
             });
         }
-        sync();
-        requestAnimationFrame(sync);
+        onFrame(view, 'explorerTreeFrame', sync);
     """,
     )
     doc.js_on_event(DocumentReady, sync)
@@ -419,4 +434,5 @@ def install_tree_controls(doc, ui, tree, names, counts, colors):
     scope.js_on_change("value", sync)
     full_tree.js_on_change("active", sync)
     view.js_on_change("text", sync)
-    return scope, labels, full_tree, lambda: show_full(None, None, full_tree.active)
+    view.js_on_change("tags", sync)
+    return scope, labels, full_tree, show_full, recolor

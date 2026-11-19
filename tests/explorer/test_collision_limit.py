@@ -191,19 +191,16 @@ def test_details_reveal_one_collision_above_the_limit(monkeypatch, page):
                 arg=[temporary_x, highlight_x],
                 timeout=5000,
             )
+            expect(page.get_by_text("Selected hidden event")).to_have_count(0)
 
         # The paired after-state shares the before-state's location on the plot.
         page.get_by_role("button", name="Inspect event #2", exact=True).click()
-        expect(page.get_by_text("Selected hidden event #1")).to_be_visible()
         check_plot(1000, 1000)
         page.locator("#event-3 td").nth(1).click()
-        expect(page.get_by_text("Selected hidden event #3")).to_be_visible()
         check_plot(2000, 2000)
         page.get_by_role("button", name="Inspect event #6", exact=True).click()
-        expect(page.get_by_text("Selected hidden event")).to_have_count(0)
         check_plot(None, 5000)
         page.get_by_role("button", name="Inspect event #1", exact=True).click()
         check_plot(1000, 1000)
         page.get_by_role("button", name="Clear selection", exact=True).click()
-        expect(page.get_by_text("Selected hidden event")).to_have_count(0)
         check_plot(None, None)

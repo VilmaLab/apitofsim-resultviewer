@@ -422,9 +422,9 @@ def test_bokeh_filtering_selection_facets_and_restrictions(monkeypatch):
     bridge.text = '["inspect", "999"]'
     assert 'id="event-1" style="background:#fde68a' in details.text
     checkbox("Collision").active = []
-    assert text_contains("Selected hidden event #1")
+    assert doc.select_one({"name": "selected_hidden_collision"}).data["x"] == [0]
     checkbox("Collision").active = [0]
-    assert not text_contains("Selected hidden event #1")
+    assert doc.select_one({"name": "selected_hidden_collision"}).data["x"] == []
     checkbox("Cumulative").active = [0]
     checkbox("Bar chart").active = [0]
     checkbox("Facet pathways").active = [0]
@@ -1366,7 +1366,7 @@ def test_separate_rejected_collisions_and_visibility_transitions(monkeypatch):
     )
     assert all(f'id="event-{id}"' in details.text for id in range(1, 7))
     doc.roots[0].children[1].text = '["inspect", "2"]'
-    assert any("Selected hidden event #1" in d.text for d in doc.select({"type": Div}))
+    assert doc.select_one({"name": "selected_hidden_collision"}).data["x"] == [3]
 
 
 @pytest.mark.parametrize("layout", ["realization", "radial", "strip", "beeswarm"])

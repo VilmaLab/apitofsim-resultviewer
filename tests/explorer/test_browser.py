@@ -9,6 +9,7 @@ from bokeh.resources import INLINE
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect
 
 from apitofresview.plotting.explorer import build_document, session
+from apitofresview.plotting.explorer.layout import schematic_widths
 
 from .helpers import cohort, event
 
@@ -300,6 +301,7 @@ def test_live_inspection_preserves_plot_and_zoom(page, explorer_server, details_
         // Zooming asynchronously repacks terminal markers on the server.
         // Select directly so this layout test does not race their coordinates.
         source.selected.indices = [source.data.id.indexOf(1)];
+        window.inspectedPlotView = Bokeh.index.find_one(plot);
         return {plot: plot.id, range: plot.x_range.id};
     }""")
     expect(
@@ -326,12 +328,48 @@ def test_live_inspection_preserves_plot_and_zoom(page, explorer_server, details_
             )
     assert page.evaluate("""() => {
         const plot = Bokeh.documents[0].get_model_by_name('events');
-        return {plot: plot.id, range: plot.x_range.id, start: plot.x_range.start, end: plot.x_range.end};
-    }""") == {**initial, "start": -0.5, "end": 9.5}
+        return {plot: plot.id, range: plot.x_range.id, start: plot.x_range.start, end: plot.x_range.end,
+            sameView: Bokeh.index.find_one(plot) === window.inspectedPlotView};
+    }""") == {**initial, "start": -0.5, "end": 9.5, "sameView": True}
     page.get_by_role("button", name="Clear selection", exact=True).click()
     page.wait_for_function("""() => {
         const plot = Bokeh.documents[0].get_model_by_name('events');
         return plot.renderers.find(r => r.glyph?.size?.value === 20).data_source.data.position.length === 0;
+    }""")
+
+
+def test_display_changes_preserve_the_plot_source_and_zoom(page, explorer_server):
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(explorer_server)
+    page.wait_for_function("""() => {
+        const plot = window.Bokeh?.documents[0]?.get_model_by_name('events');
+        const glyph = plot?.renderers.find(r => r.data_source?.data.id?.includes(1));
+        if (!glyph?.visible || glyph.data_source.data.x[0] === glyph.data_source.data.x[2])
+            return false;
+        plot.x_range.start = -0.5;
+        plot.x_range.end = 9.5;
+        window.originalEventView = Bokeh.index.find_one(plot);
+        window.originalEventSource = glyph.data_source;
+        return true;
+    }""")
+    page.get_by_text("Use x markers", exact=True).click()
+    page.get_by_text("Spread initial/escape X", exact=True).click()
+    page.get_by_text("Cumulative", exact=True).click()
+    page.wait_for_function("""() => {
+        const doc = Bokeh.documents[0];
+        const plots = doc.get_model_by_name('explorer_plots').children;
+        const plot = plots.find(chart => chart.name === 'events');
+        const glyph = plot.renderers.find(r => r.data_source?.data.id?.includes(1));
+        return glyph.glyph.marker.value === 'dot' &&
+            glyph.data_source.data.x[0] === glyph.data_source.data.x[2] &&
+            plots.some(chart => chart.name === 'cdf' && chart.inner_width > 0);
+    }""")
+    assert page.evaluate("""() => {
+        const plot = Bokeh.documents[0].get_model_by_name('events');
+        const glyph = plot.renderers.find(r => r.data_source?.data.id?.includes(1));
+        return Bokeh.index.find_one(plot) === window.originalEventView &&
+            glyph.data_source === window.originalEventSource &&
+            plot.x_range.start === -0.5 && plot.x_range.end === 9.5;
     }""")
 
 
@@ -406,23 +444,23 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
         page.wait_for_function(
             "() => Bokeh.documents[0].get_model_by_name('rate_plots').children[0].renderers.length === 2"
         )
-        page.wait_for_function("""() => {
-            const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
-            const legend = plot.below.find(m => m.type === 'Legend');
-            const view = Bokeh.index.find_one(plot);
-            const legendView = view?.renderer_views.get(legend);
-            return legendView?.bbox.top >= view.frame.bbox.bottom;
-        }""")
         for viewport in (width, 1920 if width == 640 else 640, width):
             page.set_viewport_size({"width": viewport, "height": 900})
-            page.wait_for_function(
-                """columns => {
-                const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
-                return plot.below.find(m => m.type === 'Legend').ncols === columns;
-            }""",
-                arg=1 if viewport == 640 else 2,
-            )
+            page.wait_for_function("""() => {
+                const doc = Bokeh.documents[0];
+                const plot = doc.get_model_by_name('rate_plots').children[0];
+                const legend = doc.get_model_by_name('rate_plots').children.find(m => m.name === 'rate_legend');
+                const rect = model => Bokeh.index.find_one(model)?.el.getBoundingClientRect();
+                return rect(legend)?.top >= rect(plot)?.bottom && plot.height === 260;
+            }""")
             assert_horizontal_fit(page)
+        page.evaluate("""() => {
+            const legend = Bokeh.documents[0].get_model_by_name('rate_plots').children.find(m => m.name === 'rate_legend');
+            legend.children[0].active = false;
+        }""")
+        page.wait_for_function("""() =>
+            !Bokeh.documents[0].get_model_by_name('rate_plots').children[0].renderers[0].visible
+        """)
         page.locator('.explorer-event[data-event="2"] td').first.click()
         page.wait_for_function("""() => {
             const plot = Bokeh.documents[0].get_model_by_name('rate_plots').children[0];
@@ -608,8 +646,14 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         page.mouse.down()
         page.mouse.move(point["x"] + pixels, point["y"], steps=5)
         page.mouse.up()
+        expect(page.get_by_label("Sizing")).to_have_value("Custom")
         page.wait_for_function(
-            """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
+            """oldId => {
+                const plot = Bokeh.documents[0].get_model_by_name('schematic');
+                const data = plot.renderers[0].data_source.data;
+                return plot.id === oldId && Math.abs(plot.x_range.start - data.left[0]) < 1e-8 &&
+                    Math.abs(plot.x_range.end - data.right[6]) < 1e-8;
+            }""",
             arg=point["id"],
         )
 
@@ -640,6 +684,17 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     assert end - start == pytest.approx(original_range[1] - original_range[0])
     expect(page.get_by_label("Sizing")).to_have_value("Custom")
 
+    def equal_chambers():
+        page.get_by_label("Sizing").select_option(label="Equal chambers")
+        page.wait_for_function(
+            """expected => {
+            const plot = Bokeh.documents[0].get_model_by_name('schematic');
+            const data = plot.renderers[0].data_source.data;
+            return data.right.every((right, i) => Math.abs(right - data.left[i] - expected[i]) < 1e-8);
+        }""",
+            arg=schematic_widths("chambers"),
+        )
+
     for boundary, pixels, grow, shrink, fixed in (
         (0, -20, (1, 2, 3, 4, 5), (0,), (6,)),
         (1, 20, (1,), (2, 3, 4, 5), (0, 6)),
@@ -650,15 +705,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         (5, 20, (1, 2, 3, 4, 5), (6,), (0,)),
         (5, -20, (6,), (1, 2, 3, 4, 5), (0,)),
     ):
-        old_id = page.evaluate(
-            """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
-        )
-        page.get_by_label("Sizing").select_option(label="Equal chambers")
-        expect(page.get_by_label("Sizing")).to_have_value("Equal chambers")
-        page.wait_for_function(
-            """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
-            arg=old_id,
-        )
+        equal_chambers()
         before = widths()
         drag(boundary, pixels)
         expect(page.get_by_label("Sizing")).to_have_value("Custom")
@@ -671,25 +718,10 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         for index in fixed:
             assert after[index] == pytest.approx(before[index])
 
-    old_id = page.evaluate(
-        """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
-    )
-    page.get_by_label("Sizing").select_option(label="Equal chambers")
-    page.wait_for_function(
-        """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
-        arg=old_id,
-    )
+    equal_chambers()
     drag(3, 20)
-    expect(page.get_by_label("Sizing")).to_have_value("Custom")
     before = widths()
-    old_id = page.evaluate(
-        """() => [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1)?.id"""
-    )
     drag(0, 20)
-    page.wait_for_function(
-        """oldId => Bokeh.documents[0].is_idle && [...Bokeh.documents[0]._all_models.values()].some(p => p.name === 'schematic' && p.id !== oldId && p.inner_width > 0 && Bokeh.index.find_one(p)?.el?.isConnected)""",
-        arg=old_id,
-    )
     after = widths()
     assert after[3] / before[3] == pytest.approx(after[4] / before[4])
     assert after[4] / before[4] == pytest.approx(after[5] / before[5])
@@ -727,8 +759,9 @@ def test_overlapping_hover_choice_and_beeswarm_direct_selection(page, overlap_se
             try {
                 const center = Bokeh.documents[0].roots()[0].children[0].children[1].children[0];
                 const plot = center.children[2].children.find(p => p.name === 'events');
-                const source = plot?.renderers.find(r => r.data_source?.data.id?.includes(1))?.data_source;
-                return plot?.inner_width > 0 && plot?.inner_height > 0 && source &&
+                const glyph = plot?.renderers.find(r => r.data_source?.data.id?.includes(1));
+                const source = glyph?.data_source;
+                return plot?.inner_width > 0 && plot?.inner_height > 0 && glyph?.visible &&
                     source.data.x.every(x => x === 3) &&
                     (beeswarm ? source.data.y.some(y => y !== 5000)
                               : source.data.y.every(y => y === 5000));
@@ -839,7 +872,7 @@ def test_details_layout_geometry(page, explorer_server, width, tmp_path):
     page.get_by_role("button", name="Bottom", exact=True).click()
     page.wait_for_function("""() => {
         const workspace = Bokeh.documents[0].roots()[0].children[0].children[1];
-        if (workspace.type !== 'Column') return false;
+        if (getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection !== 'column') return false;
         const [center, right] = workspace.children.map(m => Bokeh.index.find_one(m)?.el?.getBoundingClientRect());
         return center && right && right.top >= center.bottom;
     }""")
@@ -979,7 +1012,7 @@ def test_explorer_panels_scroll_independently(page, explorer_server, width, full
                 const [center, right] = workspace.children;
                 const el = model => Bokeh.index.find_one(model)?.el;
                 const bottom = layout === 'Bottom';
-                if ((workspace.type === 'Column') !== bottom) return false;
+                if ((getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'column') !== bottom) return false;
                 if ((right.width != null) !== (layout === 'Right sidebar')) return false;
                 if (!el(center) || !el(right)) return false;
                 return el(center).scrollHeight > el(center).clientHeight &&
@@ -1177,7 +1210,7 @@ def test_bottom_details_preserve_controls(page, explorer_server, width):
     page.wait_for_function("""() => {
         const doc = Bokeh.documents[0];
         const workspace = doc.roots()[0].children[0].children[1];
-        return workspace.type === 'Column' &&
+        return getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'column' &&
             ['sidebar', 'bottom', 'right'].every(mode =>
                 doc.get_model_by_name(`details_layout_${mode}`).active === (mode === 'bottom'));
     }""")
@@ -1186,7 +1219,7 @@ def test_bottom_details_preserve_controls(page, explorer_server, width):
     page.wait_for_function("""() => {
         const doc = Bokeh.documents[0];
         const workspace = doc.roots()[0].children[0].children[1];
-        return workspace.type === 'Row' &&
+        return getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'row' &&
             ['sidebar', 'bottom', 'right'].every(mode =>
                 doc.get_model_by_name(`details_layout_${mode}`).active === (mode === 'sidebar'));
     }""")
@@ -1309,7 +1342,7 @@ def set_details_layout(target, placement):
         return doc.is_idle && view?.has_finished() && workspaceView?.el.isConnected &&
             Object.values(modes).every(value =>
             doc.get_model_by_name(`details_layout_${value}`).active === (value === mode)) &&
-            (workspace.type === 'Column') === (mode === 'bottom') &&
+            (getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'column') === (mode === 'bottom') &&
             Bokeh.index.find_one(left)?.el.checkVisibility() === left.visible;
     }""",
         arg=placement,

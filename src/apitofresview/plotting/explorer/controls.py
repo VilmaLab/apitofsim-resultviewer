@@ -22,6 +22,7 @@ from bokeh.models import (
     Toggle,
 )
 
+from .browser import ON_FRAME
 from .data import EVENT_TYPES
 
 CHECKBOX_CSS = """
@@ -165,8 +166,11 @@ def create_controls(
             for i, name in enumerate(fate_names)
         )
     )
-    counts = Div(sizing_mode="stretch_width", styles={"overflow-wrap": "anywhere"})
-    quality = Div(sizing_mode="stretch_width")
+    counts = Div(
+        sizing_mode="stretch_width",
+        styles={"box-sizing": "border-box", "overflow-wrap": "anywhere"},
+    )
+    quality = Div(sizing_mode="stretch_width", styles={"box-sizing": "border-box"})
     fate = CheckboxGroup(
         labels=fate_names,
         active=list(range(len(fate_names))),
@@ -519,15 +523,25 @@ def create_controls(
         DocumentReady,
         CustomJS(
             args=dict(width=viewport_width, frame=frame, bridge=detail_bridge),
-            code="""
+            code=ON_FRAME
+            + """
         const view = Bokeh.index.find_one(frame);
-        const update = () => {
-            view.el.style.setProperty('--explorer-top', `${view.el.getBoundingClientRect().top}px`);
-            const available = Math.floor(view.el.getBoundingClientRect().width);
-            if (available > 0) width.text = `${available},${window.innerHeight}`;
-        };
+        if (!view || view.el.explorerViewportObserver) return;
+        const el = view.el;
+        const embedded = el.closest('.explorer-frame');
+        const update = () => onFrame(el, 'explorerViewportFrame', () => {
+            const {top, width: measured} = el.getBoundingClientRect();
+            const available = Math.floor(measured);
+            const size = `${available},${window.innerHeight}`;
+            if (!embedded && el.explorerTop !== top) {
+                el.explorerTop = top;
+                el.style.setProperty('--explorer-top', `${top}px`);
+            }
+            if (available > 0 && width.text !== size) width.text = size;
+        });
         const observer = new ResizeObserver(update);
-        observer.observe(view.el);
+        el.explorerViewportObserver = observer;
+        observer.observe(el);
         update();
         window.addEventListener('resize', update);
         document.addEventListener('fullscreenchange', update);
@@ -536,7 +550,7 @@ def create_controls(
             if (input?.validity.valid && Number.isInteger(input.valueAsNumber))
                 bridge.text = JSON.stringify(['page', input.valueAsNumber - 1]);
         };
-        // Layout changes rebuild the details view, so delegate from the stable frame.
+        // Details markup changes when navigating to a different history page.
         view.el.addEventListener('click', event => {
             const path = event.composedPath().filter(node => node instanceof Element);
             if (path.some(node => node.matches('#clear-selection'))) {
@@ -575,8 +589,10 @@ def create_controls(
 
     scroll_to_event = CustomJS(
         args=dict(details=details, selection=detail_selection, panel=right_controls),
-        code="""
-        setTimeout(() => {
+        code=ON_FRAME
+        + """
+        if (cb_obj === panel && panel.visible) details.explorerScrollOnOpen = true;
+        onFrame(details, 'explorerScrollFrame', () => {
             if (!panel.visible) return;
             const view = Bokeh.index.find_one(details);
             const root = view?.shadow_el ?? view?.el?.shadowRoot ?? view?.el;
@@ -587,23 +603,41 @@ def create_controls(
                 root.querySelector(`.explorer-event[data-event="${CSS.escape(id)}"]`);
             const active = findRow(event);
             const shared = findRow(pair);
-            const old = root.querySelector('.explorer-event[style*="fde68a"]');
+            const old = root.explorerActiveRow?.isConnected ? root.explorerActiveRow :
+                root.querySelector('.explorer-event[style*="fde68a"]');
             if (old !== active) {
                 old?.setAttribute('style', 'background:white');
                 active?.setAttribute('style', 'background:#fde68a');
             }
-            for (const cell of root.querySelectorAll('.explorer-event td[rowspan][style]'))
-                cell.removeAttribute('style');
-            for (const cell of shared?.querySelectorAll('td[rowspan]') ?? [])
-                cell.setAttribute('style', 'background:#fde68a');
-            if (active) active.scrollIntoView({block: 'nearest'});
-        }, 0);
+            root.explorerActiveRow = active;
+            const oldPair = root.explorerPairRow;
+            if (oldPair !== shared || !old?.isConnected) {
+                const cells = oldPair?.isConnected ? oldPair.querySelectorAll('td[rowspan][style]') :
+                    root.querySelectorAll('.explorer-event td[rowspan][style]');
+                for (const cell of cells) cell.removeAttribute('style');
+                for (const cell of shared?.querySelectorAll('td[rowspan]') ?? [])
+                    cell.setAttribute('style', 'background:#fde68a');
+                root.explorerPairRow = shared;
+            }
+            const panelView = Bokeh.index.find_one(panel);
+            const scroller = panelView?.el;
+            // Visibility and pane placement can arrive in separate patches.
+            if (active && scroller && getComputedStyle(panelView.parent.el).position === 'relative' &&
+                (root.explorerScrolledRow !== active || details.explorerScrollOnOpen)) {
+                const row = active.getBoundingClientRect();
+                const area = scroller.getBoundingClientRect();
+                if (row.top < Math.max(0, area.top) || row.bottom > Math.min(innerHeight, area.bottom))
+                    active.scrollIntoView({block: 'nearest', inline: 'nearest'});
+                root.explorerScrolledRow = active;
+                details.explorerScrollOnOpen = false;
+            }
+        });
         """,
     )
     details.js_on_change("text", scroll_to_event)
     detail_selection.js_on_change("data", scroll_to_event)
     right_controls.js_on_change("visible", scroll_to_event)
-    body.js_on_change("children", scroll_to_event)
+    body.js_on_change("styles", scroll_to_event)
     ui = Controls(
         counts=counts,
         quality=quality,
@@ -668,55 +702,80 @@ def create_controls(
 
 
 def apply_layout(ui, layout, *, full=False, bottom=False):
-    """Own sizing and both overflow axes for every Explorer layout transition."""
+    """Keep all pane geometry in one inherited CSS update."""
     page = layout == "page" and not full
     flow = {"min-height": "0", "min-width": "0"}
-    container = flow if page else {**flow, "height": "100%"}
+    height = "auto" if page else "100%"
     scrolling = {**flow, "overflow": "visible"} if page else SCROLL_STYLES
-    ui.frame.styles = (
-        {"height": "auto", "overflow": "visible"}
-        if page
-        else {
-            "height": (
-                "100%"
-                if layout == "contained" and not full
-                else "calc(100dvh - var(--explorer-top, 0px) - 6px)"
-            ),
-            **flow,
-            "box-sizing": "border-box",
-            "overflow": "hidden",
-        }
-    )
-    ui.body.styles = ui.workspace.styles = {**container, "position": "relative"}
-    ui.left.styles = flow if page else {"height": "100%"}
-    ui.left_controls.styles = ui.right_controls.styles = scrolling
-    ui.center.styles = {**scrolling, "flex": "1"}
-    ui.right.styles = (
-        {
-            **(flow if page else {}),
-            "border-top": "1px solid #cbd5e1",
-            "padding-top": "8px",
-            "flex-shrink": "0",
-            "box-sizing": "border-box",
-            **({} if page else {"max-height": "50%"}),
-        }
+    ui.frame.styles = {
+        **flow,
+        "height": (
+            "auto"
+            if page
+            else "100%"
+            if layout == "contained" and not full
+            else "var(--explorer-height, calc(100dvh - var(--explorer-top, 0px) - 6px))"
+        ),
+        "box-sizing": "border-box",
+        "overflow": "visible" if page else "hidden",
+    }
+    left, right = ui.left_toggle.active, ui.right_toggle.active
+    ui.body.styles = {
+        **flow,
+        "height": height,
+        "position": "relative",
+        "--workspace-direction": "column" if bottom else "row",
+        "--controls-position": "relative" if left else "absolute",
+        "--controls-width": f"{ui.left.width}px",
+        "--controls-height": height if left else "auto",
+        "--controls-layer": "auto" if left else "10",
+        "--details-position": "relative" if right else "absolute",
+        "--details-width": f"{ui.right.width}px"
+        if ui.right.width is not None
+        else "100%"
         if bottom
-        else container
-    )
-
-    # Closed panels only contain their opener; float it over the plots so it
-    # does not reserve a column (or a flex gap) in the plotting workspace.
-    for panel, toggle, edge in (
-        (ui.left, ui.left_toggle, "left"),
-        (ui.right, ui.right_toggle, "right"),
-    ):
-        panel.styles = {
-            **(panel.styles if toggle.active else {"height": "auto"}),
-            "position": "relative" if toggle.active else "absolute",
-            "top": "auto" if toggle.active else "0",
-            edge: "auto" if toggle.active else "0",
-            "z-index": "auto" if toggle.active else "10",
-        }
+        else "auto",
+        "--details-flex": "1 1 0px"
+        if right and ui.right.width is None and not bottom
+        else "0 0 auto",
+        "--details-height": height if right and not bottom else "auto",
+        "--details-max-height": "50%" if bottom and not page else "none",
+        "--details-border": "1px solid #cbd5e1" if bottom else "0",
+        "--details-padding": "8px" if bottom else "0",
+        "--details-layer": "auto" if right else "10",
+    }
+    ui.workspace.styles = {
+        **flow,
+        "height": height,
+        "position": "relative",
+        "flex-direction": "var(--workspace-direction)",
+    }
+    ui.left.styles = {
+        **flow,
+        "position": "var(--controls-position)",
+        "top": "0",
+        "left": "0",
+        "width": "var(--controls-width)",
+        "height": "var(--controls-height)",
+        "flex": "0 0 auto",
+        "z-index": "var(--controls-layer)",
+    }
+    ui.right.styles = {
+        **flow,
+        "position": "var(--details-position)",
+        "top": "0",
+        "right": "0",
+        "width": "var(--details-width)",
+        "height": "var(--details-height)",
+        "max-height": "var(--details-max-height)",
+        "border-top": "var(--details-border)",
+        "padding-top": "var(--details-padding)",
+        "flex": "var(--details-flex)",
+        "z-index": "var(--details-layer)",
+        "box-sizing": "border-box",
+    }
+    ui.left_controls.styles = ui.right_controls.styles = scrolling
+    ui.center.styles = {**scrolling, "flex": "1 1 0px"}
 
 
 def prepare_toolbar(plot):

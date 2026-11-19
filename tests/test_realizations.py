@@ -173,7 +173,8 @@ def test_concurrent_explorer_sessions_have_independent_connections(
             assert all(not db.closed for db in connections)
         assert all(db.closed for db in connections)
 
-    asyncio.run(run_sessions())
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(asyncio.run, run_sessions()).result()
 
 
 @pytest.mark.parametrize("run,cluster", [(1, 2), (2, 2), (3, 2), (99, 1)])

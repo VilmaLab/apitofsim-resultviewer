@@ -306,7 +306,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     selection_has_histories = not sparse
     details_key = None
     active_groups = set()
-    selection_notice = Div(visible=False)
     rates = RateViews(
         db,
         experiment,
@@ -579,30 +578,20 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         )
         if rates.collision_plot is not old_collision:
             sync_collision_panels()
-        hidden = (
-            selected_events.head(0)
-            if state["event"] is None
-            else selected_events.filter(
+        state["hidden_collision"] = None
+        if state["plot_event"] is not None:
+            hidden_collision = selected_events.filter(
                 (pl.col("id") == state["plot_event"])
+                & (pl.col("type") == "collision")
                 & ~pl.col("event_group").is_in(active_groups)
             )
-        )
-        selection_notice.visible = not hidden.is_empty()
-        state["hidden_collision"] = None
-        notice = ""
-        if not hidden.is_empty():
-            highlighted = hidden.row(0, named=True)
-            notice = (
-                f"<b>Selected hidden event #{escape(str(highlighted['id']))}</b> · "
-                f"{highlighted['type']} · t={highlighted['t']:.6g} s · "
-                f"Axial distance={highlighted['z'] * 1000:.6g} mm"
-            )
-            if highlighted["type"] == "collision":
+            if not hidden_collision.is_empty():
                 state["hidden_collision"] = layout_events(
-                    position_events(hidden, collision_coordinates[0], ui.mode.value),
+                    position_events(
+                        hidden_collision, collision_coordinates[0], ui.mode.value
+                    ),
                     ui.layout.value,
                 ).row(0, named=True)
-        selection_notice.text = notice
         for update in selection_updates:
             update()
 
@@ -952,7 +941,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         )
 
     def assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups):
-        """Position the cohort and assemble shared-axis plots and selection notices."""
+        """Position the cohort and assemble shared-axis plots."""
         nonlocal selection_events, collision_coordinates, collision_panels
         chosen_events = group_events(chosen_events, grouped)
         selection_events = chosen_events
@@ -1368,7 +1357,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 )
             )
         sync_collision_spacing(panels)
-        ui.center_plots.children = [selection_notice, *panels]
+        ui.center_plots.children = panels
         axis_plot = next((p for p in panels if getattr(p, "yaxis", None)), None)
         if axis_plot is not None:
             axis_plot.js_on_change(
@@ -1518,7 +1507,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             panel for panel in ui.center_plots.children if panel not in collision_panels
         ]
         index = next(
-            (i + 1 for i, panel in enumerate(panels) if panel.name == "schematic"), 1
+            (i + 1 for i, panel in enumerate(panels) if panel.name == "schematic"), 0
         )
         collision_panels = (
             list(rates.collision.children) if rates.collision.visible else []

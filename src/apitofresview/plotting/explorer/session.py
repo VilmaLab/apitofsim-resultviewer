@@ -23,7 +23,7 @@ from .controls import (
 )
 from .data import EVENT_TYPES, events_for, load_histories, select_realizations
 from .data import load_overview as load_data
-from .details import render_choices, render_details
+from .details import history_page, render_choices, render_details
 from .escapes import EscapeGroups
 from .layout import (
     coordinate_regions,
@@ -227,6 +227,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         "selected": None,
         "event": None,
         "candidates": {},
+        "detail_page": None,
         "updating": False,
         "grouped": True,
         "grouped_escapes": True,
@@ -292,6 +293,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     selection_updates = []
     chosen = realizations.head(0)
     selection_events = events.head(0)
+    selection_has_histories = not sparse
+    details_key = None
     active_groups = set()
     selection_notice = Div(visible=False)
     rates = RateViews(
@@ -445,29 +448,33 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     def set_selection(rid, event_id):
         state["selected"], state["event"] = rid, event_id
         state["candidates"] = {}
-        full = ui.fullscreen_state.text == "full"
-        if rid is not None and not state["sidebar"][full][1]:
-            state["sidebar"][full][1] = True
-            apply_sidebars(full)
+        state["detail_page"] = None
         update_selection()
+        if rid is not None:
+            open_details()
 
     def set_candidates(candidates):
         state["selected"] = state["event"] = None
         state["candidates"] = candidates
+        update_selection()
+        open_details()
+
+    def open_details():
         full = ui.fullscreen_state.text == "full"
         if not state["sidebar"][full][1]:
             state["sidebar"][full][1] = True
-            apply_sidebars(full)
-        update_selection()
+            with doc.models.freeze():
+                apply_sidebars(full)
 
-    def update_selection():
+    def selected_history():
         selected = (
             chosen.head(0)
             if state["selected"] is None
             else chosen.filter(pl.col("id") == state["selected"])
         )
-        selected_events = events_for(selection_events, selected)
-        if sparse and not selected.is_empty():
+        if selection_has_histories or selected.is_empty():
+            selected_events = events_for(selection_events, selected)
+        else:
             selected_events = histories(tuple(selected["id"])).join(
                 selected.select(
                     pl.col("id").alias("realization_id"), "realization_number"
@@ -479,11 +486,50 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             selected_events = group_events(
                 selected_events, state["grouped"] and not pathway_mode
             )
+        return selected, selected_events
+
+    def show_history_page(selected, selected_events):
+        nonlocal details_key
+        event = state["event"]
+        window = history_page(selected_events, event, state["detail_page"])
+        radial = enabled(ui.summarise_motion)
+        energy = enabled(ui.summarise_energy)
+        key = (state["selected"], window[0], radial, energy)
+        if details_key != key or doc.session_context is None:
+            ui.details.text = render_details(
+                selected, selected_events, event, radial, energy, window=window
+            )
+            details_key = key
+        ui.detail_selection.data = (
+            dict(event=[], pair=[])
+            if event is None
+            else dict(event=[str(event)], pair=[str(state["plot_event"])])
+        )
+
+    def update_selection():
+        nonlocal details_key
+        selected, selected_events = selected_history()
+        selected_event = (
+            selected_events.filter(pl.col("id") == state["event"])
+            if state["event"] is not None
+            else selected_events.head(0)
+        )
+        state["plot_event"] = (
+            selected_event["collision_id"][0]
+            or (
+                selected_event["fragmentation_id"][0]
+                if "fragmentation_id" in selected_event.columns
+                else None
+            )
+            or state["event"]
+            if not selected_event.is_empty()
+            else None
+        )
         if state["candidates"]:
             candidates = selection_events.filter(
                 pl.col("id").is_in(state["candidates"])
             )
-            if sparse:
+            if not selection_has_histories:
                 candidates = (
                     histories(
                         tuple(candidates["realization_id"].unique()),
@@ -502,14 +548,10 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             ui.details.text = render_choices(
                 candidates, enabled(ui.summarise_motion), enabled(ui.summarise_energy)
             )
+            details_key = None
+            ui.detail_selection.data = dict(event=[], pair=[])
         else:
-            ui.details.text = render_details(
-                selected,
-                selected_events,
-                state["event"],
-                enabled(ui.summarise_motion),
-                enabled(ui.summarise_energy),
-            )
+            show_history_page(selected, selected_events)
         ui.summarise_motion.visible = not selected.is_empty() or bool(
             state["candidates"]
         )
@@ -519,11 +561,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.rate_separator.visible = ui.rate_controls.visible
         ui.detail_log_rates.disabled = not ui.rate_controls.visible
         ui.detail_show_readoffs.disabled = not ui.rate_controls.visible
-        selected_event = (
-            selected_events.filter(pl.col("id") == state["event"])
-            if state["event"] is not None
-            else selected_events.head(0)
-        )
         old_collision = rates.collision_plot
         rates.update(
             selected,
@@ -533,17 +570,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         )
         if rates.collision_plot is not old_collision:
             sync_collision_panels()
-        state["plot_event"] = (
-            selected_event["collision_id"][0]
-            or (
-                selected_event["fragmentation_id"][0]
-                if "fragmentation_id" in selected_event.columns
-                else None
-            )
-            or state["event"]
-            if not selected_event.is_empty()
-            else None
-        )
         hidden = (
             selected_events.head(0)
             if state["event"] is None
@@ -580,26 +606,29 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 if str(event_id) == event:
                     set_selection(rid, event_id)
                     break
-        elif action == "inspect" and state["selected"] is not None:
-            history = (
-                histories((state["selected"],))
-                if sparse
-                else events.filter(pl.col("realization_id") == state["selected"])
-            )
-            for event_id in history["id"]:
-                if str(event_id) == event:
-                    set_selection(state["selected"], event_id)
-                    break
+        elif state["selected"] is not None:
+            if action == "page" and type(event) is int:
+                state["detail_page"] = event
+                show_history_page(*selected_history())
+            elif action == "inspect":
+                _, history = selected_history()
+                for event_id in history["id"]:
+                    if str(event_id) == event:
+                        set_selection(state["selected"], event_id)
+                        break
 
     ui.detail_bridge.on_change("text", sidebar_event)
 
     def prepare_cohort():
         """Filter the cohort, then update its details and summary."""
+        nonlocal selection_has_histories
         chosen = selected_cohort()
         chosen_ids = chosen["id"]
         if state["selected"] not in chosen_ids:
             state["selected"] = state["event"] = None
+            state["detail_page"] = None
         chosen_events = events_for(events, chosen)
+        selection_has_histories = not sparse
         if (
             sparse
             and not chosen.is_empty()
@@ -610,6 +639,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             )
         ):
             chosen_events = histories(tuple(chosen["id"]))
+            selection_has_histories = True
         chosen_events = chosen_events.join(
             chosen.select(
                 pl.col("id").alias("realization_id"),
@@ -1349,7 +1379,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             )
 
     def render():
-        nonlocal chosen, active_groups
+        nonlocal chosen, active_groups, details_key
         if state["updating"]:
             return
         state["updating"] = True
@@ -1358,6 +1388,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             # rather than walking it after each intermediate layout change.
             with doc.models.freeze():
                 state["candidates"] = {}
+                details_key = None
                 selection_updates.clear()
                 chosen, chosen_events = prepare_cohort()
                 grouped, event_colors, active_groups = sync_event_controls()

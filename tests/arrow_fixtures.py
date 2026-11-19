@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 from apitofsim.recording import EVENT_SCHEMA
 
 
-def publish_events(db, rows, *, statuses=None, format="arrow"):
+def publish_events(db, rows, *, statuses=None, format="arrow", row_group_size=None):
     db._release_event_reader()
     identity, generation, _ = db.db.execute(
         "select archive_id,generation,file_size from event_recording_state"
@@ -34,7 +34,11 @@ def publish_events(db, rows, *, statuses=None, format="arrow"):
         schema = schema.with_metadata(
             {**schema.metadata, b"apitofsim:generation": str(generation + 1).encode()}
         )
-        pq.write_table(pa.Table.from_pylist(values, schema=schema), db.events_path)
+        pq.write_table(
+            pa.Table.from_pylist(values, schema=schema),
+            db.events_path,
+            row_group_size=row_group_size,
+        )
     else:
         with pa.ipc.new_file(
             str(db.events_path),

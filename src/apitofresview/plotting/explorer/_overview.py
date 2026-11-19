@@ -5,10 +5,10 @@ from itertools import chain, pairwise
 import numpy as np
 import polars as pl
 import pyarrow as pa
-from apitofsim.recording import EVENT_SCHEMA, PARQUET_VERSION
-from apitofsim.workflow.db import _EventQueries
+from apitofsim.recording import PARQUET_VERSION
 from numba import njit
 
+from ._parquet import InMemoryEventQueries
 
 # Small selections can use SQL without paying to compile the scanner.
 MIN_STREAM_EVENTS = 1_000_000
@@ -196,28 +196,6 @@ def _stream_result(archive, result, nodes, retained, histories):
     return True
 
 
-class _RetainedTreeEvents(_EventQueries):
-    """Reuse apitofsim's event and tree projections on an in-memory archive."""
-
-    def __init__(self, connection, retained):
-        self.db = connection
-        # The shared projection binds all motion fields even for an overview.
-        missing = ", ".join(
-            f"NULL::DOUBLE AS {field.name}"
-            for field in EVENT_SCHEMA
-            if field.name not in SCAN_FIELDS
-        )
-        self.archive = connection.from_arrow(retained).select(f"*, {missing}")
-
-    def _recorded_events(self, run_id, parent, result_id, *, columns=None):
-        archive = (
-            self.archive if columns is None else self.archive.select(", ".join(columns))
-        )
-        return archive, self._execution_query(run_id, parent, result_id).filter(
-            "recorded"
-        )
-
-
 def stream_tree_overview(db, experiment, cluster):
     """Return the sparse event frame, or use SQL for unsupported archives."""
     if not db.readonly:
@@ -257,7 +235,7 @@ def stream_tree_overview(db, experiment, cluster):
 
     rows = pa.Table.from_batches(retained)
     events = (
-        _RetainedTreeEvents(db.db, rows)
+        InMemoryEventQueries(db.db, rows)
         .tree_events_query(run_id=experiment, parent=cluster)
         .select(f"* exclude ({MOTION_COLUMNS})")
         .pl()

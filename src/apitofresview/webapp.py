@@ -711,13 +711,55 @@ def create_app(database_path=None, debug=True, *, events_filename=None):
     db = ExperimentDatabase(
         database_path, readonly=True, events_filename=events_filename
     )
+    search_path = db.db.execute("select current_setting('search_path')").fetchone()[0]
+    session_databases = set()
+
+    def build_bokeh_document(build, doc):
+        # Bokeh initializes and updates different documents concurrently. A
+        # cursor shares the app's snapshot but has its own query state.
+        connection = db.db.cursor()
+        try:
+            connection.execute("set search_path = ?", [search_path])
+            session_db = ExperimentDatabase(
+                (connection, None), readonly=True, events_filename=db.events_path
+            )
+        except BaseException:
+            connection.close()
+            raise
+
+        def close_session(_session_context):
+            session_databases.discard(session_db)
+            session_db.close()
+
+        try:
+            build(session_db, doc)
+            doc.on_session_destroyed(close_session)
+        except BaseException:
+            session_db.close()
+            raise
+        session_databases.add(session_db)
+
+    bokeh = BokehASGI(
+        {
+            "/spectrogram": partial(build_bokeh_document, spectrogram_bokeh),
+            "/explorer": partial(build_bokeh_document, explorer_bokeh),
+        }
+    )
 
     @asynccontextmanager
     async def lifespan(app):
         try:
             yield
         finally:
-            db.close()
+            try:
+                await bokeh.core.stop()
+                # A document whose initialization was cancelled during shutdown
+                # may never have been published as a session.
+                for session_db in session_databases:
+                    session_db.close()
+                session_databases.clear()
+            finally:
+                db.close()
 
     app = Starlette(
         debug=debug,
@@ -742,16 +784,7 @@ def create_app(database_path=None, debug=True, *, events_filename=None):
             Mount(
                 "/static", StaticFiles(directory=_resource_dir("static")), name="static"
             ),
-            Mount(
-                "/bokeh",
-                BokehASGI(
-                    {
-                        "/spectrogram": partial(spectrogram_bokeh, db),
-                        "/explorer": partial(explorer_bokeh, db),
-                    }
-                ),
-                name="bokeh",
-            ),
+            Mount("/bokeh", bokeh, name="bokeh"),
         ],
     )
     app.state.db = db

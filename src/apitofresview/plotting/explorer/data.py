@@ -178,6 +178,42 @@ def load_histories(db, experiment, cluster, regions, members, *, tree=False, ids
     )
 
 
+class CohortHistories:
+    """Reuse full histories from the previous collision cohort within a session."""
+
+    def __init__(self, load, max_bytes=64 * 1024**2):
+        self.load = load
+        self.max_bytes = max_bytes
+        self.members = frozenset()
+        self.events = None
+
+    def __call__(self, ids):
+        members = frozenset(ids)
+        if self.events is not None and members == self.members:
+            return self.events
+        retained = self.members & members
+        if self.events is not None and retained:
+            events = self.events.filter(pl.col("realization_id").is_in(list(retained)))
+            missing = tuple(rid for rid in ids if rid not in retained)
+            if missing:
+                events = pl.concat([events, self.load(missing)]).sort(
+                    "result_id", "realization_index", "event_index"
+                )
+            # The loader numbers rows within the complete requested cohort.
+            events = events.with_columns(
+                pl.int_range(
+                    1, pl.len() + 1, dtype=events.schema["event_number"]
+                ).alias("event_number")
+            )
+        else:
+            events = self.load(ids)
+        if events.estimated_size() <= self.max_bytes:
+            self.members, self.events = members, events
+        else:
+            self.members, self.events = frozenset(), None
+        return events
+
+
 def load_data(db, experiment: int, cluster: int, *, summary=False):
     """Return realization, event, pathway and region frames for one cohort."""
     mode = simulation_mode(db, experiment)

@@ -101,12 +101,14 @@ jobs:
             "artifacts/apitofresview-${{ matrix.target }}.zip"
 
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         with:
           name: apitofresview-${{ matrix.target }}
           path: artifacts/*
           if-no-files-found: error
+          compression-level: 0 # The packages are already compressed.
           # These are ~200 MB each; do not keep every branch build forever.
-          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
+          retention-days: 7
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')

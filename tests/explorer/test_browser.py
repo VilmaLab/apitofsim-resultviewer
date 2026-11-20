@@ -1181,8 +1181,13 @@ def test_horizontal_fit(page, explorer_server, width, tmp_path):
             resized,
         )
         page.wait_for_function(
-            """width =>
-            Bokeh.documents[0].get_model_by_name('explorer_viewport').text.split(',')[0] === String(width)
+            """width => {
+                const doc = Bokeh.documents[0];
+                const right = doc.roots()[0].children[0].children[1].children[1];
+                const sidebarWidth = Bokeh.index.find_one(right).el.getBoundingClientRect().width;
+                return doc.get_model_by_name('explorer_viewport').text.startsWith(`${width},`) &&
+                    sidebarWidth === (width < 900 ? 250 : 300);
+            }
         """,
             arg=resized,
         )

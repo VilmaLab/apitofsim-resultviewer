@@ -15,6 +15,7 @@ from .aggregation import cumulative_areas, regional_fractions
 from .browser import ON_FRAME
 from .controls import (
     CHECKBOX_CSS,
+    SIDEBAR_BREAKPOINT,
     apply_layout,
     create_controls,
     enabled,
@@ -399,11 +400,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if mode == "sidebar":
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
-        narrow = int(ui.viewport_width.text.split(",")[0]) < 900
+        narrow = int(ui.viewport_width.text.split(",")[0]) < SIDEBAR_BREAKPOINT
         if narrow and left_open and right_open and not bottom:
             left_open = False
             state["sidebar"][full][0] = False
-        geometry = (full, left_open, right_open, mode, narrow)
+        geometry = (full, left_open, right_open, mode)
         if geometry == sidebar_layout:
             # Clicking the selected placement toggles its button off locally.
             if not ui.detail_layouts[mode].active:
@@ -426,9 +427,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.left_controls.visible, ui.right_controls.visible = left_open, right_open
         ui.left.width = 205 if left_open else 38
         split = right_open and mode != "sidebar"
-        ui.right.width = (
-            None if split else (250 if narrow else 300) if right_open else 38
-        )
+        ui.right.width = None if split else 300 if right_open else 38
         ui.right.sizing_mode = "stretch_width" if split else "fixed"
         apply_layout(ui, layout, full=full, bottom=bottom)
         ui.left_toggle.width, ui.right_toggle.width = (
@@ -455,7 +454,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             index == 0
             and active
             and state["details_layout"][full] != "bottom"
-            and int(ui.viewport_width.text.split(",")[0]) < 900
+            and int(ui.viewport_width.text.split(",")[0]) < SIDEBAR_BREAKPOINT
         ):
             state["sidebar"][full][1] = False
         apply_sidebars(full)

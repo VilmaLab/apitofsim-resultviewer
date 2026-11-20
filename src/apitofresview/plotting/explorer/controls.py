@@ -40,6 +40,7 @@ SCROLL_STYLES = {
     "overscroll-behavior": "contain",
     "flex": "1",
 }
+SIDEBAR_BREAKPOINT = 900
 
 # Bokeh caps non-fixed layouts at 100% of their parent. Scroll contents must
 # retain their intrinsic height, including when taller than the whole panel.
@@ -451,6 +452,16 @@ def create_controls(
         right_controls,
         width=38,
         spacing=4,
+        stylesheets=[
+            InlineStyleSheet(
+                css=f"""
+                :host {{ --sidebar-width: 300px; }}
+                @container explorer (width < {SIDEBAR_BREAKPOINT}px) {{
+                    :host {{ --sidebar-width: 250px; }}
+                }}
+                """
+            )
+        ],
     )
     right_controls.visible = False
     center_plots = column(
@@ -724,13 +735,17 @@ def apply_layout(ui, layout, *, full=False, bottom=False):
         **flow,
         "height": height,
         "position": "relative",
+        "container-type": "inline-size",
+        "container-name": "explorer",
         "--workspace-direction": "column" if bottom else "row",
         "--controls-position": "relative" if left else "absolute",
         "--controls-width": f"{ui.left.width}px",
         "--controls-height": height if left else "auto",
         "--controls-layer": "auto" if left else "10",
         "--details-position": "relative" if right else "absolute",
-        "--details-width": f"{ui.right.width}px"
+        "--details-width": "38px"
+        if not right
+        else None
         if ui.right.width is not None
         else "100%"
         if bottom
@@ -765,7 +780,7 @@ def apply_layout(ui, layout, *, full=False, bottom=False):
         "position": "var(--details-position)",
         "top": "0",
         "right": "0",
-        "width": "var(--details-width)",
+        "width": "var(--details-width, var(--sidebar-width))",
         "height": "var(--details-height)",
         "max-height": "var(--details-max-height)",
         "border-top": "var(--details-border)",

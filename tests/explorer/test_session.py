@@ -212,14 +212,14 @@ def test_bokeh_document_modes_and_views(monkeypatch):
     fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
     fullscreen.text = "full"
     assert not sidebars[0].children[1].visible and not sidebars[2].children[1].visible
-    assert sidebars[0].styles["position"] == "absolute"
+    assert frame.children[0].styles["--controls-position"] == "absolute"
     fullscreen.text = "normal"
     assert sidebars[0].children[1].visible and not sidebars[2].children[1].visible
     viewport = next(d for d in doc.select({"type": Div}) if d.text == "1440,900")
     viewport.text = "533,900"
     sidebars[2].children[0].children[0].active = True
     assert not sidebars[0].children[1].visible
-    assert sidebars[2].width == 250
+    assert sidebars[2].width == 300
 
     plots = list(doc.select({"type": type(figure())}))
     event_plots = [p for p in plots if p.name == "events"]
@@ -1146,14 +1146,13 @@ def test_inspection_and_frame_changes_preserve_plots(monkeypatch, layout):
     assert (p.x_range.start, p.x_range.end) == (1, 8)
 
 
-@pytest.mark.parametrize("layout", ["realization", "beeswarm"])
-def test_live_packing_waits_for_dimensions_and_coalesces_updates(monkeypatch, layout):
+def test_live_packing_waits_for_dimensions_and_coalesces_updates(monkeypatch):
     frames = cohort([1], event(1, "init", 1, 0, 0), event(2, "escape", 1, 1, 5))
     monkeypatch.setattr(session, "load_data", lambda *args: frames)
     doc = Document()
     # Exercise server scheduling without starting a network server.
     doc._session_context = lambda: object()
-    packing_name = "pack_beeswarm" if layout == "beeswarm" else "spread_terminal_x"
+    packing_name = "pack_beeswarm"
     original = getattr(plot, packing_name)
     calls = []
 
@@ -1170,7 +1169,7 @@ def test_live_packing_waits_for_dimensions_and_coalesces_updates(monkeypatch, la
     assert doc.select_one({"name": "events"}) is initial_plot
     next(
         w for w in doc.select({"type": Select}) if w.title == "Y coordinate"
-    ).value = layout
+    ).value = "beeswarm"
     p = doc.select_one({"name": "events"})
     assert not calls
     p.set_from_json("inner_width", 300)
@@ -1271,17 +1270,20 @@ def test_details_layout_transitions(monkeypatch, mode, layout):
     assert layouts["sidebar"].active
     layouts[mode].active = True
     assert left.children[1].visible == (mode == "bottom")
-    assert ("border-top" in right.styles) == (mode == "bottom")
+    assert (body.styles["--details-border"] != "0") == (mode == "bottom")
     assert right.sizing_mode == "stretch_width" and right.width is None
-    assert type(body.children[1]).__name__ == ("Column" if mode == "bottom" else "Row")
+    assert body.children[1] is workspace
+    assert body.styles["--workspace-direction"] == (
+        "column" if mode == "bottom" else "row"
+    )
     if layout == "page":
-        assert "max-height" not in right.styles
-        assert "height" not in right.styles
+        assert body.styles["--details-max-height"] == "none"
+        assert body.styles["--details-height"] == "auto"
         assert doc.roots[0].styles["height"] == "auto"
     elif mode == "bottom":
-        assert right.styles["max-height"] == "50%"
+        assert body.styles["--details-max-height"] == "50%"
     else:
-        assert right.styles["height"] == "100%"
+        assert body.styles["--details-height"] == "100%"
     # Clicking the selected layout again keeps it selected.
     layouts[mode].active = False
     assert layouts[mode].active
@@ -1298,7 +1300,7 @@ def test_details_layout_transitions(monkeypatch, mode, layout):
 
     toggle.active = False
     assert layouts["sidebar"].active
-    assert "border-top" not in right.styles
+    assert body.styles["--details-border"] == "0"
     assert all(not button.visible for button in layouts.values())
     toggle.active = True
     assert right.width == 300 and layouts["sidebar"].active

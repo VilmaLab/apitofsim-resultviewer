@@ -6,22 +6,23 @@ import numpy as np
 import polars as pl
 from apitofsim import collision_profile, skimmer
 from apitofsim.api import ApiTofRateConstantOverflow, internal_energy
-from bokeh.layouts import column
+from bokeh.layouts import column, row
 from bokeh.models import (
     BasicTickFormatter,
     BasicTicker,
     ColumnDataSource,
-    CustomJS,
+    InlineStyleSheet,
     Div,
     Label,
     Range1d,
     Span,
+    Toggle,
 )
 from bokeh.plotting import figure
 
 from .controls import enabled, prepare_toolbar
 from .layout import position_events
-from .plot import COLORS, PATHWAY_COLORS
+from .plot import COLORS, PATHWAY_COLORS, update_range
 
 
 def message(text):
@@ -39,32 +40,41 @@ def rate_range(values, logarithmic):
     return Range1d(0, hi * 1.05 if hi else 1)
 
 
-def responsive_legend(chart, legend):
-    """Fit row-major legend columns to the current frame using actual text widths."""
-    legend.orientation = "horizontal"
-    legend.ncols = 1
-    chart.js_on_change(
-        "inner_width",
-        CustomJS(
-            args=dict(chart=chart, legend=legend),
-            code="""
-        if (!(chart.inner_width > 0)) return;
-        const ctx = document.createElement('canvas').getContext('2d');
-        ctx.font = `${legend.label_text_font_style} ${legend.label_text_font_size} ${legend.label_text_font}`;
-        const widths = legend.items.map(item => legend.glyph_width + legend.label_standoff +
-            Math.max(legend.label_width, ctx.measureText(item.label.value).width));
-        const available = chart.inner_width - 2 * (legend.padding + legend.margin + 1);
-        let columns = widths.length;
-        for (; columns > 1; columns--) {
-            const sizes = Array(columns).fill(0);
-            widths.forEach((width, i) => sizes[i % columns] = Math.max(sizes[i % columns], width));
-            if (sizes.reduce((sum, width) => sum + width, 0) + (columns - 1) * legend.spacing <= available)
-                break;
+def rate_legend(entries):
+    styles = InlineStyleSheet(
+        css="""
+        .bk-btn { font-size: 9pt; white-space: normal; overflow-wrap: anywhere; text-align: start; }
+        .bk-btn::before {
+            content: ''; display: inline-block; width: 14px; margin-right: 5px;
+            border-top: 2px solid var(--rate-color); vertical-align: middle;
         }
-        legend.ncols = Math.max(columns, 1);
-        chart.height = 260 + 25 * Math.ceil(widths.length / legend.ncols);
-    """,
-        ),
+        .bk-btn:not(.bk-active) { opacity: 0.6; }
+    """
+    )
+    buttons = []
+    for name, color, renderer in entries:
+        button = Toggle(
+            label=name,
+            active=True,
+            max_width=300,
+            margin=0,
+            syncable=False,
+            styles={
+                "--rate-color": color,
+                "flex": "0 1 auto",
+                "max-width": "min(300px, 100%)",
+            },
+            stylesheets=[styles],
+        )
+        button.js_link("active", renderer, "visible")
+        renderer.syncable = False
+        buttons.append(button)
+    return row(
+        *buttons,
+        sizing_mode="stretch_width",
+        spacing=4,
+        styles={"flex-wrap": "wrap"},
+        name="rate_legend",
     )
 
 
@@ -123,6 +133,7 @@ class RateViews:
         self.default_names = set(fate_names)
         self.colors = dict(colors)
         self.curve_cache = {}
+        self.profile_cache = {}
         self.signature = None
         self.markers = []
         self.readouts = []
@@ -133,6 +144,10 @@ class RateViews:
         self.profile_error = None
         self.collision = column(Div(), sizing_mode="stretch_width", visible=False)
         self.collision_source = None
+        self.collision_chart_key = None
+        self.collision_key = None
+        self.collision_values = None
+        self.mapped_regions = None
         self.collision_plot = None
         self.collision_notice = message("")
         self.event = None
@@ -148,7 +163,7 @@ class RateViews:
                 self.curve_cache[key] = str(exc)
         return self.curve_cache[key]
 
-    def update(self, selected, event):
+    def update(self, selected, event, *, refit_collision=False):
         self.event = event
         current = (
             event.get("current_cluster_id")
@@ -158,9 +173,10 @@ class RateViews:
         if current != self.current_cluster:
             self.current_cluster = current
             self.profile = self.profile_error = None
+            self.collision_key = None
             if self.collision_context is not None:
                 self.configure_collision(*self.collision_context)
-        self.update_collision()
+        self.update_collision(refit=refit_collision)
         if selected.is_empty() or not enabled(self.ui.show_rates):
             return
         result = selected["experiment_result_id"][0]
@@ -173,8 +189,16 @@ class RateViews:
             enabled(self.ui.log_rates),
         )
         if signature != self.signature:
+            if self.signature is None or signature[:3] != self.signature[:3]:
+                self.energy_range = None
             self.signature = signature
             self.build_rates(result)
+        self.update_rate_annotations()
+
+    def update_rate_annotations(self):
+        if not enabled(self.ui.show_rates):
+            return
+        event = self.event
         energy = internal_energy(
             event.get("rot_energy") if event else None,
             event.get("vibrational_energy") if event else None,
@@ -191,24 +215,24 @@ class RateViews:
                 if value >= self.energy_range.end:
                     self.energy_range.end = value + padding
         placed = {}
+        show = (
+            enabled(self.ui.show_readoffs) and value is not None and np.isfinite(value)
+        )
         for curve, chart, label in self.readouts:
-            label.visible = False
-            if (
-                not enabled(self.ui.show_readoffs)
-                or value is None
-                or not np.isfinite(value)
-            ):
+            if not show:
+                label.visible = False
                 continue
             try:
                 rate = float(
                     curve.rate_at(energy - curve.bonding_energy).to("1/s").magnitude
                 )
             except ValueError, ApiTofRateConstantOverflow:
-                continue
+                rate = np.nan
             if (
                 not np.isfinite(rate)
                 or not chart.y_range.start <= rate <= chart.y_range.end
             ):
+                label.visible = False
                 continue
             # Stack equal-value readouts so coincident pathways remain readable.
             key = (chart.id, rate)
@@ -272,13 +296,14 @@ class RateViews:
         finite_x = finite_x[np.isfinite(finite_x)]
         maximum = float(finite_x.max()) if len(finite_x) else 1e-20
         minimum = min(0, float(finite_x.min())) if len(finite_x) else 0
-        self.energy_range = Range1d(
-            minimum, maximum if maximum > minimum else minimum + 1e-20
-        )
+        maximum = maximum if maximum > minimum else minimum + 1e-20
+        if self.energy_range is None:
+            self.energy_range = Range1d(minimum, maximum)
+        update_range(self.energy_range, minimum, maximum)
         y_range = rate_range(ys, logarithmic)
         if shared and logarithmic and len(minima) > 1:
             y_range.start = max(minima) / 1.2
-        plots, notices = [], []
+        plots, notices, entries = [], [], []
         for curve in curves:
             name = self.names.get(curve.pathway_id, f"Pathway {curve.pathway_id}")
             color = self.colors.get(name, COLORS["fragmentation"])
@@ -307,13 +332,9 @@ class RateViews:
                 y = np.asarray(curve.histogram.y, dtype=float).copy()
                 valid = np.isfinite(y) & (y > 0 if logarithmic else y >= 0)
                 y[~valid] = np.nan
-                chart.line(
-                    x,
-                    y,
-                    color=color,
-                    line_width=2,
-                    **({"legend_label": name} if shared else {}),
-                )
+                renderer = chart.line(x, y, color=color, line_width=2)
+                if shared:
+                    entries.append((name, color, renderer))
                 label = readout_label("fragmentation_readout", color)
                 chart.add_layout(label)
                 self.readouts.append((curve, chart, label))
@@ -330,15 +351,8 @@ class RateViews:
             )
             chart.add_layout(marker)
             self.markers.append(marker)
-            if chart.legend:
-                legend = chart.legend[0]
-                legend.click_policy = "hide"
-                legend.label_text_font_size = "9pt"
-                chart.center.remove(legend)
-                chart.add_layout(legend, "below")
-                chart.height += 25 * len(legend.items)
-                responsive_legend(chart, legend)
-        self.ui.rate_plots.children = [*plots, *notices]
+        legend = [rate_legend(entries)] if entries else []
+        self.ui.rate_plots.children = [*plots, *legend, *notices]
 
     @staticmethod
     def internal_energies(curve):
@@ -353,35 +367,45 @@ class RateViews:
         self.ui.collision_rates.disabled = not spatial
         if not self.collision.visible:
             return
-        if self.profile is None and self.profile_error is None:
+        if self.current_cluster not in self.profile_cache:
             try:
                 config, cluster = self.db.collision_profile_inputs(
                     run_id=self.run, cluster_id=self.current_cluster
                 )
-                self.profile = collision_profile(
-                    config, cluster, skimmer=skimmer(config)
-                )
+                profile = collision_profile(config, cluster, skimmer=skimmer(config))
+                self.profile_cache[self.current_cluster] = (profile, None)
             except (ValueError, RuntimeError, AttributeError, KeyError) as exc:
-                self.profile_error = str(exc)
+                self.profile_cache[self.current_cluster] = (None, str(exc))
+        self.profile, self.profile_error = self.profile_cache[self.current_cluster]
         if self.profile_error is not None:
-            self.collision.children = [
-                message(f"Collision rates unavailable: {self.profile_error}")
-            ]
+            text = f"<p>Collision rates unavailable: {escape(self.profile_error)}</p>"
+            self.collision_notice.update(text=text, visible=True)
+            self.collision.children = [self.collision_notice]
             return
-        positions, mapped = [], []
-        for lo, hi, left, right in mapped_regions.select(
-            "physical_left", "physical_right", "left", "right"
-        ).iter_rows():
-            if hi <= lo:
-                continue
-            z = np.linspace(lo, np.nextafter(hi, lo), 128)
-            positions.extend(z)
-            mapped.extend(left + (z - lo) * (right - left) / (hi - lo))
-        self.positions = np.asarray(positions)
-        self.mapped = mapped
-        self.mapped_regions = mapped_regions
+        if self.mapped_regions is None or not self.mapped_regions.equals(
+            mapped_regions
+        ):
+            positions, mapped = [], []
+            for lo, hi, left, right in mapped_regions.select(
+                "physical_left", "physical_right", "left", "right"
+            ).iter_rows():
+                if hi <= lo:
+                    continue
+                z = np.linspace(lo, np.nextafter(hi, lo), 128)
+                positions.extend(z)
+                mapped.extend(left + (z - lo) * (right - left) / (hi - lo))
+            self.positions = np.asarray(positions)
+            self.mapped = mapped
+            self.mapped_regions = mapped_regions
+            self.collision_key = None
         self.shared_x = shared_x
-        self.build_collision()
+        logarithmic = enabled(self.ui.log_rates)
+        if self.collision_plot is None or self.collision_chart_key != logarithmic:
+            self.collision_chart_key = logarithmic
+            self.build_collision()
+        else:
+            self.collision_plot.x_range = shared_x
+        self.collision.children = [self.collision_plot, self.collision_notice]
 
     def build_collision(self):
         logarithmic = enabled(self.ui.log_rates)
@@ -432,54 +456,63 @@ class RateViews:
         self.collision_plot.add_layout(self.collision_marker)
         self.collision_plot.add_layout(self.collision_readout)
         prepare_toolbar(self.collision_plot)
-        self.collision.children = [self.collision_plot, self.collision_notice]
-        self.update_collision()
+        self.collision_key = None
 
-    def change_scale(self):
-        if self.collision.visible and self.profile is not None:
-            self.build_collision()
-
-    def update_collision(self):
-        if not self.collision.visible or self.collision_source is None:
+    def update_collision(self, *, refit=False):
+        if (
+            not self.collision.visible
+            or self.profile is None
+            or self.collision_source is None
+        ):
             return
         velocity = self.event.get("velocity") if self.event else dict(x=0, y=0, z=0)
-        self.collision_marker.visible = self.collision_readout.visible = False
+        vector = (
+            tuple(velocity.get(axis) for axis in "xyz") if velocity is not None else ()
+        )
+        logarithmic = enabled(self.ui.log_rates)
+        z = self.event.get("z") if self.event else None
+        key = (vector, z, logarithmic)
+        if key != self.collision_key:
+            self.collision_key = key
+            self.collision_values = self.sample_collision(vector, logarithmic)
+        if refit and len(self.collision_source.data["rate"]):
+            bounds = self.collision_plot.y_range
+            bounds.start, bounds.end = bounds.reset_start, bounds.reset_end
+        self.collision_marker.visible = self.collision_values is not None
+        if self.collision_values is not None:
+            x, rate = self.collision_values
+            self.collision_marker.location = x
+        if (
+            self.collision_values is not None
+            and np.isfinite(rate)
+            and enabled(self.ui.show_readoffs)
+        ):
+            place_readout(
+                self.collision_readout, self.collision_plot, x, rate, logarithmic
+            )
+        else:
+            self.collision_readout.visible = False
+        self.collision_notice.visible = bool(self.collision_notice.text) or enabled(
+            self.ui.fate_facets
+        )
+
+    def sample_collision(self, vector, logarithmic):
         try:
-            if velocity is None or any(velocity.get(axis) is None for axis in "xyz"):
+            if len(vector) != 3 or any(value is None for value in vector):
                 raise ValueError("Selected event has no velocity")
-            vector = [velocity[axis] for axis in "xyz"]
             positions, mapped, index = self.collision_positions()
             rates = np.asarray(
-                self.profile.frequency(
-                    positions,
-                    vector,
-                    quantities_strict=False,
-                )
+                self.profile.frequency(positions, list(vector), quantities_strict=False)
                 .to("1/s")
                 .magnitude,
                 dtype=float,
             ).copy()
-            logarithmic = enabled(self.ui.log_rates)
             valid = np.isfinite(rates) & (rates > 0 if logarithmic else rates >= 0)
             rates[~valid] = np.nan
             self.collision_source.data = dict(x=mapped, rate=rates)
             bounds = rate_range(rates, logarithmic)
-            self.collision_plot.y_range.start = bounds.start
-            self.collision_plot.y_range.end = bounds.end
-            self.collision_plot.y_range.reset_start = bounds.start
-            self.collision_plot.y_range.reset_end = bounds.end
+            update_range(self.collision_plot.y_range, bounds.start, bounds.end)
             self.velocity_label.text = f"v = {np.linalg.norm(vector):.6g} m/s"
-            if index is not None:
-                self.collision_marker.location = mapped[index]
-                self.collision_marker.visible = True
-                if valid[index] and enabled(self.ui.show_readoffs):
-                    place_readout(
-                        self.collision_readout,
-                        self.collision_plot,
-                        mapped[index],
-                        rates[index],
-                        logarithmic,
-                    )
             self.collision_notice.text = (
                 ""
                 if valid.any()
@@ -487,15 +520,14 @@ class RateViews:
                 if logarithmic
                 else "No collision rates."
             )
+            return (mapped[index], rates[index]) if index is not None else None
         except (ValueError, RuntimeError) as exc:
             self.collision_source.data = dict(x=[], rate=[])
             self.velocity_label.text = "v unavailable"
             self.collision_notice.text = (
                 f"Collision rates unavailable: {escape(str(exc))}"
             )
-        self.collision_notice.visible = bool(self.collision_notice.text) or enabled(
-            self.ui.fate_facets
-        )
+            return None
 
     def collision_positions(self):
         """Include the selected physical position in the plotted profile and readout."""

@@ -17,7 +17,17 @@
 <link rel="preload" as="script" href="{{ url_for('bokeh', path='static/js/' ~ component ~ '.min.js') }}" />
 {% endfor %}
 <style>
-    body { height: 100dvh; overflow: hidden; }
-    .explorer-frame { padding: 6px; min-height: 0; background: #f8fafc; overflow: hidden; }
+    body.min-h-screen { display: flex; flex-direction: column; height: 100dvh; min-height: 0; overflow: hidden; }
+    body > :not(#content) { flex: none; }
+    #content { flex: 1; min-height: 0; }
+    .explorer-frame {
+        --explorer-height: 100%;
+        box-sizing: border-box;
+        height: 100%;
+        padding: 6px;
+        background: #f8fafc;
+        overflow: hidden;
+    }
+    .explorer-frame > div { height: 100%; min-height: 0; }
 </style>
 {% endblock %}

@@ -128,8 +128,8 @@ def test_rate_selection_modes_and_layout(rate_doc):
     assert marker.location == pytest.approx(3e-20, abs=1e-32)
     assert chart.title.text == "Fragmentation rate"
     assert chart.xaxis.axis_label == "Internal energy (J)"
-    assert chart.legend[0] in chart.below
-    assert chart.legend[0] not in chart.center
+    assert doc.select_one({"name": "rate_legend"}).children
+    assert chart.height == 260
     np.testing.assert_allclose(
         chart.renderers[0].data_source.data["x"], np.array([2, 3, 4]) * 1e-20
     )

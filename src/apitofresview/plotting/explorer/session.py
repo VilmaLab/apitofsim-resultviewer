@@ -8,12 +8,14 @@ from math import isfinite
 import polars as pl
 from apitofsim.plotting.events import NoRecordedEventsError
 from bokeh.events import DocumentReady
-from bokeh.layouts import column, row
-from bokeh.models import Column, CustomJS, Div, FixedTicker, Range1d
+from bokeh.layouts import column
+from bokeh.models import CustomJS, Div, FixedTicker, Range1d
 
 from .aggregation import cumulative_areas, regional_fractions
+from .browser import ON_FRAME
 from .controls import (
     CHECKBOX_CSS,
+    SIDEBAR_BREAKPOINT,
     apply_layout,
     create_controls,
     enabled,
@@ -42,11 +44,13 @@ from .layout import (
 )
 from .plot import (
     COLORS,
+    PackingQueue,
     _bar_plot,
     _event_plot,
     _fraction_plot,
     _pathway_colors,
     _schematic_plot,
+    update_range,
 )
 from .population import population_areas, species_catalog
 from .rates import RateViews
@@ -272,10 +276,10 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     )
 
     ui.distinguish_escapees.visible = bool(tree and escapes.ambiguous)
-    scope, tree_labels, full_tree, refresh_tree = (
+    scope, tree_labels, full_tree, show_full_tree, recolor_tree = (
         install_tree_controls(doc, ui, tree, fate_names, fate_counts, fate_colors)
         if tree
-        else (None, {}, None, lambda: None)
+        else (None, {}, None, None, None)
     )
 
     event_groups = {}
@@ -301,6 +305,19 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.selector.disabled = realizations.is_empty()
     applied_range = tuple(ui.selector.value)
     selection_updates = []
+    event_panels = {}
+    display_colors = {}
+    summary_panels = {}
+    packing = PackingQueue(doc)
+    shared_x = None
+    shared_y = None
+    x_mode = None
+    y_mode = None
+    schematic = None
+    cohort_key = None
+    chosen_events = events.head(0)
+    positioned_key = population_key = None
+    positioned = population_events = None
     chosen = realizations.head(0)
     selection_events = events.head(0)
     selection_has_histories = not sparse
@@ -317,8 +334,37 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         pathway_mode=pathway_mode,
         tree=tree,
     )
+    rate_selection = (chosen, None)
     collision_coordinates = None
     collision_panels = []
+    sidebar_layout = None
+    align_notes = CustomJS(
+        args=dict(notes=[ui.counts, ui.quality]),
+        code=ON_FRAME
+        + """
+        const parent = Bokeh.index.find_one(cb_obj)?.parent?.model;
+        const panels = cb_obj.name === 'explorer_plots' ? cb_obj :
+            parent?.name === 'explorer_plots' ? parent :
+            parent?.children?.find(model => model.name === 'explorer_plots');
+        if (!panels) return;
+        onFrame(panels, 'explorerNotesFrame', () => {
+            const plot = panels.children.find(p => p.inner_width > 0);
+            const view = plot && Bokeh.index.find_one(plot);
+            if (!view?.canvas_view) return;
+            const axis = view.canvas_view.events_el.getBoundingClientRect().left + view.frame.bbox.left;
+            const insets = notes.flatMap(note => {
+                const el = Bokeh.index.find_one(note)?.el;
+                if (!el?.checkVisibility()) return [];
+                return [[el, `${Math.max(0, axis - el.getBoundingClientRect().left)}px`]];
+            });
+            for (const [el, inset] of insets)
+                if (el.style.paddingLeft !== inset) el.style.paddingLeft = inset;
+        });
+        """,
+    )
+    ui.center_plots.js_on_change("children", align_notes)
+    for note in (ui.counts, ui.quality):
+        note.js_on_change("visible", align_notes)
     drag_bridge = Div(text="", visible=False, name="schematic_drag_bridge")
     ui.frame.children.append(drag_bridge)
 
@@ -342,20 +388,34 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         )
 
     def resize_plots():
+        height = event_plot_height()
         for panel in ui.center_plots.children:
             if panel.name == "events":
-                panel.height = event_plot_height()
+                panel.height = height
 
     def apply_sidebars(full):
+        nonlocal sidebar_layout
         left_open, right_open = state["sidebar"][full]
         mode = state["details_layout"][full]
         if mode == "sidebar":
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
-        narrow = int(ui.viewport_width.text.split(",")[0]) < 900
+        narrow = int(ui.viewport_width.text.split(",")[0]) < SIDEBAR_BREAKPOINT
         if narrow and left_open and right_open and not bottom:
             left_open = False
             state["sidebar"][full][0] = False
+        geometry = (full, left_open, right_open, mode)
+        if geometry == sidebar_layout:
+            # Clicking the selected placement toggles its button off locally.
+            if not ui.detail_layouts[mode].active:
+                state["syncing_sidebar"] = True
+                try:
+                    ui.detail_layouts[mode].active = True
+                finally:
+                    state["syncing_sidebar"] = False
+            resize_plots()
+            return
+        sidebar_layout = geometry
         state["syncing_sidebar"] = True
         try:
             ui.left_toggle.active, ui.right_toggle.active = left_open, right_open
@@ -364,25 +424,12 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 button.visible = right_open
         finally:
             state["syncing_sidebar"] = False
-        apply_layout(ui, layout, full=full, bottom=bottom)
         ui.left_controls.visible, ui.right_controls.visible = left_open, right_open
         ui.left.width = 205 if left_open else 38
-        ui.right.width = (250 if narrow else 300) if right_open else 38
-        ui.right.sizing_mode = (
-            "stretch_width" if right_open and mode != "sidebar" else "fixed"
-        )
-        if right_open and mode != "sidebar":
-            ui.right.width = None
-        if bottom != isinstance(ui.workspace, Column):
-            container = column if bottom else row
-            ui.workspace = container(
-                ui.center,
-                ui.right,
-                sizing_mode="stretch_width",
-                spacing=6,
-                styles=ui.workspace.styles,
-            )
-            ui.body.children = [ui.left, ui.workspace]
+        split = right_open and mode != "sidebar"
+        ui.right.width = None if split else 300 if right_open else 38
+        ui.right.sizing_mode = "stretch_width" if split else "fixed"
+        apply_layout(ui, layout, full=full, bottom=bottom)
         ui.left_toggle.width, ui.right_toggle.width = (
             (100 if left_open else 38),
             (110 if right_open else 38),
@@ -407,7 +454,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             index == 0
             and active
             and state["details_layout"][full] != "bottom"
-            and int(ui.viewport_width.text.split(",")[0]) < 900
+            and int(ui.viewport_width.text.split(",")[0]) < SIDEBAR_BREAKPOINT
         ):
             state["sidebar"][full][1] = False
         apply_sidebars(full)
@@ -457,7 +504,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         state["selected"], state["event"] = rid, event_id
         state["candidates"] = {}
         state["detail_page"] = None
-        update_selection()
+        update_selection(refit_collision=True)
         if rid is not None:
             open_details()
 
@@ -514,25 +561,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             else dict(event=[str(event)], pair=[str(state["plot_event"])])
         )
 
-    def update_selection():
+    def update_details(selected, selected_events):
         nonlocal details_key
-        selected, selected_events = selected_history()
-        selected_event = (
-            selected_events.filter(pl.col("id") == state["event"])
-            if state["event"] is not None
-            else selected_events.head(0)
-        )
-        state["plot_event"] = (
-            selected_event["collision_id"][0]
-            or (
-                selected_event["fragmentation_id"][0]
-                if "fragmentation_id" in selected_event.columns
-                else None
-            )
-            or state["event"]
-            if not selected_event.is_empty()
-            else None
-        )
         if state["candidates"]:
             candidates = selection_events.filter(
                 pl.col("id").is_in(state["candidates"])
@@ -560,36 +590,61 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             ui.detail_selection.data = dict(event=[], pair=[])
         else:
             show_history_page(selected, selected_events)
+
+    def update_rates(*, refit_collision=False):
+        ui.rate_controls.visible = ui.show_rates.visible and enabled(ui.show_rates)
+        ui.rate_separator.visible = ui.rate_controls.visible
+        ui.detail_log_rates.disabled = not ui.rate_controls.visible
+        ui.detail_show_readoffs.disabled = not ui.rate_controls.visible
+        rates.update(*rate_selection, refit_collision=refit_collision)
+        if not state["updating"] and current_collision_panels() != collision_panels:
+            sync_collision_panels()
+
+    def current_collision_panels():
+        return list(rates.collision.children) if rates.collision.visible else []
+
+    def update_selection(*, refit_collision=False):
+        nonlocal rate_selection
+        selected, selected_events = selected_history()
+        selected_event = (
+            selected_events.filter(pl.col("id") == state["event"])
+            if state["event"] is not None
+            else selected_events.head(0)
+        )
+        state["plot_event"] = (
+            selected_event["collision_id"][0]
+            or (
+                selected_event["fragmentation_id"][0]
+                if "fragmentation_id" in selected_event.columns
+                else None
+            )
+            or state["event"]
+            if not selected_event.is_empty()
+            else None
+        )
+        update_details(selected, selected_events)
         ui.summarise_motion.visible = not selected.is_empty() or bool(
             state["candidates"]
         )
         ui.summarise_energy.visible = ui.summarise_motion.visible
         ui.show_rates.visible = not selected.is_empty()
-        ui.rate_controls.visible = ui.show_rates.visible and enabled(ui.show_rates)
-        ui.rate_separator.visible = ui.rate_controls.visible
-        ui.detail_log_rates.disabled = not ui.rate_controls.visible
-        ui.detail_show_readoffs.disabled = not ui.rate_controls.visible
-        old_collision = rates.collision_plot
-        rates.update(
+        rate_selection = (
             selected,
             selected_event.row(0, named=True)
             if not selected_event.is_empty()
             else None,
         )
-        if rates.collision_plot is not old_collision:
-            sync_collision_panels()
+        update_rates(refit_collision=refit_collision)
         state["hidden_collision"] = None
         if state["plot_event"] is not None:
-            hidden_collision = selected_events.filter(
+            hidden = selected_events.filter(
                 (pl.col("id") == state["plot_event"])
                 & (pl.col("type") == "collision")
                 & ~pl.col("event_group").is_in(active_groups)
             )
-            if not hidden_collision.is_empty():
+            if not hidden.is_empty():
                 state["hidden_collision"] = layout_events(
-                    position_events(
-                        hidden_collision, collision_coordinates[0], ui.mode.value
-                    ),
+                    position_events(hidden, collision_coordinates[0], ui.mode.value),
                     ui.layout.value,
                 ).row(0, named=True)
         for update in selection_updates:
@@ -885,13 +940,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ui.guides.visible = ui.mode.value == "physical"
         ui.envelope.visible = ui.layout.value == "beeswarm"
         ui.x_markers.disabled = ui.layout.value == "beeswarm"
-        marker = "×" if enabled(ui.x_markers) and not ui.x_markers.disabled else "●"
-        for kind, color in event_colors.items():
-            ui.event_options[kind].stylesheets[0].css = (
-                f'label::before {{ content: "{marker}"; color: {color}; '
-                "display: inline-block; width: 12px; margin-right: 4px; text-align: center; font-size: 16px; }"
-                + CHECKBOX_CSS
-            )
+        sync_event_markers(event_colors)
         if regional and state["auto_cdf"] and enabled(ui.show_bars):
             ui.show_cdf.active = []
             state["auto_cdf"] = False
@@ -905,6 +954,17 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         ):
             state["auto_cdf"] = enabled(ui.show_bars) and not regional
             ui.show_cdf.active = [0]
+
+    def sync_event_markers(event_colors):
+        nonlocal display_colors
+        display_colors = event_colors
+        marker = "×" if enabled(ui.x_markers) and not ui.x_markers.disabled else "●"
+        for kind, color in event_colors.items():
+            ui.event_options[kind].stylesheets[0].css = (
+                f'label::before {{ content: "{marker}"; color: {color}; '
+                "display: inline-block; width: 12px; margin-right: 4px; text-align: center; font-size: 16px; }"
+                + CHECKBOX_CSS
+            )
 
     def group_events(frame, grouped):
         rejected = (
@@ -943,8 +1003,35 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     def assemble_panels(chosen, chosen_events, grouped, event_colors, active_groups):
         """Position the cohort and assemble shared-axis plots."""
         nonlocal selection_events, collision_coordinates, collision_panels
-        chosen_events = group_events(chosen_events, grouped)
-        selection_events = chosen_events
+        nonlocal shared_x, shared_y, x_mode, y_mode, schematic
+        nonlocal event_panels, summary_panels
+        nonlocal positioned_key, population_key, positioned, population_events
+        next_events, next_summaries = {}, {}
+
+        def summary(key, signature, build):
+            cached = summary_panels.get(key)
+            if cached is None or cached[0] != signature:
+                cached = (signature, build(cached[1] if cached is not None else None))
+            next_summaries[key] = cached
+            return cached[1]
+
+        def panel_notice(key, text, **attributes):
+            def update(previous):
+                if previous is None:
+                    return Div(text=text, **attributes)
+                previous.text = text
+                return previous
+
+            return summary(("notice", key), text, update)
+
+        mode, y_layout = ui.mode.value, ui.layout.value
+        grouped_key = (
+            cohort_key,
+            grouped,
+            state["grouped_escapes"],
+            state["separated"],
+            enabled(ui.distinguish_escapees),
+        )
         mapped_regions = coordinate_regions(
             regions,
             ui.mode.value,
@@ -954,29 +1041,36 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         regional = ui.mode.value == "schematic"
         dedicated_zones = regional and enabled(ui.own_zones)
         spread_terminals = enabled(ui.spread_x) and not ui.spread_x.disabled
-        positioned = position_events(
-            chosen_events.filter(
-                ~pl.col("type").is_in(["postcollision", "postfragmentation"])
-            ),
-            mapped_regions,
-            ui.mode.value,
-            dedicated_zones,
-        )
-        population_events = (
-            position_events(
-                chosen_events.with_columns(
-                    pl.col("population_z").clip(lower_bound=0).alias("z"),
-                    pl.col("population_t").alias("t"),
-                )
-                if "population_z" in chosen_events.columns
-                else chosen_events,
+        mapping_key = (mode, state["widths"] if regional else (), dedicated_zones)
+        position_key = (grouped_key, mapping_key)
+        if position_key != positioned_key:
+            selection_events = group_events(chosen_events, grouped)
+            positioned = position_events(
+                selection_events.filter(
+                    ~pl.col("type").is_in(["postcollision", "postfragmentation"])
+                ),
                 mapped_regions,
-                ui.mode.value,
-                terminal_slots=False,
+                mode,
+                dedicated_zones,
             )
-            if enabled(ui.show_population)
-            else None
-        )
+            positioned_key = position_key
+        if enabled(ui.show_population):
+            key = (cohort_key, mapping_key)
+            if population_key != key:
+                population_events = position_events(
+                    chosen_events.with_columns(
+                        pl.col("population_z").clip(lower_bound=0).alias("z"),
+                        pl.col("population_t").alias("t"),
+                    )
+                    if "population_z" in chosen_events.columns
+                    else chosen_events,
+                    mapped_regions,
+                    mode,
+                    terminal_slots=False,
+                )
+                population_key = key
+        else:
+            population_events = population_key = None
         slot = escape_slot(mapped_regions)
         use_x_markers = enabled(ui.x_markers) and not ui.x_markers.disabled
         rows = (
@@ -998,18 +1092,21 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 )
                 for i in ui.fate.active
             ]
-        shared_y = None
-        if pathway_mode and ui.layout.value in ("realization", "radial"):
-            if ui.layout.value == "realization":
-                lo, hi = realization_bounds()
-                shared_y = Range1d(lo - 0.5, hi + 0.5)
-            else:
-                maximum = (
-                    chosen["max_radial"].max()
-                    if sparse
-                    else events_for(events, chosen)["radial"].max()
-                ) or 0
-                shared_y = Range1d(0, maximum * 1000 * 1.05 if maximum else 1)
+        if y_mode != y_layout:
+            shared_y = None
+            y_mode = y_layout
+        lo, hi = realization_bounds()
+        if pathway_mode and y_layout == "radial":
+            maximum = (
+                chosen["max_radial"].max()
+                if sparse
+                else events_for(events, chosen)["radial"].max()
+            ) or 0
+            if shared_y is None:
+                shared_y = Range1d(0, 1)
+            update_range(shared_y, 0, maximum * 1000 * 1.05 if maximum else 1)
+        elif pathway_mode and y_layout == "realization" and shared_y is None:
+            shared_y = Range1d(lo - 0.5, hi + 0.5)
         max_position = positioned["position"].max()
         if spatial:
             left_edge = (
@@ -1039,44 +1136,48 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 right_edge = max(right_edge, population_max)
         if right_edge <= left_edge:
             right_edge = left_edge + 1
-        screen_width = int(ui.viewport_width.text.split(",")[0])
-        available_width = screen_width - ui.left.width
-        if state["sidebar"][ui.fullscreen_state.text == "full"][1]:
-            mode = state["details_layout"][ui.fullscreen_state.text == "full"]
-            if mode == "right":
-                available_width /= 2
-            elif mode == "sidebar":
-                available_width -= ui.right.width
-        else:
-            available_width -= ui.right.width
         plot_height = event_plot_height()
         margin = (right_edge - left_edge) * 0.015
-        shared_x = Range1d(
-            left_edge - margin if ui.layout.value == "beeswarm" else left_edge,
-            right_edge if regional else right_edge + margin,
-        )
+        x_start = left_edge - margin if y_layout == "beeswarm" else left_edge
+        x_end = right_edge if regional else right_edge + margin
+        if x_mode != mode:
+            shared_x = Range1d(x_start, x_end)
+            x_mode = mode
+        update_range(shared_x, x_start, x_end)
+
+        event_key = (grouped_key, mapping_key, frozenset(active_groups))
         panels = []
         population_plots = []
         shown_species = set()
-        if enabled(ui.schematic) and spatial and regional and not chosen.is_empty():
-            panels.append(
-                _schematic_plot(
-                    mapped_regions,
-                    shared_x,
-                    available_width,
-                    drag_bridge,
-                    initial=dedicated_zones,
-                    escaped=dedicated_zones or enabled(ui.show_bars),
-                )
+        if enabled(ui.schematic) and regional and not chosen.is_empty():
+            if schematic is None:
+                schematic = _schematic_plot(shared_x, drag_bridge, live=packing.live)
+            diagram, update_schematic = schematic
+            diagram.x_range = shared_x
+            update_schematic(
+                mapped_regions,
+                dedicated_zones,
+                dedicated_zones or enabled(ui.show_bars),
             )
+            panels.append(diagram)
 
         collision_coordinates = (mapped_regions, shared_x, spatial)
         rates.configure_collision(*collision_coordinates)
-        # Direct siblings let Bokeh align all frames to the widest axis labels.
-        collision_panels = (
-            list(rates.collision.children) if rates.collision.visible else []
+        # Insert the collision chart after its sources have been updated.
+
+        axis_label = (
+            "Zone"
+            if regional
+            else "Axial distance (mm)"
+            if spatial
+            else "Elapsed time (s)"
         )
-        panels.extend(collision_panels)
+        if regional:
+            centers = ((mapped_regions["left"] + mapped_regions["right"]) / 2).to_list()
+            grid_ticks = [mapped_regions["left"][0], *mapped_regions["right"]]
+            zone_labels = {
+                center: str(index) for index, center in enumerate(centers, start=1)
+            }
 
         def selection_callback(source):
             def on_selected(attr, old, new):
@@ -1098,12 +1199,20 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             return on_selected
 
         for members, row_name, pid in rows:
+            row_key = (
+                ("pathway", pid)
+                if pathway_mode
+                else ("fate", row_name)
+                if enabled(ui.fate_facets)
+                else ("all", None)
+            )
             if members.is_empty() and chosen.is_empty() and not pathway_mode:
                 continue
             if tree and members.is_empty():
                 panels.append(
-                    Div(
-                        text=f'<b title="{escape(tree_labels[row_name], quote=True)}">{escape(facet_names[row_name])}</b>: No recorded histories match this leaf in the selected range.',
+                    panel_notice(
+                        (row_key, "empty"),
+                        f'<b title="{escape(tree_labels[row_name], quote=True)}">{escape(facet_names[row_name])}</b>: No recorded histories match this leaf in the selected range.',
                         sizing_mode="stretch_width",
                         styles={"overflow-wrap": "anywhere"},
                     )
@@ -1117,8 +1226,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 ).height
                 if members.is_empty():
                     panels.append(
-                        Div(
-                            text=f"<b>{escape(row_name)}</b>: No realizations match the selected range."
+                        panel_notice(
+                            (row_key, "empty"),
+                            f"<b>{escape(row_name)}</b>: No realizations match the selected range.",
                         )
                     )
             member_events = events_for(positioned, members)
@@ -1127,216 +1237,263 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             )
             plots = []
             if enabled(ui.show_events):
-                visible = layout_events(
-                    member_events.filter(pl.col("event_group").is_in(active_groups)),
-                    ui.layout.value,
-                )
-                plots.append(
-                    _event_plot(
-                        visible,
-                        shared_x,
-                        plot_height,
-                        ui.layout.value,
-                        use_x_markers,
-                        mapped_regions,
-                        enabled(ui.guides) and ui.mode.value == "physical",
-                        enabled(ui.envelope) and ui.layout.value == "beeswarm",
-                        state,
-                        selection_callback,
-                        event_colors,
-                        (lo, hi)
-                        if pathway_mode and ui.layout.value == "realization"
-                        else (
-                            members["realization_number"].min() or 1,
-                            members["realization_number"].max() or 1,
-                        ),
-                        realization_ids=members["id"],
-                        y_range=shared_y,
-                        spread_terminals=spread_terminals,
-                        selection_updates=selection_updates,
-                        doc=doc,
+                key = (row_key, mode, y_layout)
+                cached = event_panels.get(key)
+                bounds = (
+                    (lo, hi)
+                    if pathway_mode and y_layout == "realization"
+                    else (
+                        members["realization_number"].min() or 1,
+                        members["realization_number"].max() or 1,
                     )
                 )
+                signature = (event_key, bounds)
+                if cached is None:
+                    view = _event_plot(
+                        shared_x,
+                        plot_height,
+                        y_layout,
+                        state,
+                        selection_callback,
+                        packing,
+                        shared_y=shared_y,
+                        physical_regions=mapped_regions if mode == "physical" else None,
+                        tree="current_cluster_name" in chosen_events.columns,
+                        terminal_spread=regional and y_layout != "radial",
+                    )
+                else:
+                    _, view = cached
+                if cached is None or cached[0] != signature:
+                    view.update_events(
+                        layout_events(summary_events, y_layout),
+                        mapped_regions,
+                        event_colors,
+                        bounds,
+                        spread_terminals,
+                        members["id"],
+                    )
+                view.plot.height = plot_height
+                view.update_display(
+                    use_x_markers, enabled(ui.guides), enabled(ui.envelope)
+                )
+                selection_updates.append(view.highlight)
+                next_events[key] = (signature, view)
+                plots.append(view.plot)
             if population_events is not None and not members.is_empty():
-                areas = population_areas(
-                    members,
-                    events_for(population_events, members),
-                    shared_x.start,
-                    shared_x.end,
-                    cluster,
-                    species_labels,
-                    charged_products,
-                    tree=bool(tree),
+
+                def build_population(previous):
+                    areas = population_areas(
+                        members,
+                        events_for(population_events, members),
+                        x_start,
+                        x_end,
+                        cluster,
+                        species_labels,
+                        charged_products,
+                        tree=bool(tree),
+                    )
+                    chart, update = (
+                        previous[:2]
+                        if previous is not None
+                        else _fraction_plot(shared_x, population=True)
+                    )
+                    top = update(areas, species_colors, labels=species_labels)
+                    return chart, update, set(areas), top
+
+                chart, _, species, top = summary(
+                    (row_key, mode, "population"),
+                    (cohort_key, mapping_key, x_start, x_end),
+                    build_population,
                 )
-                shown_species.update(areas)
-                chart = _fraction_plot(
-                    areas,
-                    shared_x,
-                    species_colors,
-                    labels=species_labels,
-                    population=True,
-                )
-                population_plots.append(chart)
+                shown_species.update(species)
+                population_plots.append((chart, top))
                 plots.append(chart)
             if enabled(ui.show_cdf) or (enabled(ui.show_bars) and regional):
                 if enabled(ui.show_cdf):
-                    # Cumulative escapes occur at the machine endpoint, not
-                    # in the padded escape slot used by the event view.
-                    cumulative_events = (
-                        member_events.with_columns(
-                            pl.when(pl.col("type") == "escape")
-                            .then(pl.lit(mapped_regions["right"][-1]))
-                            .otherwise(pl.col("position"))
-                            .alias("position")
-                        )
-                        if spatial
-                        else member_events
-                    )
-                    cumulative_members = (
-                        tree.cumulative_members(members, cumulative_events, scope.value)
-                        if tree
-                        else members
-                    )
-                    row_colors = {
-                        name: fate_colors[name]
-                        for name in fate_names
-                        if name in members["fate"]
-                    }
-                    if tree:
-                        available = set(cumulative_members["fate"].drop_nulls())
-                        names = sorted(available - escapes.colors.keys()) + [
-                            key
-                            for key in escapes.keys(enabled(ui.distinguish_escapees))
-                            if key in available
-                        ]
-                        row_colors = {
-                            name: escapes.colors.get(
-                                name, fate_colors.get(name, COLORS["escape"])
+
+                    def build_cdf(previous):
+                        # Cumulative escapes occur at the machine endpoint, not
+                        # in the padded escape slot used by the event view.
+                        cumulative_events = (
+                            member_events.with_columns(
+                                pl.when(pl.col("type") == "escape")
+                                .then(pl.lit(mapped_regions["right"][-1]))
+                                .otherwise(pl.col("position"))
+                                .alias("position")
                             )
-                            for name in names
+                            if spatial
+                            else member_events
+                        )
+                        cumulative_members = (
+                            tree.cumulative_members(
+                                members, cumulative_events, scope.value
+                            )
+                            if tree
+                            else members
+                        )
+                        row_colors = {
+                            name: fate_colors[name]
+                            for name in fate_names
+                            if name in members["fate"]
                         }
-                    plots.append(
-                        _fraction_plot(
-                            cumulative_areas(
-                                cumulative_members,
-                                cumulative_events.filter(
-                                    pl.col("event_group").is_in(active_groups)
-                                ),
-                                left_edge,
-                                right_edge,
-                                row_colors,
-                                denominator=denominator,
+                        if tree:
+                            available = set(cumulative_members["fate"].drop_nulls())
+                            names = sorted(available - escapes.colors.keys()) + [
+                                key
+                                for key in escapes.keys(
+                                    enabled(ui.distinguish_escapees)
+                                )
+                                if key in available
+                            ]
+                            row_colors = {
+                                name: escapes.colors.get(
+                                    name, fate_colors.get(name, COLORS["escape"])
+                                )
+                                for name in names
+                            }
+                        chart, update = (
+                            previous
+                            if previous is not None
+                            else _fraction_plot(shared_x)
+                        )
+                        areas = cumulative_areas(
+                            cumulative_members,
+                            cumulative_events.filter(
+                                pl.col("event_group").is_in(active_groups)
                             ),
-                            shared_x,
+                            left_edge,
+                            right_edge,
                             row_colors,
-                            labels=escapes.labels,
+                            denominator=denominator,
                         )
+                        update(areas, row_colors, labels=escapes.labels)
+                        return chart, update
+
+                    chart, _ = summary(
+                        (row_key, mode, "cdf"),
+                        (
+                            event_key,
+                            left_edge,
+                            right_edge,
+                            scope.value if tree else None,
+                        ),
+                        build_cdf,
                     )
+                    plots.append(chart)
                 if enabled(ui.show_bars) and regional:
-                    bars = regional_fractions(
-                        members, summary_events, mapped_regions, denominator=denominator
-                    )
-                    escape_counts = (
-                        members.join(
+
+                    def build_bar(previous):
+                        bars = regional_fractions(
+                            members,
                             summary_events,
-                            left_on="terminal_event_id",
-                            right_on="id",
-                            how="inner",
+                            mapped_regions,
+                            denominator=denominator,
                         )
-                        .filter(pl.col("type") == "escape")
-                        .group_by("event_escape")
-                        .len()
-                    )
-                    counts = dict(escape_counts.iter_rows())
-                    escape_fractions = {
-                        key: counts[key]
-                        / max(members.height if denominator is None else denominator, 1)
-                        for key in escapes.keys(enabled(ui.distinguish_escapees))
-                        if key in counts
-                    }
-                    bar = _bar_plot(
-                        bars,
-                        shared_x,
-                        escapes=escape_fractions,
-                        escape_colors=escapes.colors,
-                        escape_labels=escapes.labels,
-                    )
-                    if tree:
-                        bar.yaxis.axis_label = "Events / realization"
-                    if pathway_mode:
-                        bar.y_range = Range1d(0, 1)
-                    plots.append(bar)
-            if tree and enabled(ui.fate_facets) and plots:
+                        escape_counts = (
+                            members.join(
+                                summary_events,
+                                left_on="terminal_event_id",
+                                right_on="id",
+                                how="inner",
+                            )
+                            .filter(pl.col("type") == "escape")
+                            .group_by("event_escape")
+                            .len()
+                        )
+                        counts = dict(escape_counts.iter_rows())
+                        escape_fractions = {
+                            key: counts[key]
+                            / max(
+                                members.height if denominator is None else denominator,
+                                1,
+                            )
+                            for key in escapes.keys(enabled(ui.distinguish_escapees))
+                            if key in counts
+                        }
+                        chart, update = (
+                            previous
+                            if previous is not None
+                            else _bar_plot(
+                                shared_x, tree=bool(tree), pathway_mode=pathway_mode
+                            )
+                        )
+                        update(bars, escape_fractions, escapes.colors, escapes.labels)
+                        return chart, update
+
+                    chart, _ = summary((row_key, mode, "bars"), event_key, build_bar)
+                    plots.append(chart)
+            faceted = enabled(ui.fate_facets)
+            label = facet_names.get(row_name, row_name)
+            if tree and faceted and plots:
                 panels.append(
-                    Div(
-                        text=f'<b title="{escape(tree_labels.get(row_name, row_name), quote=True)}">{escape(facet_names.get(row_name, row_name))} (N={members.height})</b>',
+                    panel_notice(
+                        (row_key, "facet"),
+                        f'<b title="{escape(tree_labels.get(row_name, row_name), quote=True)}">{escape(label)} (N={members.height})</b>',
                         sizing_mode="stretch_width",
                         styles={"overflow-wrap": "anywhere"},
                     )
                 )
-            elif enabled(ui.fate_facets) and plots:
-                plots[0].title = (
-                    f"{facet_names.get(row_name, row_name)} ({members.height} shown / {denominator} in range)"
-                    if pathway_mode
-                    else f"{facet_names.get(row_name, row_name)} (N={members.height})"
-                )
-            if not tree and enabled(ui.fate_facets) and plots:
-                plots[0].html_attributes = {"title": row_name}
-            if tree and enabled(ui.show_cdf):
-                for chart in plots:
-                    if chart.name == "cdf":
-                        chart.title = f"Cumulative from {tree.label(scope.value)} (N={members.height} selected)"
-            for plot in plots:
-                plot.min_border_top = 0
-                plot.min_border_bottom = 0
-                if regional:
-                    centers = [
-                        (lo + hi) / 2
-                        for lo, hi in mapped_regions.select("left", "right").iter_rows()
-                    ]
-                    plot.xaxis.ticker = FixedTicker(ticks=centers)
-                    plot.xaxis.major_label_overrides = {
-                        center: str(index)
-                        for index, center in enumerate(centers, start=1)
-                    }
-                    plot.xaxis.major_tick_line_color = None
-                    plot.xaxis.minor_tick_line_color = None
-                    plot.xgrid.ticker = FixedTicker(
-                        ticks=[mapped_regions["left"][0], *mapped_regions["right"]]
+            for index, chart in enumerate(plots):
+                title = ""
+                attributes = {}
+                if tree and chart.name == "cdf":
+                    title = f"Cumulative from {tree.label(scope.value)} (N={members.height} selected)"
+                elif not tree and faceted and index == 0:
+                    title = (
+                        f"{label} ({members.height} shown / {denominator} in range)"
+                        if pathway_mode
+                        else f"{label} (N={members.height})"
                     )
-                    plot.xgrid.grid_line_color = "#94a3b8"
-                    plot.xgrid.grid_line_alpha = 0.3
-                prepare_toolbar(plot)
-            if plots:
-                for upper in plots[:-1]:
-                    upper.xaxis.visible = False
-                plots[-1].xaxis.axis_label = (
-                    "Elapsed time (s)"
-                    if not spatial
-                    else "Axial distance (mm)"
-                    if ui.mode.value == "physical"
-                    else "Zone"
-                )
+                    attributes = {"title": row_name}
+                if chart.title is not None:
+                    chart.title.text = title
+                elif title:
+                    chart.title = title
+                chart.html_attributes = attributes
+                chart.min_border_top = 0
+                chart.min_border_bottom = 0
+                if regional:
+                    if not isinstance(chart.xaxis[0].ticker, FixedTicker):
+                        chart.xaxis.ticker = FixedTicker()
+                        chart.xgrid.ticker = FixedTicker()
+                    chart.xaxis.ticker.ticks = centers
+                    chart.xgrid.ticker.ticks = grid_ticks
+                    chart.xaxis.major_label_overrides = zone_labels
+                    chart.xaxis.major_tick_line_color = None
+                    chart.xaxis.minor_tick_line_color = None
+                    chart.xgrid.grid_line_color = "#94a3b8"
+                    chart.xgrid.grid_line_alpha = 0.3
+                if chart.toolbar.logo is not None:
+                    prepare_toolbar(chart)
+                chart.xaxis.visible = index == len(plots) - 1
+                if chart.xaxis[0].visible:
+                    chart.xaxis.axis_label = axis_label
             panels.extend(plots)
         if (
             enabled(ui.show_events)
             and not chosen.is_empty()
             and positioned.filter(pl.col("event_group").is_in(active_groups)).is_empty()
         ):
-            panels.insert(0, Div(text="<p>No events match the current filters.</p>"))
+            panels.insert(
+                0,
+                panel_notice(
+                    "no-events", "<p>No events match the current filters.</p>"
+                ),
+            )
         if chosen.is_empty() and (not pathway_mode or not rows):
             panels.insert(
                 0,
-                Div(
-                    text="<p>Select at least one pathway.</p>"
+                panel_notice(
+                    "no-cohort",
+                    "<p>Select at least one pathway.</p>"
                     if pathway_mode
-                    else "<p>No realizations in this cohort. Adjust the range or pathway filters.</p>"
+                    else "<p>No realizations in this cohort. Adjust the range or pathway filters.</p>",
                 ),
             )
         if population_plots:
-            top = max(plot.y_range.end for plot in population_plots)
-            for plot in population_plots:
-                plot.y_range.end = top
+            top = max(value for _, value in population_plots)
+            for chart, _ in population_plots:
+                update_range(chart.y_range, 0, top)
             entries = [
                 f'<span><span style="color:{species_colors[species]}" aria-hidden="true">■</span> '
                 f"{escape(species_labels[species])}</span>"
@@ -1345,8 +1502,9 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                 )
             ]
             panels.append(
-                Div(
-                    text='<div style="display:flex;flex-wrap:wrap;gap:4px 12px">'
+                panel_notice(
+                    "species-legend",
+                    '<div style="display:flex;flex-wrap:wrap;gap:4px 12px">'
                     + "<strong>Charged species</strong> "
                     + " ".join(entries)
                     + "</div>"
@@ -1356,30 +1514,27 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
                     sizing_mode="stretch_width",
                 )
             )
+        for key in event_panels.keys() - next_events.keys():
+            event_panels[key][1].dispose()
+        event_panels, summary_panels = next_events, next_summaries
+        update_selection()
+        collision_panels = current_collision_panels()
+        insert_collision_panels(panels)
         sync_collision_spacing(panels)
+        for panel in panels:
+            watch_plot_width(panel)
         ui.center_plots.children = panels
-        axis_plot = next((p for p in panels if getattr(p, "yaxis", None)), None)
-        if axis_plot is not None:
-            axis_plot.js_on_change(
-                "inner_width",
-                CustomJS(
-                    args=dict(plot=axis_plot, notes=[ui.counts, ui.quality]),
-                    code="""
-                    const view = Bokeh.index.find_one(plot);
-                    if (!view) return;
-                    const axis = view.canvas_view.events_el.getBoundingClientRect().left + view.frame.bbox.left;
-                    for (const note of notes) {
-                        const el = Bokeh.index.find_one(note)?.el;
-                        if (el?.checkVisibility())
-                            note.styles = {...note.styles, "box-sizing": "border-box",
-                                "padding-left": `${Math.max(0, axis - el.getBoundingClientRect().left)}px`};
-                    }
-                    """,
-                ),
-            )
+
+    def watch_plot_width(panel):
+        if (
+            "inner_width" in panel.properties()
+            and align_notes
+            not in panel.js_property_callbacks.get("change:inner_width", ())
+        ):
+            panel.js_on_change("inner_width", align_notes)
 
     def render():
-        nonlocal chosen, active_groups, details_key
+        nonlocal chosen, chosen_events, active_groups, details_key, cohort_key
         if state["updating"]:
             return
         state["updating"] = True
@@ -1387,16 +1542,28 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             # Reconcile the model graph once after replacing controls/plots,
             # rather than walking it after each intermediate layout change.
             with doc.models.freeze():
-                state["candidates"] = {}
-                details_key = None
                 selection_updates.clear()
-                chosen, chosen_events = prepare_cohort()
+                state["candidates"] = {}
+                key = (
+                    tuple(ui.fate.active),
+                    realization_bounds(),
+                    sparse
+                    and (
+                        enabled(ui.event_options["collision"])
+                        or enabled(ui.event_options["rejected_collision"])
+                    ),
+                )
+                if key != cohort_key:
+                    cohort_key = key
+                    details_key = None
+                    chosen, chosen_events = prepare_cohort()
+                ui.counts.visible = not pathway_mode and enabled(ui.show_pager)
+                ui.selector.visible = enabled(ui.show_pager)
                 grouped, event_colors, active_groups = sync_event_controls()
                 sync_display_controls(event_colors)
                 assemble_panels(
                     chosen, chosen_events, grouped, event_colors, active_groups
                 )
-                update_selection()
         finally:
             state["updating"] = False
 
@@ -1424,6 +1591,11 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             len(widths) != 7
             or not all(isfinite(width) and width > 0 for width in widths)
             or abs(sum(widths) - sum(state["widths"])) > 1e-6
+        ):
+            return
+        if all(
+            abs(old - new) < 1e-10
+            for old, new in zip(state["widths"], widths, strict=True)
         ):
             return
         state["widths"] = widths
@@ -1479,41 +1651,59 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         (ui.group_escapes, "active"),
         (ui.separate_rejected, "active"),
         (ui.own_zones, "active"),
-        (ui.spread_x, "active"),
         (ui.mode, "value"),
         (ui.layout, "value"),
-        (ui.envelope, "active"),
         (ui.schematic, "active"),
-        (ui.guides, "active"),
         (ui.show_events, "active"),
         (ui.show_population, "active"),
-        (ui.x_markers, "active"),
         (ui.show_bars, "active"),
         (ui.show_pager, "active"),
     ]:
         widget.on_change(property_name, control_changed)
-    ui.summarise_motion.on_change("active", lambda attr, old, new: update_selection())
-    ui.summarise_energy.on_change("active", lambda attr, old, new: update_selection())
+
+    def display_changed(attr, old, new):
+        use_x = enabled(ui.x_markers) and not ui.x_markers.disabled
+        for _, view in event_panels.values():
+            view.update_display(use_x, enabled(ui.guides), enabled(ui.envelope))
+        sync_event_markers(display_colors)
+
+    def spread_changed(attr, old, new):
+        for _, view in event_panels.values():
+            view.set_spread(enabled(ui.spread_x) and not ui.spread_x.disabled)
+
+    for widget in (ui.x_markers, ui.guides, ui.envelope):
+        widget.on_change("active", display_changed)
+    ui.spread_x.on_change("active", spread_changed)
+
+    def detail_format_changed(attr, old, new):
+        update_details(*selected_history())
+
+    ui.summarise_motion.on_change("active", detail_format_changed)
+    ui.summarise_energy.on_change("active", detail_format_changed)
 
     def show_rates_changed(attr, old, new):
         full = ui.fullscreen_state.text == "full"
         if new and state["details_layout"][full] == "sidebar":
             layout_changed("right")
-        update_selection()
+        update_rates()
+
+    def insert_collision_panels(panels):
+        # Direct siblings let Bokeh align all frames to the widest axis labels.
+        index = next(
+            (i + 1 for i, panel in enumerate(panels) if panel.name == "schematic"), 0
+        )
+        panels[index:index] = collision_panels
 
     def sync_collision_panels():
         nonlocal collision_panels
         panels = [
             panel for panel in ui.center_plots.children if panel not in collision_panels
         ]
-        index = next(
-            (i + 1 for i, panel in enumerate(panels) if panel.name == "schematic"), 0
-        )
-        collision_panels = (
-            list(rates.collision.children) if rates.collision.visible else []
-        )
-        panels = [*panels[:index], *collision_panels, *panels[index:]]
+        collision_panels = current_collision_panels()
+        insert_collision_panels(panels)
         sync_collision_spacing(panels)
+        for panel in collision_panels:
+            watch_plot_width(panel)
         ui.center_plots.children = panels
 
     def sync_collision_spacing(panels):
@@ -1537,26 +1727,33 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     def collision_changed(attr, old, new):
         if collision_coordinates is not None:
             rates.configure_collision(*collision_coordinates)
-            sync_collision_panels()
-        update_selection()
-
-    def rate_scale_changed(attr, old, new):
-        rates.change_scale()
-        sync_collision_panels()
-        update_selection()
+        update_rates()
 
     def distinguish_changed(attr, old, new):
-        fate_colors.update(escapes.route_colors(bool(new)))
-        refresh_tree()
+        colors = escapes.route_colors(bool(new))
+        fate_colors.update(colors)
+        if recolor_tree is not None:
+            recolor_tree(colors)
         render()
 
     ui.distinguish_escapees.on_change("active", distinguish_changed)
     ui.show_rates.on_change("active", show_rates_changed)
     if full_tree is not None:
-        full_tree.on_change("active", control_changed)
+
+        def tree_changed(attr, old, new):
+            previous_scope = scope.value
+            show_full_tree(bool(new))
+            if enabled(ui.fate_facets) or (
+                enabled(ui.show_cdf) and scope.value != previous_scope
+            ):
+                render()
+
+        full_tree.on_change("active", tree_changed)
     if scope is not None:
 
         def scope_changed(attr, old, new):
+            if old not in dict(scope.options):
+                return  # The tree toggle will render with the normalized scope.
             if enabled(ui.show_cdf):
                 render()
             else:
@@ -1565,8 +1762,13 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         scope.on_change("value", scope_changed)
 
     ui.collision_rates.on_change("active", collision_changed)
-    ui.log_rates.on_change("active", rate_scale_changed)
-    ui.show_readoffs.on_change("active", lambda attr, old, new: update_selection())
+    ui.log_rates.on_change("active", collision_changed)
+
+    def readouts_changed(attr, old, new):
+        rates.update_collision()
+        rates.update_rate_annotations()
+
+    ui.show_readoffs.on_change("active", readouts_changed)
     for sidebar, detail in (
         (ui.log_rates, ui.detail_log_rates),
         (ui.show_readoffs, ui.detail_show_readoffs),
@@ -1582,10 +1784,16 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             ),
         )
     for widget in (ui.share_rates, ui.all_pathways):
-        widget.on_change("active", lambda attr, old, new: update_selection())
+        widget.on_change("active", lambda attr, old, new: update_rates())
     ui.show_cdf.on_change("active", cdf_changed)
     if doc.session_context is not None:
-        ui.center_plots.children = [Div(text="Loading plots…")]
+        ui.center_plots.children = [
+            Div(
+                text="Loading plots…",
+                height=event_plot_height(),
+                sizing_mode="stretch_width",
+            )
+        ]
         started = False
 
         def ready(event):

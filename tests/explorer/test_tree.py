@@ -283,7 +283,7 @@ def test_browser_tree_selection_folding_and_scope(
         )
         leaf.check()
         expect(root_input).not_to_be_checked()
-        assert root_input.evaluate("el => el.indeterminate")
+        expect(root_input).to_have_js_property("indeterminate", True)
         # Non-leaf checkboxes are shortcuts, so choosing another subtree retains this leaf.
         branch = (
             page.locator("details")
@@ -292,7 +292,7 @@ def test_browser_tree_selection_folding_and_scope(
         )
         branch.locator("summary").first.locator("input").check()
         expect(leaf).to_be_checked()
-        assert root_input.evaluate("el => el.indeterminate")
+        expect(root_input).to_have_js_property("indeterminate", True)
         button = page.locator('button[data-scope="10:1"]')
         button.click()
         expect(button).to_have_attribute("aria-pressed", "true")
@@ -363,6 +363,8 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
     check(doc, "Show rate constants").active = [0]
     assert curve_reads == [1]
     assert len(doc.select_one({"name": "pathway_rates"}).renderers) == 2
+    source = doc.select_one({"name": "collision_rates_source"})
+    parent_rates = source.data["rate"].copy()
     main = doc.select_one({"name": "events"})
     before_highlight = dict(
         next(
@@ -380,7 +382,7 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
     assert doc.select_one({"name": "pathway_rates"}).select_one(
         {"type": Span}
     ).location == pytest.approx(6e-20, abs=1e-32)
-    source = doc.select_one({"name": "collision_rates_source"})
+    assert doc.select_one({"name": "collision_rates_source"}) is source
     np.testing.assert_allclose(source.data["rate"], 4)
     main = doc.select_one({"name": "events"})
     highlight = next(
@@ -391,7 +393,8 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
     assert highlight.data == before_highlight
     doc.roots[0].children[1].text = json.dumps(["inspect", "10:0:1"])
     assert curve_reads == [1, 2]  # Cached separately for each species.
-    assert profile_reads[-1] == 1
+    assert profile_reads == [1, 2]
+    np.testing.assert_allclose(source.data["rate"], parent_rates)
     assert len(doc.select_one({"name": "pathway_rates"}).renderers) == 2
 
 
@@ -522,9 +525,10 @@ def test_large_unobserved_tree_is_built_only_on_request(tree_database, monkeypat
     assert len(fate.stylesheets[0].css) < 2_000
     check(doc, "Show empty pathways").active = [0]
     assert 'data-scope="10:4099"' in view.text
+    full_html = view.text
     fate.active = [fate.labels.index("10:escape:3")]
     check(doc, "Show empty pathways").active = []
-    assert 'data-scope="10:4099"' not in view.text
+    assert view.text == full_html
     assert fate.labels[fate.active[0]] == "10:escape:3"
 
 

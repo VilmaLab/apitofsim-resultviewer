@@ -136,8 +136,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
-          $dest = "artifacts/apitofresview-${{ matrix.target }}.zip"
-          Compress-Archive -Path dist/apitofresview -DestinationPath $dest
+          $source = (Resolve-Path dist/apitofresview).Path
+          $dest = Join-Path (Resolve-Path artifacts).Path "apitofresview-${{ matrix.target }}.zip"
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $source, $dest, [System.IO.Compression.CompressionLevel]::SmallestSize, $true
+          )
 
       - name: Package (macOS)
         if: runner.os == 'macOS'

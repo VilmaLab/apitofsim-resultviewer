@@ -2,6 +2,7 @@
 
 from math import hypot, sin
 
+import numpy as np
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
@@ -98,6 +99,22 @@ def test_layouts_and_envelope():
         if not subset.is_empty():
             assert outline["plot_y"].max() > packed["plot_y"].max()
             assert outline["plot_y"].min() < packed["plot_y"].min()
+
+
+def test_envelope_windows_across_blocks():
+    from apitofresview.plotting.explorer._kernels import envelope_edges
+
+    xs = np.arange(0.0, 4096.0, 4.0)
+    ys = xs / 4
+    samples = np.arange(-3.0, 4097.0)
+    upper, lower = envelope_edges(xs, ys, samples, 1.0, 2.0)
+    middle = (samples % 4 == 0) & (samples >= 0) & (samples <= xs[-1])
+    tangent = (samples % 2 == 1) & (samples >= -1) & (samples <= xs[-1] + 1)
+    expected = np.zeros_like(samples)
+    expected[middle] = samples[middle] / 4
+    expected[tangent] = np.floor((samples[tangent] + 1) / 4)
+    np.testing.assert_array_equal(upper, expected + 2 * middle)
+    np.testing.assert_array_equal(lower, expected - 2 * middle)
 
 
 @pytest.mark.parametrize("width,height", [(600, 380), (300, 200), (900, 600)])
@@ -354,7 +371,7 @@ def test_beeswarm_preparation_survives_resize_and_zoom():
 def test_beeswarm_interval_tangency_tolerance(intervals, expected):
     import numpy as np
 
-    from apitofresview.plotting.explorer._beeswarm import nearest_y
+    from apitofresview.plotting.explorer._kernels import nearest_y
 
     lows = np.array([lo for lo, _ in intervals], dtype=float)
     highs = np.array([hi for _, hi in intervals], dtype=float)

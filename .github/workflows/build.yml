@@ -109,11 +109,22 @@ jobs:
         shell: bash
         run: '"${{ matrix.binary }}" --smoke-test'
 
+      - name: Test the frozen spectrogram in Chromium
+        if: runner.os == 'Linux'
+        env:
+          APITOFRESVIEW_TEST_EXECUTABLE: ${{ matrix.binary }}
+        run: |
+          uv sync --locked --group build --no-install-package numba --no-install-package llvmlite
+          uv run --no-sync playwright install --with-deps --only-shell chromium
+          uv run --no-sync pytest tests/test_spectrogram.py::test_label_checkbox_controls_both_views
+
       - name: Package (Linux)
         if: runner.os == 'Linux'
+        env:
+          XZ_OPT: "-4 -T2"
         run: |
           mkdir -p artifacts
-          tar -czf "artifacts/apitofresview-${{ matrix.target }}.tar.gz" \
+          tar -cJf "artifacts/apitofresview-${{ matrix.target }}.tar.xz" \
             -C dist apitofresview
 
       - name: Package (Windows)

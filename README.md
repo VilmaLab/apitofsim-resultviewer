@@ -267,7 +267,8 @@ it also verifies that Numba and llvmlite cannot be imported. To run it from
 source, use `uv run apitofresview --smoke-test`.
 
 CI builds Linux x86-64, Windows x86-64, and macOS arm64 on every push and
-attaches the bundles to a GitHub Release on tags matching `v*`.
+attaches the bundles to a GitHub Release on tags matching `v*`. On Linux,
+extract the `.tar.xz` with `tar -xf apitofresview-linux-x86_64.tar.xz`.
 
 ## Tests
 

@@ -452,7 +452,7 @@ async def report_download(request, params):
 
 @query_params(ExperimentParams)
 async def survivals(request, params):
-    from apitofsim.plotting.survivals import make_survival_plot, get_joint_survivals
+    from apitofsim.plotting.survivals import get_joint_survivals, make_survival_plot
     from mplbed import safe_html
 
     db = request.app.state.db
@@ -697,20 +697,16 @@ def explorer_bokeh(db, doc, *, layout="viewport"):
     build_document(db, doc, experiment, cluster, layout=layout)
 
 
-def create_app(database_path=None, debug=True, *, events_filename=None):
-    """Build the Starlette application around the given experiment database.
+def create_app(database_path=None, debug=True, *, database_paths=None):
+    """Serve an experiment database directory or a caller-supplied connection.
 
-    ``database_path`` defaults to the ``$DATABASE`` environment variable,
-    which keeps the ``uvicorn apitofresview:app`` way of running
-    working unchanged. For attached connections, pass the sidecar path
-    explicitly with ``events_filename``.
+    The directory defaults to the ``DATABASE`` environment variable. When using
+    an attached connection, pass its result directory's ``DatabasePaths``.
     """
     if database_path is None:
         database_path = environ["DATABASE"]
 
-    db = ExperimentDatabase(
-        database_path, readonly=True, events_filename=events_filename
-    )
+    db = ExperimentDatabase(database_path, readonly=True, database_paths=database_paths)
     search_path = db.db.execute("select current_setting('search_path')").fetchone()[0]
     session_databases = set()
 
@@ -721,7 +717,7 @@ def create_app(database_path=None, debug=True, *, events_filename=None):
         try:
             connection.execute("set search_path = ?", [search_path])
             session_db = ExperimentDatabase(
-                (connection, None), readonly=True, events_filename=db.events_path
+                (connection, None), readonly=True, database_paths=db.database_paths
             )
         except BaseException:
             connection.close()

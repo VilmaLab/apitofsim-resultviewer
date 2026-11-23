@@ -40,7 +40,7 @@ def test_overview_matches_tree_histories(tree_database):
 
 @pytest.mark.parametrize("ordered", [True, False])
 def test_parquet_tree_overview_matches_sql(tmp_path, monkeypatch, ordered):
-    path = tmp_path / "tree.duckdb"
+    path = tmp_path / "tree.apitofsim"
     with ExperimentDatabase(path) as db:
         db.create_tables()
         db.db.execute("""

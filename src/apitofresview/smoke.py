@@ -64,7 +64,7 @@ def make_test_database():
     )
 
     tmp = tempfile.TemporaryDirectory(prefix="apitofresview-smoke-")
-    path = Path(tmp.name) / "smoke.duckdb"
+    path = Path(tmp.name) / "smoke.apitofsim"
     db = ExperimentDatabase(path)
     try:
         db.create_tables()

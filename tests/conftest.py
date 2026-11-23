@@ -16,7 +16,7 @@ SERVER_STARTUP_TIMEOUT = 90
 
 @pytest.fixture(scope="session")
 def browser_database(tmp_path_factory):
-    path = tmp_path_factory.mktemp("browser") / "test.duckdb"
+    path = tmp_path_factory.mktemp("browser") / "test.apitofsim"
     db = ExperimentDatabase(path)
     try:
         db.create_tables()

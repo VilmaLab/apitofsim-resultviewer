@@ -26,7 +26,7 @@ from apitofresview.plotting.explorer import data as explorer_data
 
 @pytest.fixture(params=["arrow", "parquet"])
 def outcome_app(tmp_path, monkeypatch, request):
-    path = tmp_path / "outcomes.duckdb"
+    path = tmp_path / "outcomes.apitofsim"
     db = ExperimentDatabase(path)
     db.create_tables()
     db.db.execute("""
@@ -147,7 +147,7 @@ def test_concurrent_explorer_sessions_have_independent_connections(
     outcome_app, monkeypatch
 ):
     parent_db = outcome_app.state.db
-    path = parent_db.events_path.with_name("outcomes.duckdb")
+    path = parent_db.database_paths.root
     ready_to_fetch = Barrier(2)
     connections = []
 
@@ -158,7 +158,7 @@ def test_concurrent_explorer_sessions_have_independent_connections(
         assert result.fetchone() == (5,)
 
     monkeypatch.setattr(webapp, "explorer_bokeh", read_events)
-    app = webapp.create_app(path, events_filename=parent_db.events_path)
+    app = webapp.create_app(path)
     core = next(route.app.core for route in app.routes if route.name == "bokeh")
 
     async def run_sessions():
@@ -191,26 +191,32 @@ def test_unrecorded_selection(outcome_app, run, cluster):
 
 
 @pytest.mark.parametrize("missing", [True, False])
-def test_required_sidecar_has_a_distinct_open_error(outcome_app, tmp_path, missing):
-    source = outcome_app.state.db.events_path
-    path = tmp_path / "copy.duckdb"
-    copyfile(source.with_name("outcomes.duckdb"), path)
+def test_required_event_archive_has_a_distinct_open_error(
+    outcome_app, tmp_path, missing
+):
+    from apitofsim.workflow import DatabasePaths
+
+    db = outcome_app.state.db
+    source = db.events_path
+    copy = DatabasePaths(tmp_path / "copy.apitofsim")
+    copy.create()
+    copyfile(db.database_paths.duckdb, copy.duckdb)
     if missing:
         with pytest.raises(
-            FileNotFoundError, match=f"matching .events{source.suffix} sidecar"
+            FileNotFoundError, match=rf"matching events\{source.suffix} archive"
         ):
-            webapp.create_app(path)
+            webapp.create_app(copy.root)
     else:
-        path.with_suffix(f".events{source.suffix}").write_bytes(b"wrong archive")
+        (copy.root / source.name).write_bytes(b"wrong archive")
         with pytest.raises(ValueError, match="sidecar identity/size"):
-            webapp.create_app(path)
+            webapp.create_app(copy.root)
 
 
-def test_legacy_event_database_requires_migration(tmp_path):
-    path = tmp_path / "legacy.duckdb"
-    with duckdb.connect(str(path)) as conn:
-        conn.execute("create table event_info (id integer)")
-    with pytest.raises(ValueError, match="Legacy relational-event database"):
+def test_loose_duckdb_file_is_rejected(tmp_path):
+    path = tmp_path / "experiment.duckdb"
+    with duckdb.connect(path) as conn:
+        conn.execute("create table experiment_config (id integer)")
+    with pytest.raises(NotADirectoryError, match="database directory"):
         webapp.create_app(path)
 
 

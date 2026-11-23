@@ -15,7 +15,7 @@ def add_arguments(parser):
         "--database",
         type=Path,
         metavar="PATH",
-        help=f"Experiment database path. Overrides ${config.ENV_VAR}.",
+        help=f"Experiment database directory. Overrides ${config.ENV_VAR}.",
     )
     parser.add_argument(
         "--no-window",

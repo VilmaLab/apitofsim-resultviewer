@@ -13,9 +13,8 @@ import pytest
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 
-
 TEST_DIRECTORY = tempfile.TemporaryDirectory(prefix="resultviewer-tests-")
-DATABASE_PATH = Path(TEST_DIRECTORY.name) / "test.duckdb"
+DATABASE_PATH = Path(TEST_DIRECTORY.name) / "test.apitofsim"
 connection = duckdb.connect(str(DATABASE_PATH))
 connection.execute(
     "create table cluster_report (group_id integer, id integer, name varchar)"
@@ -31,7 +30,6 @@ os.environ["DATABASE"] = str(DATABASE_PATH)
 os.environ.setdefault("MPLCONFIGDIR", str(Path(TEST_DIRECTORY.name) / "matplotlib"))
 
 from apitofresview import webapp  # noqa: E402
-
 
 database = SimpleNamespace(
     db=duckdb.connect(str(DATABASE_PATH), read_only=True),

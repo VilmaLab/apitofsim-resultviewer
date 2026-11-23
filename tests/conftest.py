@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 import sys
@@ -97,11 +98,11 @@ def _wait_until_serving(base_url, process):
 def serve_database(database):
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
+    executable = os.environ.get("APITOFRESVIEW_TEST_EXECUTABLE")
+    command = [executable] if executable else [sys.executable, "-m", "apitofresview"]
     process = subprocess.Popen(
         [
-            sys.executable,
-            "-m",
-            "apitofresview",
+            *command,
             "--database",
             str(database),
             "--mode",

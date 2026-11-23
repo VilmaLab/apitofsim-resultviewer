@@ -9,4 +9,4 @@ dependencies:
   - numba/label/dev::llvmlite=0.51.0dev2
   - pip
   - setuptools
-  - tbb-devel=2023.1.0
+  - tbb-devel

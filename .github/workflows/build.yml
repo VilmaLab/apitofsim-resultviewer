@@ -60,6 +60,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
+        env:
+          # Keep Linux bundles from loading a host Intel TCM library.
+          CONDA_PINNED_PACKAGES: tbb-devel=${{ runner.os == 'Linux' && '2022.0.0' || '2023.1.0' }}
         with:
           miniforge-version: latest
           activate-environment: explorer-kernels

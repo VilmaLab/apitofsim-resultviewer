@@ -26,24 +26,28 @@ def keep_holoviews_module(name):
 root = Path(SPECPATH)
 kernel_dir = root / "build" / "explorer-kernels"
 kernel_module = "_apitofresview_kernels"
-tbb_library = {
-    "linux": "libtbb.so.12",
-    "darwin": "libtbb.12.dylib",
-    "win32": "tbb12.dll",
+runtime_libraries = {
+    "linux": ("libtbb.so.12",),
+    "darwin": ("libtbb.12.dylib", "libc++.1.dylib"),
+    "win32": ("tbb12.dll",),
 }[sys.platform]
 if not (
     any((kernel_dir / (kernel_module + suffix)).is_file() for suffix in EXTENSION_SUFFIXES)
-    and (kernel_dir / tbb_library).is_file()
+    and all((kernel_dir / name).is_file() for name in runtime_libraries)
 ):
     raise SystemExit("Compile the Explorer kernels before bundling. See README.md.")
+
+licenses = ["numba", "onetbb", "onetbb-third-party"]
+if sys.platform == "darwin":
+    licenses.append("libcxx")
 
 recipe = BundleSpec(
     app=APP,
     entrypoint="src/apitofresview/__main__.py",
     root=root,
     pathex=("src", str(kernel_dir)),
-    binaries=((str(kernel_dir / tbb_library), "."),),
-    datas=(("licenses/numba.txt", "licenses"), ("licenses/onetbb.txt", "licenses")),
+    binaries=tuple((str(kernel_dir / name), ".") for name in runtime_libraries),
+    datas=tuple((f"licenses/{name}.txt", "licenses") for name in licenses),
     packages=(
         PackageData("apitofresview"),
         PackageData("apitofsim"),

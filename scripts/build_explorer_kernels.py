@@ -89,6 +89,10 @@ def main():
 
     compiler.compile()
     shutil.copy2(tbb_runtime, args.output_dir / tbb_runtime.name)
+    if sys.platform == "darwin":
+        # The Conda-built extension and oneTBB both link to this dylib.
+        libcxx = prefix / "lib" / "libc++.1.dylib"
+        shutil.copy2(libcxx, args.output_dir / libcxx.name)
 
 
 if __name__ == "__main__":

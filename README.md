@@ -244,7 +244,9 @@ Build the native Explorer extension with a C/C++ compiler and Miniforge.
 The build uses the oneTBB-enabled Numba fork from [frankier/numba#1](https://github.com/frankier/numba/pull/1).
 
 ```bash
-conda env create -f scripts/explorer-kernels.yml
+tbb_version=2023.1.0
+if [ "$(uname -s)" = Linux ]; then tbb_version=2022.0.0; fi
+CONDA_PINNED_PACKAGES="tbb-devel=$tbb_version" conda env create -f scripts/explorer-kernels.yml
 conda activate explorer-kernels
 python -m pip install --no-build-isolation --no-deps \
   "numba @ git+https://github.com/frankier/numba.git@53da7d0f1940e959cf1896b7cc2be8f31b7ac048"

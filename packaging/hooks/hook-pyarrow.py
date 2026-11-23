@@ -8,7 +8,13 @@ from PyInstaller.utils.hooks import (
     collect_submodules,
 )
 
-excludedimports = ["pyarrow.flight", "pyarrow._flight", "pyarrow._s3fs"]
+excludedimports = [
+    "pyarrow.flight",
+    "pyarrow._flight",
+    "pyarrow._s3fs",
+    # PyInstaller's module scan also discovers the unversioned support library.
+    "pyarrow.libarrow_python_flight",
+]
 unused_libraries = ("libarrow_flight.", "libarrow_python_flight.", "libarrow_s3.")
 hiddenimports = collect_submodules(
     "pyarrow", filter=lambda name: "tests" not in name and name not in excludedimports

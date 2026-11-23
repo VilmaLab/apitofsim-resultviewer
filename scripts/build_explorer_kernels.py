@@ -44,6 +44,7 @@ def main():
         linker_flag = shlex.quote(f"-Wl,-rpath,{rpath}")
         os.environ["LDFLAGS"] = f"{os.environ.get('LDFLAGS', '')} {linker_flag}"
     os.environ["NUMBA_CPU_NAME"] = "generic"
+    os.environ["NUMBA_CACHE_DIR"] = str(args.output_dir.resolve() / "numba-cache")
 
     from numba import types
     from numba.pycc import CC

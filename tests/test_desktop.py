@@ -49,7 +49,7 @@ def test_pywebview_platform_policy_matches_runtime():
 def test_prepare_passes_database_to_reload_factory(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE", raising=False)
     args = Namespace(
-        database=tmp_path / "experiments.duckdb",
+        database=tmp_path / "experiments.apitofsim",
         no_window=False,
         no_browser=False,
         mode="auto",
@@ -73,7 +73,7 @@ def test_main_wires_shared_runner(monkeypatch):
         return 0
 
     monkeypatch.setattr(cli, "run_cli", fake_run_cli)
-    assert cli.main(["--database", "sample.duckdb"]) == 0
+    assert cli.main(["--database", "sample.apitofsim"]) == 0
     assert captured["spec"] is cli.APP
     assert captured["assets"] is ASSETS
     assert captured["session"] is cli.SESSION

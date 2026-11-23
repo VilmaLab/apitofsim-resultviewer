@@ -26,41 +26,38 @@ would need a system WebKitGTK installation.
 
 ## Running
 
-The viewer needs a path to an APi-ToF experiment database (a DuckDB file).
+Pass the APi-ToF experiment database directory to the viewer.
 
 ```sh
-apitofresview --database /path/to/experiments.duckdb
+apitofresview --database /path/to/experiments.apitofsim
 ```
 
-or set the database in the environment (this also keeps the previous way of
-running working):
+or set the database directory in the environment.
 
 ```sh
-export DATABASE=/path/to/experiments.duckdb
+export DATABASE=/path/to/experiments.apitofsim
 apitofresview
 ```
 
-If the run has recorded events, keep the matching `experiments.events.arrow`
-or `experiments.events.parquet` sidecar next to `experiments.duckdb` when copying,
-moving, or serving the results. The database identifies the required format. Summary and spectrogram views work for runs without recordings.
-For legacy databases with relational event tables, use a compatible older
-viewer or migrate the database explicitly.
+Copy or move the whole database directory after closing it. When present,
+the event archive travels with the experiment. Summary and spectrogram views
+also work for runs without recordings.
 
 ### Options
 
-| Option            | Effect                                           |
-| ----------------- | ------------------------------------------------ |
-| `--database PATH` | Experiment database path (overrides `$DATABASE`) |
-| `--port N`        | Serve on a fixed port instead of a free one      |
-| `--no-window`     | Serve only; don't open a window or a browser     |
-| `--no-browser`    | Don't open a browser                             |
-| `--debug`         | Show tracebacks in the browser                   |
+| Option            | Effect                                                |
+| ----------------- | ----------------------------------------------------- |
+| `--database PATH` | Experiment database directory (overrides `$DATABASE`) |
+| `--port N`        | Serve on a fixed port instead of a free one           |
+| `--no-window`     | Serve only; don't open a window or a browser          |
+| `--no-browser`    | Don't open a browser                                  |
+| `--debug`         | Show tracebacks in the browser                        |
 
 ## Embedding the Explorer
 
 Pass an `apitofsim.workflow.db.ExperimentDatabase` opened with `readonly=True`.
-File-backed opens derive the sidecar path. When wrapping an attached DuckDB
-connection, pass the results archive path explicitly as `events_filename`.
+When wrapping an attached DuckDB connection, pass the result directory's
+`DatabasePaths` as `database_paths`.
 
 `explorer_bokeh(db, doc, layout=...)` (`apitofresview.webapp`) and
 `build_document(db, doc, experiment, cluster, layout=...)`
@@ -172,10 +169,10 @@ histories and is independent of event checkboxes and cumulative subtree scope.
 ```bash
 uv sync --group build
 npm install && npm run build     # build the frontend into the package
-uv run apitofresview --database /path/to/experiments.duckdb
+uv run apitofresview --database /path/to/experiments.apitofsim
 ```
 
-`DATABASE=/path/to/experiments.duckdb uv run uvicorn apitofresview.webapp:create_app --factory` also works if you
+`DATABASE=/path/to/experiments.apitofsim uv run uvicorn apitofresview.webapp:create_app --factory` also works if you
 want a plain ASGI server. Build the frontend assets first; this entry point
 does not check or build them.
 
@@ -200,7 +197,7 @@ the pinned release wheel.
 
 ```bash
 UV_NO_SYNC=1 UV_PROJECT_ENVIRONMENT=.venv-local uv run apitofresview \
-  --database /path/to/experiments.duckdb
+  --database /path/to/experiments.apitofsim
 ```
 
 To check the selected interpreter and simulator installation without importing

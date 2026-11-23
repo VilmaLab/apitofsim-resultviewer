@@ -19,7 +19,7 @@ from apitofresview.plotting.explorer.tree import ExecutionTree
 
 @pytest.fixture
 def tree_database(tmp_path, monkeypatch):
-    path = tmp_path / "tree.duckdb"
+    path = tmp_path / "tree.apitofsim"
     db = ExperimentDatabase(path)
     db.create_tables()
     db.db.execute("""
@@ -317,7 +317,7 @@ def test_rate_panels_follow_before_and_after_species(tree_database, monkeypatch)
     from types import SimpleNamespace
 
     import numpy as np
-    from apitofsim.api import Histogram, Q_
+    from apitofsim.api import Q_, Histogram
     from bokeh.models import Span
 
     from apitofresview.plotting.explorer import rates

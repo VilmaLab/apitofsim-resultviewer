@@ -11,8 +11,8 @@ from tests.conftest import serve_database
 
 @pytest.fixture(scope="session", params=[True, False], ids=["shared", "missing"])
 def cluster_navigation_server(browser_database, tmp_path_factory, request):
-    path = tmp_path_factory.mktemp("cluster-navigation") / "test.duckdb"
-    shutil.copy2(browser_database, path)
+    path = tmp_path_factory.mktemp("cluster-navigation") / "test.apitofsim"
+    shutil.copytree(browser_database, path)
     if not request.param:
         db = ExperimentDatabase(path)
         try:

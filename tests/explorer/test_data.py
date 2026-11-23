@@ -4,7 +4,6 @@ import duckdb
 import polars as pl
 import pytest
 from apitofsim.plotting.events import NoRecordedEventsError
-from apitofsim.recording import events_filename
 from apitofsim.workflow.db import ExperimentDatabase
 
 from tests.arrow_fixtures import event as recorded_event, publish_events
@@ -64,8 +63,9 @@ def test_terminal_histories(history, fate, terminal):
 def test_adapter_resolves_results_and_preserves_ids(
     monkeypatch, negative_z, attached, tmp_path
 ):
-    database_path = str(tmp_path / "explorer.duckdb")
+    database_path = str(tmp_path / "explorer.apitofsim")
     db = ExperimentDatabase(database_path)
+    results_paths = db.database_paths
     db.create_tables()
     conn = db.db
     conn.execute("""
@@ -131,16 +131,17 @@ def test_adapter_resolves_results_and_preserves_ids(
     db.close()
     if attached:
         cluster_path = str(tmp_path / "clusters.duckdb")
+        results_path = str(results_paths.duckdb)
         clusters = duckdb.connect(cluster_path)
         clusters.execute(
-            f"attach '{database_path.replace(chr(39), chr(39) * 2)}' as results (read_only)"
+            f"attach '{results_path.replace(chr(39), chr(39) * 2)}' as results (read_only)"
         )
         for table in ("cluster", "pathway"):
             clusters.execute(f"create table {table} as select * from results.{table}")
         clusters.close()
         conn = duckdb.connect(":memory:")
         conn.execute(
-            f"attach '{database_path.replace(chr(39), chr(39) * 2)}' as results (read_only)"
+            f"attach '{results_path.replace(chr(39), chr(39) * 2)}' as results (read_only)"
         )
         conn.execute(
             f"attach '{cluster_path.replace(chr(39), chr(39) * 2)}' as clusters (read_only)"
@@ -152,7 +153,7 @@ def test_adapter_resolves_results_and_preserves_ids(
             source = "clusters" if table in ("cluster", "pathway") else "results"
             conn.execute(f"create view {table} as select * from {source}.{table}")
         db = ExperimentDatabase(
-            (conn, None), readonly=True, events_filename=events_filename(database_path)
+            (conn, None), readonly=True, database_paths=results_paths
         )
         db.refresh_views()
     else:
@@ -278,7 +279,7 @@ def test_pairing_does_not_skip_records_or_reuse_a_collision():
 def test_pathway_cohorts_keep_simulated_pathway_for_escaped_and_empty_results(
     monkeypatch, tmp_path
 ):
-    path = tmp_path / "independent.duckdb"
+    path = tmp_path / "independent.apitofsim"
     db = ExperimentDatabase(path)
     db.create_tables()
     db.db.execute("""

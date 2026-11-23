@@ -1,7 +1,7 @@
 """Settings for the result viewer.
 
 The viewer is read-only, so its only required setting is the path to the
-APi-ToF experiment database. It can be supplied on the command line with
+APi-ToF experiment database directory. It can be supplied on the command line with
 ``--database`` or, for when run via ``uvicorn``, with the ``$DATABASE``
 environment variable.
 """

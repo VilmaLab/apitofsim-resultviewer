@@ -24,7 +24,6 @@ def keep_holoviews_module(name):
 
 
 root = Path(SPECPATH)
-linux = sys.platform == "linux"
 kernel_dir = root / "build" / "explorer-kernels"
 kernel_module = "_apitofresview_kernels"
 runtime_libraries = {
@@ -47,14 +46,14 @@ recipe = BundleSpec(
     entrypoint="src/apitofresview/__main__.py",
     root=root,
     pathex=("src", str(kernel_dir)),
-    hookspath=("packaging/hooks",) if linux else (),
+    hookspath=("packaging/hooks",),
     binaries=tuple((str(kernel_dir / name), ".") for name in runtime_libraries),
     datas=tuple((f"licenses/{name}.txt", "licenses") for name in licenses),
     packages=(
         PackageData("apitofresview", excludes=("**/__pycache__",)),
         PackageData("apitofsim"),
         PackageData("mplbed"),
-        PackageData("holoviews", excludes=("examples",) if linux else ()),
+        PackageData("holoviews", excludes=("examples",)),
     ),
     metadata=("bokeh", "panel", "holoviews", "mplbed", "pandas", "param"),
     submodules=(

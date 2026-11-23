@@ -1,4 +1,4 @@
-"""Bundle Panel resources used by the Linux desktop viewer."""
+"""Bundle Panel resources used by the desktop viewer."""
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 

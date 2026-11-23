@@ -110,12 +110,16 @@ jobs:
         run: '"${{ matrix.binary }}" --smoke-test'
 
       - name: Test the frozen spectrogram in Chromium
-        if: runner.os == 'Linux'
+        shell: bash
         env:
           APITOFRESVIEW_TEST_EXECUTABLE: ${{ matrix.binary }}
         run: |
           uv sync --locked --group build --no-install-package numba --no-install-package llvmlite
-          uv run --no-sync playwright install --with-deps --only-shell chromium
+          args=(--only-shell)
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            args+=(--with-deps)
+          fi
+          uv run --no-sync playwright install "${args[@]}" chromium
           uv run --no-sync pytest tests/test_spectrogram.py::test_label_checkbox_controls_both_views
 
       - name: Package (Linux)

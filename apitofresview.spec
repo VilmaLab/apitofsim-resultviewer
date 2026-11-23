@@ -49,7 +49,7 @@ recipe = BundleSpec(
     binaries=tuple((str(kernel_dir / name), ".") for name in runtime_libraries),
     datas=tuple((f"licenses/{name}.txt", "licenses") for name in licenses),
     packages=(
-        PackageData("apitofresview"),
+        PackageData("apitofresview", excludes=("**/__pycache__",)),
         PackageData("apitofsim"),
         PackageData("mplbed"),
         PackageData("holoviews"),

@@ -1,5 +1,6 @@
-"""Keep the local Arrow, IPC, and Parquet support in the Linux bundle."""
+"""Keep local Arrow IPC and Parquet support in the desktop bundle."""
 
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -15,7 +16,11 @@ excludedimports = [
     # PyInstaller's module scan also discovers the unversioned support library.
     "pyarrow.libarrow_python_flight",
 ]
-unused_libraries = ("libarrow_flight.", "libarrow_python_flight.", "libarrow_s3.")
+unused_libraries = [
+    f"{prefix}{name}.*"
+    for prefix in ("", "lib")
+    for name in ("arrow_flight", "arrow_python_flight", "arrow_s3")
+]
 hiddenimports = collect_submodules(
     "pyarrow", filter=lambda name: "tests" not in name and name not in excludedimports
 )
@@ -32,11 +37,12 @@ datas = collect_data_files(
         "**/*.pyx",
         "**/*.pxi",
         "**/*.cmake",
-        *(f"{prefix}*" for prefix in unused_libraries),
+        "**/*.lib",
+        *unused_libraries,
     ],
 )
 binaries = [
     (source, dest)
     for source, dest in collect_dynamic_libs("pyarrow")
-    if not Path(source).name.startswith(unused_libraries)
+    if not any(fnmatchcase(Path(source).name, pattern) for pattern in unused_libraries)
 ]

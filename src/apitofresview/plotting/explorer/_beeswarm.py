@@ -3,7 +3,7 @@
 from math import floor, sqrt
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 
 @njit(cache=True)
@@ -153,16 +153,20 @@ def terminal_swarm(xs, ordinary_xs, ordinary, init, escape, slots, width, diamet
 @njit(cache=True)
 def envelope_edges(xs, ys, samples, x_padding, y_padding):
     upper, lower = np.empty(len(samples)), np.empty(len(samples))
-    first, last = 0, 0
-    for i in range(len(samples)):
-        x = samples[i]
-        while last < len(xs) and xs[last] <= x + x_padding:
-            last += 1
-        while first < last and xs[first] < x - x_padding:
-            first += 1
-        hi, lo = -np.inf, np.inf
-        for j in range(first, last):
-            r = y_padding * sqrt(max(0.0, 1 - ((x - xs[j]) / x_padding) ** 2))
-            hi, lo = max(hi, ys[j] + r), min(lo, ys[j] - r)
-        upper[i], lower[i] = (hi, lo) if first != last else (0.0, 0.0)
+    # Each block uses its own sliding window, starting at a binary search.
+    block = 1024
+    for chunk in prange((len(samples) + block - 1) // block):
+        start = chunk * block
+        first = last = np.searchsorted(xs, samples[start] - x_padding)
+        for i in range(start, min(start + block, len(samples))):
+            x = samples[i]
+            while last < len(xs) and xs[last] <= x + x_padding:
+                last += 1
+            while first < last and xs[first] < x - x_padding:
+                first += 1
+            hi, lo = -np.inf, np.inf
+            for j in range(first, last):
+                r = y_padding * sqrt(max(0.0, 1 - ((x - xs[j]) / x_padding) ** 2))
+                hi, lo = max(hi, ys[j] + r), min(lo, ys[j] - r)
+            upper[i], lower[i] = (hi, lo) if first != last else (0.0, 0.0)
     return upper, lower

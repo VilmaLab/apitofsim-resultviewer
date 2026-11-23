@@ -240,23 +240,32 @@ classes). This mirrors the setup in apitofsim-web.
 
 ### Building a release locally
 
+Build the native Explorer extension with a C/C++ compiler and Miniforge.
+The build uses the oneTBB-enabled Numba fork from [frankier/numba#1](https://github.com/frankier/numba/pull/1).
+
 ```bash
-uv sync --group build
-uv run pyinstaller apitofresview.spec --noconfirm --clean
+conda env create -f scripts/explorer-kernels.yml
+conda activate explorer-kernels
+python -m pip install --no-build-isolation --no-deps \
+  "numba @ git+https://github.com/frankier/numba.git@53da7d0f1940e959cf1896b7cc2be8f31b7ac048"
+python scripts/build_explorer_kernels.py
+conda deactivate
+
+uv sync --locked --no-dev --group build --no-install-package numba --no-install-package llvmlite
+uv run --no-sync pyinstaller apitofresview.spec --noconfirm --clean
 ./dist/apitofresview/apitofresview --smoke-test
 ```
 
-`--smoke-test` builds a throwaway database, starts the server, requests the
-pages and static trees, and forces the lazily-imported bokeh/panel/holoviews
-and matplotlib code paths. It is the check that catches PyInstaller problems,
-since those are runtime import failures rather than build failures. It works
-unfrozen too (`uv run apitofresview --smoke-test`), so you can compare the two
-directly when something breaks only in the bundle.
+The desktop bundle ships the compiled Explorer extension and the oneTBB
+runtime. Source installs continue to compile these kernels through Numba JIT.
 
-CI builds all four targets on every push and attaches them to a GitHub
-Release on tags matching `v*`. Note that CI clones the `apitofsim` and
-`mplbed` path dependencies from git before building, so a standalone
-checkout needs network access to those repositories.
+`--smoke-test` creates a temporary database, checks HTTP routes and static
+assets, and exercises the plotting and Explorer kernels. In frozen builds
+it also verifies that Numba and llvmlite cannot be imported. To run it from
+source, use `uv run apitofresview --smoke-test`.
+
+CI builds Linux x86-64, Windows x86-64, and macOS arm64 on every push and
+attaches the bundles to a GitHub Release on tags matching `v*`.
 
 ## Tests
 

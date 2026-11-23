@@ -8,9 +8,11 @@ modules are the failure mode PyInstaller actually produces.
 """
 
 import json
+import sys
 import tempfile
 import urllib.error
 import urllib.request
+from importlib.util import find_spec
 from pathlib import Path
 
 from workingtitle.desktop import ServerThread, bind_socket
@@ -146,7 +148,7 @@ def _check_report_route(url, failures):
 
 
 def _check_beeswarm(failures):
-    """Exercise JIT compilation, terminal buckets and envelopes in the bundle."""
+    """Exercise the ordinary and terminal packing paths and the envelope."""
     try:
         import polars as pl
 
@@ -164,15 +166,14 @@ def _check_beeswarm(failures):
             }
         )
         regions = pl.DataFrame({"left": [0.0], "right": [1.0]})
-        prepared = prepare_beeswarm(events, regions)
-        for width in (600, 300):
+        for width, terminal_regions in ((600, None), (300, regions)):
             packed, diameter = pack_beeswarm(
                 events,
                 -0.65,
                 1.65,
                 width,
                 380,
-                prepared=prepared,
+                prepared=prepare_beeswarm(events, terminal_regions),
             )
             assert packed.height == events.height
             assert 0 < diameter <= 10
@@ -185,6 +186,47 @@ def _check_beeswarm(failures):
         print(f"FAIL beeswarm: {err!r}", flush=True)
     else:
         print("OK   beeswarm", flush=True)
+
+
+def _check_tree_scanner(failures):
+    """Exercise the Parquet scanner's two return paths and native imports."""
+    try:
+        import numpy as np
+
+        from apitofresview.plotting.explorer._kernels import _summarize_batch
+
+        if getattr(sys, "frozen", False):
+            assert _summarize_batch.__module__ == "_apitofresview_kernels"
+            for module in ("numba", "llvmlite"):
+                assert find_spec(module) is None, f"unexpected bundled {module}"
+
+        zeros = np.zeros(3, dtype=np.int64)
+        indices = np.arange(3, dtype=np.int64)
+        coords = np.arange(3, dtype=np.float64)
+        kinds = np.array([0, 1, 5], dtype=np.int64)
+        columns = (
+            zeros,
+            indices,
+            kinds,
+            zeros,
+            zeros,
+            zeros,
+            coords,
+            coords,
+            coords,
+            coords,
+        )
+        state = (-1, -1, 0, 0, 0, 0, -np.inf, -np.inf, -np.inf, True)
+        summary = _summarize_batch(columns, zeros[:1], state, -1)
+        assert summary is not None
+        assert summary[1].tolist() == [0, 2]
+        assert summary[3][:, 0].tolist() == [0, 1, 1, 0, 2]
+        assert _summarize_batch(columns, zeros[:1], summary[0], -1) is None
+    except Exception as err:
+        failures.append(f"tree scanner: {err!r}")
+        print(f"FAIL tree scanner: {err!r}", flush=True)
+    else:
+        print("OK   tree scanner", flush=True)
 
 
 def run_smoke_test(sock, database_path=None, debug=False):
@@ -208,6 +250,7 @@ def run_smoke_test(sock, database_path=None, debug=False):
             _check_import(label, module, attr, failures)
         _check_mpl_backend(failures)
         _check_beeswarm(failures)
+        _check_tree_scanner(failures)
         _check_report_route(server.url, failures)
     finally:
         server.stop()

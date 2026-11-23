@@ -59,13 +59,28 @@ jobs:
       # tags for reference: checkout@v4, setup-uv@v6, upload-artifact@v4.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
+      - uses: conda-incubator/setup-miniconda@be893c923ea9cf1cf7cd510fbdde27c7e18cbdcb # v4.1.0
+        with:
+          miniforge-version: latest
+          activate-environment: explorer-kernels
+          environment-file: scripts/explorer-kernels.yml
+
+      - name: Compile Explorer kernels
+        shell: bash -el {0}
+        run: |
+          python -m pip install --no-build-isolation --no-deps "numba @ git+https://github.com/frankier/numba.git@53da7d0f1940e959cf1896b7cc2be8f31b7ac048"
+          python scripts/build_explorer_kernels.py
+        env:
+          NUMBA_DISABLE_TBB: "1"
+          NUMBA_DISABLE_OPENMP: "1"
+
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           python-version: "3.14"
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --locked --no-dev --group build
+        run: uv sync --locked --no-dev --group build --no-install-package numba --no-install-package llvmlite
 
       - name: Identify macOS runner image
         if: runner.os == 'macOS'
@@ -82,7 +97,7 @@ jobs:
       - name: Build
         env:
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
-        run: uv run --locked --no-dev --group build pyinstaller apitofresview.spec --noconfirm --clean
+        run: uv run --no-sync pyinstaller apitofresview.spec --noconfirm --clean
 
       # A successful PyInstaller run proves very little: its failures are
       # runtime missing-import failures. The self-check starts the frozen

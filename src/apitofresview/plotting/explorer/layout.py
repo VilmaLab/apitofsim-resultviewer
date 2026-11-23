@@ -6,7 +6,7 @@ from math import ceil, floor, sin, sqrt
 import numpy as np
 import polars as pl
 
-from ._beeswarm import envelope_edges, stack_swarm, terminal_swarm
+from ._kernels import envelope_edges, stack_swarm, terminal_swarm
 
 SCHEMATIC_WEIGHTS = (3, 3, 1, 1, 1)
 EQUAL_WEIGHTS = (1, 1, 1, 1, 1)

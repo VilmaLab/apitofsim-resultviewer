@@ -80,8 +80,7 @@ def _wait_until_serving(base_url, process):
     deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            stdout, _ = process.communicate()
-            raise RuntimeError(f"Server exited with {process.returncode}:\n{stdout}")
+            raise RuntimeError(f"Server exited with {process.returncode}")
         try:
             with urllib.request.urlopen(base_url, timeout=1) as response:
                 if response.status == 200:
@@ -89,9 +88,7 @@ def _wait_until_serving(base_url, process):
         except urllib.error.URLError, ConnectionError, TimeoutError, OSError:
             pass
         time.sleep(0.1)
-    process.terminate()
-    stdout, _ = process.communicate(timeout=5)
-    raise TimeoutError(f"Server did not start:\n{stdout}")
+    raise TimeoutError("Server did not start")
 
 
 @contextmanager
@@ -100,6 +97,8 @@ def serve_database(database):
     base_url = f"http://127.0.0.1:{port}"
     executable = os.environ.get("APITOFRESVIEW_TEST_EXECUTABLE")
     command = [executable] if executable else [sys.executable, "-m", "apitofresview"]
+    # Let pytest capture the server output. An unread pipe can block the
+    # server once it fills with requests from the browser.
     process = subprocess.Popen(
         [
             *command,
@@ -109,10 +108,7 @@ def serve_database(database):
             "server",
             "--port",
             str(port),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+        ]
     )
     try:
         _wait_until_serving(base_url, process)

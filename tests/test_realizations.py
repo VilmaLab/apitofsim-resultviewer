@@ -6,7 +6,7 @@ from shutil import copyfile
 from threading import Barrier
 
 import duckdb
-
+import numpy as np
 import pytest
 from apitofsim.api import Q_
 from apitofsim.plotting import events
@@ -17,11 +17,10 @@ from mplbed.asgi import MplbedMiddleware
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 
-from tests.arrow_fixtures import event, publish_events
-
 from apitofresview import webapp
 from apitofresview.plotting.explorer import build_document
 from apitofresview.plotting.explorer import data as explorer_data
+from tests.arrow_fixtures import event, publish_events
 
 
 @pytest.fixture(params=["arrow", "parquet"])
@@ -44,6 +43,8 @@ def outcome_app(tmp_path, monkeypatch, request):
         insert into cluster_tree_experiment_result
             (id,experiment_run_id,cluster_id) values (12,3,1);
     """)
+    db.db.execute("insert into histogram_params values (1, 10, 30)")
+    db.insert_histograms("k_rate", 1, np.array([[1, 2, 3]]), pathway_id=[7])
     db.begin_execution(1, 1, None, [7], result_id=10, recorded=True)
     db.begin_execution(2, 1, 7, [7], result_id=11, recorded=True)
     db.begin_execution(3, 1, None, [], result_id=12, recorded=True)
@@ -153,12 +154,16 @@ def test_concurrent_explorer_sessions_have_independent_connections(
 
     def read_events(session_db, doc):
         connections.append(session_db)
+        assert session_db.histogram_store is parent_histograms
+        (values,) = session_db.histogram_store.read_rows(3, (0,))
+        np.testing.assert_array_equal(values, [1, 2, 3])
         result = session_db.db.execute("select count(*) from _event_archive")
         ready_to_fetch.wait(timeout=10)
         assert result.fetchone() == (5,)
 
     monkeypatch.setattr(webapp, "explorer_bokeh", read_events)
     app = webapp.create_app(path)
+    parent_histograms = app.state.db.histogram_store
     core = next(route.app.core for route in app.routes if route.name == "bokeh")
 
     async def run_sessions():

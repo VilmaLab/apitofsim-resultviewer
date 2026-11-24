@@ -1,15 +1,15 @@
 """The result viewer's Starlette application."""
 
-import json
 import importlib.util
+import json
 from contextlib import asynccontextmanager
+from functools import partial
 from importlib.resources import files
 from io import StringIO
 from math import ceil
 from os import environ
 from typing import Annotated, Literal, get_args
 from urllib.parse import urlencode
-from functools import partial
 
 import duckdb
 from apitofsim.plotting.report import get_report
@@ -19,12 +19,12 @@ from mplbed import (
     mplbed_starlette,
     safe_html,
 )
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
 from starlette.applications import Starlette
 from starlette.responses import RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
-from pydantic import BaseModel, BeforeValidator, Field, model_validator
 from workingtitle.pydanticstarlette import (
     LenientInt,
     OptionalPositiveInt,
@@ -697,16 +697,29 @@ def explorer_bokeh(db, doc, *, layout="viewport"):
     build_document(db, doc, experiment, cluster, layout=layout)
 
 
-def create_app(database_path=None, debug=True, *, database_paths=None):
+def create_app(
+    database_path=None, debug=True, *, database_paths=None, histogram_store=None
+):
     """Serve an experiment database directory or a caller-supplied connection.
 
     The directory defaults to the ``DATABASE`` environment variable. When using
-    an attached connection, pass its result directory's ``DatabasePaths``.
+    an attached connection, pass its result directory's ``DatabasePaths`` and
+    the ``HistogramStore`` for the catalog that owns the histogram tables.
     """
     if database_path is None:
         database_path = environ["DATABASE"]
 
-    db = ExperimentDatabase(database_path, readonly=True, database_paths=database_paths)
+    db = ExperimentDatabase(
+        database_path,
+        readonly=True,
+        database_paths=database_paths,
+        histogram_store=histogram_store,
+    )
+    try:
+        db.histogram_store.premap()
+    except BaseException:
+        db.close()
+        raise
     search_path = db.db.execute("select current_setting('search_path')").fetchone()[0]
     session_databases = set()
 
@@ -717,7 +730,10 @@ def create_app(database_path=None, debug=True, *, database_paths=None):
         try:
             connection.execute("set search_path = ?", [search_path])
             session_db = ExperimentDatabase(
-                (connection, None), readonly=True, database_paths=db.database_paths
+                (connection, None),
+                readonly=True,
+                database_paths=db.database_paths,
+                histogram_store=db.histogram_store,
             )
         except BaseException:
             connection.close()

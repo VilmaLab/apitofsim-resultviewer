@@ -40,7 +40,8 @@ apitofresview
 ```
 
 Copy or move the whole database directory after closing it. When present,
-the event archive travels with the experiment. Summary and spectrogram views
+the event archive and `histograms_N.mmap` files travel with the experiment.
+Summary and spectrogram views
 also work for runs without recordings.
 
 ### Options

@@ -630,31 +630,39 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
             return [plot.x_range.start, plot.x_range.end];
         }""")
 
-    def drag(boundary, pixels):
+    def drag(boundary, pixels=None):
         point = page.evaluate(
-            """boundary => {
-            const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
+            """([boundary, pixels]) => {
+            const doc = Bokeh.documents[0];
+            const plot = doc.get_model_by_name('schematic');
             const view = Bokeh.index.find_one(plot);
             const bounds = view.canvas_view.events_el.getBoundingClientRect();
-            const x = plot.renderers[0].data_source.data.right[boundary];
-            return {id: plot.id, x: bounds.left + view.frame.x_scale.compute(x),
-                y: bounds.top + view.frame.y_scale.compute(0.5)};
+            const edge = plot.renderers[0].data_source.data.right[boundary];
+            const x = bounds.left + view.frame.x_scale.compute(edge);
+            return {id: plot.id, x, y: bounds.top + view.frame.y_scale.compute(0.5),
+                end: pixels === null ? bounds.left + view.frame.bbox.right : x + pixels,
+                previous: doc.get_model_by_name('schematic_drag_bridge').text};
         }""",
-            boundary,
+            [boundary, pixels],
         )
         page.mouse.move(point["x"], point["y"])
         page.mouse.down()
-        page.mouse.move(point["x"] + pixels, point["y"], steps=5)
+        page.mouse.move(point["end"], point["y"])
         page.mouse.up()
         expect(page.get_by_label("Sizing")).to_have_value("Custom")
         page.wait_for_function(
-            """oldId => {
-                const plot = Bokeh.documents[0].get_model_by_name('schematic');
+            """({id, previous}) => {
+                const doc = Bokeh.documents[0];
+                const plot = doc.get_model_by_name('schematic');
+                const committed = doc.get_model_by_name('schematic_drag_bridge').text;
+                if (plot?.id !== id || committed === previous) return false;
                 const data = plot.renderers[0].data_source.data;
-                return plot.id === oldId && Math.abs(plot.x_range.start - data.left[0]) < 1e-8 &&
+                const widths = JSON.parse(committed);
+                return data.right.every((right, i) => Math.abs(right - data.left[i] - widths[i]) < 1e-8) &&
+                    Math.abs(plot.x_range.start - data.left[0]) < 1e-8 &&
                     Math.abs(plot.x_range.end - data.right[6]) < 1e-8;
             }""",
-            arg=point["id"],
+            arg=point,
         )
 
     before = widths()
@@ -726,20 +734,18 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
     assert after[3] / before[3] == pytest.approx(after[4] / before[4])
     assert after[4] / before[4] == pytest.approx(after[5] / before[5])
 
-    # A large drag clamps the terminal zone to exactly five screen pixels.
-    drag(5, 2000)
-    expect(page.get_by_label("Sizing")).to_have_value("Custom")
+    # Drag to the right edge of the plot to exercise the five-pixel minimum.
+    drag(5)
     pixels = page.evaluate("""() => {
         const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
         const data = plot.renderers[0].data_source.data;
         return (data.right[6] - data.left[6]) * plot.inner_width / (plot.x_range.end - plot.x_range.start);
     }""")
     assert pixels == pytest.approx(5, abs=0.1)
-    label = page.evaluate("""() => {
+    page.wait_for_function("""() => {
         const plot = [...Bokeh.documents[0]._all_models.values()].filter(p => p.name === 'schematic' && Bokeh.index.find_one(p)?.el?.isConnected).at(-1);
-        return plot.center.filter(item => typeof item.text === 'string').at(-1).text;
+        return plot.center.filter(item => typeof item.text === 'string').at(-1).text === '';
     }""")
-    assert label == ""
     page.get_by_label("X coordinate").select_option(label="Axial distance (mm)")
     expect(page.get_by_label("Sizing")).to_be_hidden()
     page.get_by_label("X coordinate").select_option(label="Schematic")

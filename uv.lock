@@ -44,8 +44,8 @@ wheels = [
 
 [[package]]
 name = "apitofsim"
-version = "0.32.0"
-source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-macosx_12_0_arm64.whl" }
+version = "0.33.0"
+source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-macosx_12_0_arm64.whl" }
 resolution-markers = [
     "platform_machine == 'arm64' and sys_platform == 'darwin'",
 ]
@@ -65,7 +65,7 @@ dependencies = [
     { name = "tomlkit-extras" },
 ]
 wheels = [
-    { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-macosx_12_0_arm64.whl", hash = "sha256:983f4a6c9538b51ec7014084a0d46743c5188d4ed9a9f08bb1c593817770a194" },
+    { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-macosx_12_0_arm64.whl", hash = "sha256:500e24b0a88fed5196ee414918aad3b5c00aa035c31f5410a94027b157746a40" },
 ]
 
 [package.optional-dependencies]
@@ -81,7 +81,7 @@ plot = [
 requires-dist = [
     { name = "ase", specifier = ">=3.27.0" },
     { name = "click", specifier = ">=8.2.0" },
-    { name = "duckdb", specifier = ">=1.4.2,<2" },
+    { name = "duckdb", specifier = ">=1.5.0,<2" },
     { name = "graphviz", marker = "extra == 'plot'", specifier = ">=0.21" },
     { name = "holoviews", marker = "extra == 'plot'", specifier = ">=1.21.0" },
     { name = "marimo", marker = "extra == 'notebooks'" },
@@ -105,8 +105,8 @@ provides-extras = ["reflink", "plot", "notebooks"]
 
 [[package]]
 name = "apitofsim"
-version = "0.32.0"
-source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-manylinux_2_34_x86_64.whl" }
+version = "0.33.0"
+source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-manylinux_2_34_x86_64.whl" }
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -126,7 +126,7 @@ dependencies = [
     { name = "tomlkit-extras" },
 ]
 wheels = [
-    { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:3b7a9e3baaf4d43b3954e7c42acd80bbf3e0299ef3fb88518700a34d77b4fcb8" },
+    { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:a180c241f4cac028b7442c6312ce7ab9e72fb9407f60e729d9943ecd1ca68bc7" },
 ]
 
 [package.optional-dependencies]
@@ -142,7 +142,7 @@ plot = [
 requires-dist = [
     { name = "ase", specifier = ">=3.27.0" },
     { name = "click", specifier = ">=8.2.0" },
-    { name = "duckdb", specifier = ">=1.4.2,<2" },
+    { name = "duckdb", specifier = ">=1.5.0,<2" },
     { name = "graphviz", marker = "extra == 'plot'", specifier = ">=0.21" },
     { name = "holoviews", marker = "extra == 'plot'", specifier = ">=1.21.0" },
     { name = "marimo", marker = "extra == 'notebooks'" },
@@ -166,8 +166,8 @@ provides-extras = ["reflink", "plot", "notebooks"]
 
 [[package]]
 name = "apitofsim"
-version = "0.32.0"
-source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-win_amd64.whl" }
+version = "0.33.0"
+source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-win_amd64.whl" }
 resolution-markers = [
     "platform_machine == 'AMD64' and sys_platform == 'win32'",
 ]
@@ -188,7 +188,7 @@ dependencies = [
     { name = "tomlkit-extras" },
 ]
 wheels = [
-    { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-win_amd64.whl", hash = "sha256:a6f5b7e762aa4cae65f9dc6ceec29e8dbf33eb320ee2a693f12d5c2e1752a033" },
+    { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-win_amd64.whl", hash = "sha256:87a7cc38b76b059f22936b6de9a5f11dd63835b354d683197e81d31794f6e81c" },
 ]
 
 [package.optional-dependencies]
@@ -204,7 +204,7 @@ plot = [
 requires-dist = [
     { name = "ase", specifier = ">=3.27.0" },
     { name = "click", specifier = ">=8.2.0" },
-    { name = "duckdb", specifier = ">=1.4.2,<2" },
+    { name = "duckdb", specifier = ">=1.5.0,<2" },
     { name = "graphviz", marker = "extra == 'plot'", specifier = ">=0.21" },
     { name = "holoviews", marker = "extra == 'plot'", specifier = ">=1.21.0" },
     { name = "marimo", marker = "extra == 'notebooks'" },
@@ -231,9 +231,9 @@ name = "apitofsim-resultviewer"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
-    { name = "apitofsim", version = "0.32.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-macosx_12_0_arm64.whl" }, extra = ["plot"], marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "apitofsim", version = "0.32.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-manylinux_2_34_x86_64.whl" }, extra = ["plot"], marker = "sys_platform == 'linux'" },
-    { name = "apitofsim", version = "0.32.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-win_amd64.whl" }, extra = ["plot"], marker = "sys_platform == 'win32'" },
+    { name = "apitofsim", version = "0.33.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-macosx_12_0_arm64.whl" }, extra = ["plot"], marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "apitofsim", version = "0.33.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-manylinux_2_34_x86_64.whl" }, extra = ["plot"], marker = "sys_platform == 'linux'" },
+    { name = "apitofsim", version = "0.33.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-win_amd64.whl" }, extra = ["plot"], marker = "sys_platform == 'win32'" },
     { name = "bokeh" },
     { name = "duckdb" },
     { name = "mplbed" },
@@ -261,10 +261,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apitofsim", extras = ["plot"], marker = "(platform_machine != 'AMD64' and platform_machine != 'arm64' and platform_machine != 'x86_64') or (platform_machine == 'AMD64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
-    { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-macosx_12_0_arm64.whl" },
-    { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-manylinux_2_34_x86_64.whl" },
-    { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.32.0/apitofsim-0.32.0-cp312-abi3-win_amd64.whl" },
+    { name = "apitofsim", extras = ["plot"], marker = "(platform_machine != 'AMD64' and platform_machine != 'arm64' and platform_machine != 'x86_64') or (platform_machine == 'AMD64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')", specifier = ">=0.33.0" },
+    { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-macosx_12_0_arm64.whl" },
+    { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-manylinux_2_34_x86_64.whl" },
+    { name = "apitofsim", extras = ["plot"], marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-win_amd64.whl" },
     { name = "bokeh", specifier = "==3.10" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "mplbed", specifier = ">=0.3.1" },

@@ -1258,17 +1258,15 @@ def test_details_layout_transitions(monkeypatch, mode, layout):
     left, workspace = body.children
     center, right = workspace.children
     toggle = right.children[0].children[0]
-    layouts = {
-        m: doc.select_one({"name": f"details_layout_{m}"})
-        for m in ("sidebar", "bottom", "right")
-    }
+    selector = doc.get_model_by_name("details_layout")
+    choices = ("sidebar", "bottom", "right")
     fullscreen = next(d for d in doc.select({"type": Div}) if d.text == "normal")
     chart = doc.select_one({"name": "events"})
     chart.x_range.start, chart.x_range.end = 1, 2
 
     toggle.active = True
-    assert layouts["sidebar"].active
-    layouts[mode].active = True
+    assert selector.active == choices.index("sidebar")
+    selector.active = choices.index(mode)
     assert left.children[1].visible == (mode == "bottom")
     assert (body.styles["--details-border"] != "0") == (mode == "bottom")
     assert right.sizing_mode == "stretch_width" and right.width is None
@@ -1284,30 +1282,27 @@ def test_details_layout_transitions(monkeypatch, mode, layout):
         assert body.styles["--details-max-height"] == "50%"
     else:
         assert body.styles["--details-height"] == "100%"
-    # Clicking the selected layout again keeps it selected.
-    layouts[mode].active = False
-    assert layouts[mode].active
     fullscreen.text = "full"
-    assert not toggle.active and layouts["sidebar"].active
+    assert not toggle.active and selector.active == choices.index("sidebar")
     toggle.active = True
-    layouts["right" if mode == "bottom" else "bottom"].active = True
+    selector.active = choices.index("right" if mode == "bottom" else "bottom")
     fullscreen.text = "normal"
     if layout == "contained":
         assert doc.roots[0].styles["height"] == "100%"
-    assert toggle.active and layouts[mode].active
+    assert toggle.active and selector.active == choices.index(mode)
     assert doc.select_one({"name": "events"}) is chart
     assert (chart.x_range.start, chart.x_range.end) == (1, 2)
 
     toggle.active = False
-    assert layouts["sidebar"].active
+    assert selector.active == choices.index("sidebar")
     assert body.styles["--details-border"] == "0"
-    assert all(not button.visible for button in layouts.values())
+    assert not selector.visible
     toggle.active = True
-    assert right.width == 300 and layouts["sidebar"].active
-    layouts[mode].active = True
+    assert right.width == 300 and selector.active == choices.index("sidebar")
+    selector.active = choices.index(mode)
     left.children[0].active = True
     assert left.children[1].visible
-    assert layouts["bottom" if mode == "bottom" else "sidebar"].active
+    assert selector.active == choices.index("bottom" if mode == "bottom" else "sidebar")
     assert right.width == (None if mode == "bottom" else 300)
     assert body.children[1].children == [center, right]
 

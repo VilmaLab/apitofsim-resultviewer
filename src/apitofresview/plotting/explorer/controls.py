@@ -5,42 +5,29 @@ from dataclasses import dataclass
 from bokeh.events import DocumentReady
 from bokeh.layouts import column, row
 from bokeh.models import (
-    BuiltinIcon,
     Button,
     CheckboxGroup,
     Column,
     ColumnDataSource,
     CustomJS,
     Div,
-    FullscreenTool,
-    GroupBox,
     InlineStyleSheet,
     RangeSlider,
     Row,
-    SVGIcon,
     Select,
     Toggle,
 )
 
-from .browser import ON_FRAME
+from workingtitle.bokeh.browser import ON_FRAME
+from workingtitle.bokeh.panels import PlacementSelector, ResponsivePanels
+from workingtitle.bokeh.workspace import (
+    FrameFullscreen,
+    observe_panel_width,
+    Sidebar,
+    apply_layout as apply_workspace_layout,
+)
+from workingtitle.bokeh.widgets import CHECKBOX_CSS, checkbox, control_group
 from .data import EVENT_TYPES
-
-CHECKBOX_CSS = """
-    .bk-input-group { white-space: normal; }
-    label { display: flex; align-items: center; width: 100%; }
-    input { flex-shrink: 0; }
-    span { min-width: 0; overflow-wrap: anywhere; }
-"""
-
-
-SCROLL_STYLES = {
-    "min-height": "0",
-    "min-width": "0",
-    "overflow": "auto",
-    "overscroll-behavior": "contain",
-    "flex": "1",
-}
-SIDEBAR_BREAKPOINT = 900
 
 # Bokeh caps non-fixed layouts at 100% of their parent. Scroll contents must
 # retain their intrinsic height, including when taller than the whole panel.
@@ -93,13 +80,14 @@ class Controls:
     rate_plots: Column
     detail_bridge: Div
     fullscreen_state: Div
-    viewport_width: Div
+    panels: ResponsivePanels
     fullscreen_button: Button
     left_controls: Column
     right_controls: Column
     left_toggle: Toggle
     right_toggle: Toggle
-    detail_layouts: dict[str, Toggle]
+    placement_selector: PlacementSelector
+    left_sidebar: Sidebar
     left: Column
     right: Column
     center: Column
@@ -109,32 +97,8 @@ class Controls:
     frame: Column
 
 
-def checkbox(label, checked=False):
-    return CheckboxGroup(
-        labels=[label],
-        active=[0] if checked else [],
-        stylesheets=[InlineStyleSheet(css=CHECKBOX_CSS)],
-    )
-
-
-def enabled(widget):
-    return bool(widget.active)
-
-
 def group(title, child, *, name=None):
-    child.width_policy = "max"
-    child.height_policy = "min"
-    return GroupBox(
-        title=title,
-        name=name,
-        child=child,
-        width_policy="max",
-        height_policy="min",
-        margin=(5, 0),
-        # The scroll container must not shrink groups below their contents.
-        styles={"flex-shrink": "0", "max-height": "none"},
-        stylesheets=[InlineStyleSheet(css="fieldset { min-inline-size: 0; }")],
-    )
+    return control_group(title, child, name=name, scrolling=True)
 
 
 def create_controls(
@@ -339,12 +303,16 @@ def create_controls(
     )
     detail_bridge = Div(text="", visible=False)
     fullscreen_state = Div(text="normal", visible=False)
-    viewport_width = Div(text="1440,900", visible=False, name="explorer_viewport")
-    fullscreen_button = Button(
-        label="Fullscreen",
-        icon=BuiltinIcon("fullscreen"),
-        sizing_mode="stretch_width",
+    frame = column(
+        sizing_mode="stretch_width", spacing=4, css_classes=["explorer-bokeh-frame"]
     )
+    panels = ResponsivePanels(
+        doc, frame, breakpoint=900, name="explorer_viewport", host_selector="#content"
+    )
+    fullscreen = FrameFullscreen(
+        frame, document=doc, state=fullscreen_state, overflow="hidden", padding=6
+    )
+    fullscreen_button = fullscreen.button(sizing_mode="stretch_width")
 
     left_controls = column(
         fullscreen_button,
@@ -405,11 +373,18 @@ def create_controls(
         show_rates,
         rate_controls,
         css_classes=["explorer-details"],
+        visible=False,
         stylesheets=[InlineStyleSheet(css=CONTENT_CSS)],
     )
-    left_toggle = Toggle(
-        label="« Controls", active=True, width=100, height=32, margin=0
+    left_sidebar = Sidebar.create(
+        left_controls,
+        widths=(205, 38),
+        labels=("« Controls", "»"),
+        button_widths=(100, 38),
+        toggle_options=dict(height=32, margin=0),
+        shell_options=dict(spacing=4),
     )
+    left, left_toggle = left_sidebar.shell, left_sidebar.toggle
     right_toggle = Toggle(
         label="☷",
         margin=0,
@@ -418,35 +393,8 @@ def create_controls(
         height=32,
         html_attributes={"title": "Show selected realization"},
     )
-    left = column(left_toggle, left_controls, width=205, spacing=4)
-    detail_layouts = {
-        mode: Toggle(
-            label=title,
-            icon=SVGIcon(
-                svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
-                '<rect x="1" y="1" width="18" height="18" rx="2" '
-                'fill="none" stroke="currentColor" stroke-width="1.5"/>'
-                f'<path d="{path}" fill="currentColor"/></svg>',
-                size=18,
-            ),
-            stylesheets=[
-                InlineStyleSheet(css=".bk-btn { font-size: 0; padding: 4px; }")
-            ],
-            margin=0,
-            active=mode == "sidebar",
-            width=32,
-            height=32,
-            visible=False,
-            name=f"details_layout_{mode}",
-            html_attributes={"title": title, "aria-label": title},
-        )
-        for mode, path, title in (
-            ("sidebar", "M14 2h4v16h-4z", "Right sidebar"),
-            ("bottom", "M2 11h16v7H2z", "Bottom"),
-            ("right", "M10 2h8v16h-8z", "Right (half width)"),
-        )
-    }
-    details_header = row(right_toggle, *detail_layouts.values(), spacing=2, margin=0)
+    placement = PlacementSelector(name="details_layout", panel=right_controls)
+    details_header = row(right_toggle, placement.widget, spacing=2, margin=0)
     right = column(
         details_header,
         right_controls,
@@ -456,14 +404,13 @@ def create_controls(
             InlineStyleSheet(
                 css=f"""
                 :host {{ --sidebar-width: 300px; }}
-                @container explorer (width < {SIDEBAR_BREAKPOINT}px) {{
+                @container explorer (width < {panels.breakpoint}px) {{
                     :host {{ --sidebar-width: 250px; }}
                 }}
                 """
             )
         ],
     )
-    right_controls.visible = False
     center_plots = column(
         sizing_mode="stretch_width",
         spacing=0,
@@ -480,6 +427,7 @@ def create_controls(
         css_classes=["explorer-center"],
         stylesheets=[InlineStyleSheet(css=CONTENT_CSS)],
     )
+    observe_panel_width(doc, center)
     workspace = row(
         center,
         right,
@@ -492,71 +440,14 @@ def create_controls(
         sizing_mode="stretch_width",
         spacing=6,
     )
-    frame = column(
-        body,
-        detail_bridge,
-        fullscreen_state,
-        viewport_width,
-        sizing_mode="stretch_width",
-        spacing=4,
-        css_classes=["explorer-bokeh-frame"],
-        stylesheets=[
-            InlineStyleSheet(
-                css="""
-                       :host { background: white; }
-                       :host(:fullscreen) {
-                           width: 100vw !important; height: 100vh !important;
-                           overflow: hidden; padding: 6px; box-sizing: border-box;
-                       }
-                   """
-            )
-        ],
-    )
-    fullscreen_button.js_on_click(
-        CustomJS(
-            args=dict(frame=frame, fullscreen_state=fullscreen_state),
-            code="""
-            const view = Bokeh.index.find_one(frame);
-            const element = view?.el;
-            if (element == null) return;
-            if (element._explorerFullscreenListener == null) {
-                element._explorerFullscreenListener = () => {
-                    fullscreen_state.text = document.fullscreenElement === element ? 'full' : 'normal';
-                };
-                document.addEventListener('fullscreenchange', element._explorerFullscreenListener);
-            }
-            if (document.fullscreenElement === element) void document.exitFullscreen();
-            else if (document.fullscreenElement == null) void element.requestFullscreen();
-        """,
-        )
-    )
+    frame.children = [body, detail_bridge, fullscreen_state, panels.viewport]
     doc.js_on_event(
         DocumentReady,
         CustomJS(
-            args=dict(width=viewport_width, frame=frame, bridge=detail_bridge),
-            code=ON_FRAME
-            + """
+            args=dict(frame=frame, bridge=detail_bridge),
+            code="""
         const view = Bokeh.index.find_one(frame);
-        if (!view || view.el.explorerViewportObserver) return;
-        const el = view.el;
-        const embedded = el.closest('.explorer-frame');
-        const update = () => onFrame(el, 'explorerViewportFrame', () => {
-            const {top, width: measured} = el.getBoundingClientRect();
-            const available = Math.floor(measured);
-            const size = `${available},${window.innerHeight}`;
-            if (!embedded && el.explorerTop !== top) {
-                el.explorerTop = top;
-                el.style.setProperty('--explorer-top', `${top}px`);
-            }
-            if (available > 0 && width.text !== size) width.text = size;
-        });
-        const observer = new ResizeObserver(update);
-        el.explorerViewportObserver = observer;
-        observer.observe(el);
-        update();
-        window.addEventListener('resize', update);
-        document.addEventListener('fullscreenchange', update);
-        observer.observe(document.getElementById('content') ?? document.body);
+        if (!view) return;
         const jump = input => {
             if (input?.validity.valid && Number.isInteger(input.valueAsNumber))
                 bridge.text = JSON.stringify(['page', input.valueAsNumber - 1]);
@@ -692,13 +583,14 @@ def create_controls(
         rate_plots=rate_plots,
         detail_bridge=detail_bridge,
         fullscreen_state=fullscreen_state,
-        viewport_width=viewport_width,
+        panels=panels,
         fullscreen_button=fullscreen_button,
         left_controls=left_controls,
         right_controls=right_controls,
         left_toggle=left_toggle,
         right_toggle=right_toggle,
-        detail_layouts=detail_layouts,
+        placement_selector=placement,
+        left_sidebar=left_sidebar,
         left=left,
         right=right,
         center=center,
@@ -713,147 +605,14 @@ def create_controls(
 
 
 def apply_layout(ui, layout, *, full=False, bottom=False):
-    """Keep all pane geometry in one inherited CSS update."""
-    page = layout == "page" and not full
-    flow = {"min-height": "0", "min-width": "0"}
-    height = "auto" if page else "100%"
-    scrolling = {**flow, "overflow": "visible"} if page else SCROLL_STYLES
-    ui.frame.styles = {
-        **flow,
-        "height": (
-            "auto"
-            if page
-            else "100%"
-            if layout == "contained" and not full
-            else "var(--explorer-height, calc(100dvh - var(--explorer-top, 0px) - 6px))"
-        ),
-        "box-sizing": "border-box",
-        "overflow": "visible" if page else "hidden",
-    }
-    left, right = ui.left_toggle.active, ui.right_toggle.active
-    ui.body.styles = {
-        **flow,
-        "height": height,
-        "position": "relative",
-        "container-type": "inline-size",
-        "container-name": "explorer",
-        "--workspace-direction": "column" if bottom else "row",
-        "--controls-position": "relative" if left else "absolute",
-        "--controls-width": f"{ui.left.width}px",
-        "--controls-height": height if left else "auto",
-        "--controls-layer": "auto" if left else "10",
-        "--details-position": "relative" if right else "absolute",
-        "--details-width": "38px"
-        if not right
-        else None
-        if ui.right.width is not None
-        else "100%"
-        if bottom
-        else "auto",
-        "--details-flex": "1 1 0px"
-        if right and ui.right.width is None and not bottom
-        else "0 0 auto",
-        "--details-height": height if right and not bottom else "auto",
-        "--details-max-height": "50%" if bottom and not page else "none",
-        "--details-border": "1px solid #cbd5e1" if bottom else "0",
-        "--details-padding": "8px" if bottom else "0",
-        "--details-layer": "auto" if right else "10",
-    }
-    ui.workspace.styles = {
-        **flow,
-        "height": height,
-        "position": "relative",
-        "flex-direction": "var(--workspace-direction)",
-    }
-    ui.left.styles = {
-        **flow,
-        "position": "var(--controls-position)",
-        "top": "0",
-        "left": "0",
-        "width": "var(--controls-width)",
-        "height": "var(--controls-height)",
-        "flex": "0 0 auto",
-        "z-index": "var(--controls-layer)",
-    }
-    ui.right.styles = {
-        **flow,
-        "position": "var(--details-position)",
-        "top": "0",
-        "right": "0",
-        "width": "var(--details-width, var(--sidebar-width))",
-        "height": "var(--details-height)",
-        "max-height": "var(--details-max-height)",
-        "border-top": "var(--details-border)",
-        "padding-top": "var(--details-padding)",
-        "flex": "var(--details-flex)",
-        "z-index": "var(--details-layer)",
-        "box-sizing": "border-box",
-    }
-    ui.left_controls.styles = ui.right_controls.styles = scrolling
-    ui.center.styles = {**scrolling, "flex": "1 1 0px"}
-
-
-def prepare_toolbar(plot):
-    """Add the standard fullscreen tool to each plot."""
-    plot.toolbar.logo = None
-    plot.add_tools(FullscreenTool())
-
-
-def realization_range_bridge(doc, slider):
-    """Send the latest completed range, or the range held still for 100 ms."""
-    slider.syncable = False
-    bridge = Div(visible=False, name="realization_range_request")
-    doc.js_on_event(
-        DocumentReady,
-        CustomJS(
-            args=dict(slider=slider, bridge=bridge),
-            code="""
-            const view = Bokeh.index.find_one(slider);
-            if (!view || view.realizationRangeConnected) return;
-            view.realizationRangeConnected = true;
-
-            let timer;
-            let sent = [...slider.value];
-            let pending;
-            let sequence = 0;
-            let inFlight = false;
-
-            function sendLatest() {
-                if (inFlight || pending == null) return;
-                const range = pending;
-                pending = undefined;
-                if (range.every((value, i) => value === sent[i])) return;
-                sent = range;
-                inFlight = true;
-                bridge.text = JSON.stringify([++sequence, ...range]);
-            }
-
-            function commit() {
-                clearTimeout(timer);
-                pending = [...slider.value];
-                sendLatest();
-            }
-
-            bridge.properties.tags.change.connect(() => {
-                if (bridge.tags[0] !== sequence) return;
-                inFlight = false;
-                sendLatest();
-            });
-            slider.properties.value.change.connect(() => {
-                pending = undefined;
-                clearTimeout(timer);
-                timer = setTimeout(commit, 100);
-            });
-            // A release can return to the previous value_throttled after a
-            // linger sent a different range. Listen to noUiSlider's change.
-            if (view._noUiSlider != null)
-                view._noUiSlider.on("change.realizationRange", commit);
-            else
-                slider.properties.value_throttled.change.connect(commit);
-            """,
-        ),
+    apply_workspace_layout(
+        ui,
+        layout,
+        full=full,
+        bottom=bottom,
+        container="explorer",
+        viewport_height="var(--explorer-height, calc(100dvh - var(--workspace-top, 0px) - 6px))",
     )
-    return bridge
 
 
 def label_facets(doc, widget, labels):

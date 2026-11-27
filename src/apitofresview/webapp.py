@@ -15,6 +15,7 @@ import duckdb
 from apitofsim.plotting.report import get_report
 from apitofsim.workflow.db import ExperimentDatabase
 from bokeh.server.asgi import BokehASGI
+from workingtitle.bokeh.embed import bokeh_document
 from mplbed import (
     mplbed_starlette,
     safe_html,
@@ -498,14 +499,6 @@ def spectrogram_mpl(db, experiment, cluster, *, labels=True):
     )
 
 
-def bokeh_document(request, path, *args, **kwargs):
-    from bokeh.embed import server_document
-    from markupsafe import Markup
-
-    url = str(request.url_for("bokeh", path=path))
-    return Markup(server_document(url, *args, **kwargs))
-
-
 @query_params(SpectrogramParams)
 async def spectrogram_page(request, params):
     db = request.app.state.db
@@ -636,7 +629,7 @@ def spectrogram_bokeh(db, doc):
     from apitofsim.plotting.spectrogram import basic_spectrogram, get_intensities
     from apitofsim.transmission import transform_intensity
     from bokeh.layouts import layout
-    from bokeh.models import FullscreenTool
+    from workingtitle.bokeh.workspace import prepare_toolbar
 
     args = doc.session_context.request.arguments
 
@@ -666,8 +659,7 @@ def spectrogram_bokeh(db, doc):
     figure.y_range.reset_end = y_max
     figure.x_range.bounds = (0, 2 * figure.x_range.end)
     figure.y_range.bounds = (0, y_max)
-    figure.toolbar.logo = None
-    figure.add_tools(FullscreenTool())
+    prepare_toolbar(figure)
     if labels:
         from .plotting.spectrogram import bokeh_labels
 

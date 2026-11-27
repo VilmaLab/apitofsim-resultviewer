@@ -246,7 +246,7 @@ dependencies = [
     { name = "starlette" },
     { name = "starlette-htmx" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "workingtitle" },
+    { name = "workingtitle", extra = ["bokeh"] },
 ]
 
 [package.dev-dependencies]
@@ -277,7 +277,7 @@ requires-dist = [
     { name = "starlette", specifier = ">=1.4.1" },
     { name = "starlette-htmx", specifier = ">=0.1.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.1" },
-    { name = "workingtitle", git = "https://github.com/frankier/workingtitle.git" },
+    { name = "workingtitle", extras = ["bokeh"], git = "https://github.com/frankier/workingtitle.git" },
 ]
 
 [package.metadata.requires-dev]
@@ -1837,10 +1837,16 @@ wheels = [
 [[package]]
 name = "workingtitle"
 version = "0.1.0"
-source = { git = "https://github.com/frankier/workingtitle.git#541c5960e16ea1c96b5b3b32a3867b41f756260f" }
+source = { git = "https://github.com/frankier/workingtitle.git#aacaaeed37fe0adcdf7004e4c832b25b5809901c" }
 dependencies = [
     { name = "pydantic" },
     { name = "starlette" },
+]
+
+[package.optional-dependencies]
+bokeh = [
+    { name = "bokeh" },
+    { name = "markupsafe" },
 ]
 
 [[package]]

@@ -24,7 +24,8 @@ from bokeh.palettes import Category10, Category20
 from bokeh.plotting import figure
 
 from .data import REGIONS
-from .browser import ON_FRAME
+from workingtitle.bokeh.browser import ON_FRAME
+from workingtitle.bokeh.ranges import update_reset_range
 from .details import format_value
 from .layout import (
     beeswarm_envelope,
@@ -512,16 +513,6 @@ class PackingQueue:
                 pack()
 
 
-def update_range(bounds, start, end):
-    """Update reset bounds and keep an explicitly zoomed view."""
-    if bounds.reset_start is None or (bounds.start, bounds.end) == (
-        bounds.reset_start,
-        bounds.reset_end,
-    ):
-        bounds.start, bounds.end = start, end
-    bounds.reset_start, bounds.reset_end = start, end
-
-
 def _terminal_spread(plot, glyph, highlight_sources):
     """Spread terminal markers and their highlights in the same browser update."""
     source = glyph.data_source
@@ -858,7 +849,7 @@ def _event_plot(
         events = None  # The source and bounds are being updated together.
         if layout == "realization":
             first, last = realization_bounds
-            update_range(plot.y_range, first - 0.5, last + 0.5)
+            update_reset_range(plot.y_range, first - 0.5, last + 0.5)
             plot.yaxis.ticker.ticks = sorted({first, last})
         events = packed = frame
         regions = mapped_regions
@@ -978,7 +969,9 @@ def _bar_plot(shared_x, *, tree=False, pathway_mode=False):
         nonlocal series, labels
         next_series, next_labels = {}, {}
         top = bars["fraction"].max() or 0
-        update_range(plot.y_range, 0, top * 1.08 if top and not pathway_mode else 1)
+        update_reset_range(
+            plot.y_range, 0, top * 1.08 if top and not pathway_mode else 1
+        )
         for name, lo, hi, value in bars.select(
             "name", "left", "right", "fraction"
         ).iter_rows():

@@ -120,7 +120,7 @@ def test_rate_selection_modes_and_layout(rate_doc):
     select(doc, 1)
     assert show.visible and not show.active and not db.reads
     show.active = [0]
-    assert doc.select_one({"name": "details_layout_right"}).active
+    assert doc.get_model_by_name("details_layout").active == 2
     chart = doc.select_one({"name": "pathway_rates"})
     assert isinstance(chart.y_scale, LogScale)
     assert np.isnan(chart.renderers[0].data_source.data["y"][0])
@@ -161,7 +161,7 @@ def test_rate_selection_modes_and_layout(rate_doc):
     assert len(db.reads) == 1
     assert doc.select_one({"name": "events"}) is main
     assert (main.x_range.start, main.x_range.end) == (1, 2)
-    doc.select_one({"name": "details_layout_bottom"}).active = True
+    doc.get_model_by_name("details_layout").active = 1
     assert show.active
     select(doc, 3)
     assert show.active
@@ -170,7 +170,7 @@ def test_rate_selection_modes_and_layout(rate_doc):
         for p in doc.select({"name": "pathway_rates"})
         for m in p.select({"type": Span})
     )
-    doc.select_one({"name": "details_layout_sidebar"}).active = True
+    doc.get_model_by_name("details_layout").active = 0
     assert not show.active
 
 
@@ -307,9 +307,9 @@ def test_bottom_layout_and_rate_controls(rate_doc):
     assert views.child.children[0] is check(doc, "Gas collision rate")
     select(doc, 1)
     assert not separator.visible
-    doc.select_one({"name": "details_layout_bottom"}).active = True
+    doc.get_model_by_name("details_layout").active = 1
     check(doc, "Show rate constants").active = [0]
-    assert doc.select_one({"name": "details_layout_bottom"}).active
+    assert doc.get_model_by_name("details_layout").active == 1
     assert not detail_log.disabled
     assert not detail_values.disabled and separator.visible
     assert [

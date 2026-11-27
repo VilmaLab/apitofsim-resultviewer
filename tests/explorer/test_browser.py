@@ -419,7 +419,7 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
             )
         page.wait_for_function("""() => {
             const doc = Bokeh.documents[0];
-            return doc.get_model_by_name('details_layout_right').active &&
+            return doc.get_model_by_name('details_layout').active === 2 &&
                 doc.get_model_by_name('rate_plots').children[0]?.inner_width > 0;
         }""")
         page.wait_for_function("""() => {
@@ -481,7 +481,7 @@ def test_live_rate_selection_and_layout(monkeypatch, page, width, tmp_path):
         page.get_by_role("button", name="Bottom", exact=True).click()
         page.get_by_text("Show rate constants", exact=True).click()
         page.wait_for_function(
-            "() => Bokeh.documents[0].get_model_by_name('details_layout_bottom').active"
+            "() => Bokeh.documents[0].get_model_by_name('details_layout').active === 1"
         )
 
 
@@ -1225,8 +1225,7 @@ def test_bottom_details_preserve_controls(page, explorer_server, width):
         const doc = Bokeh.documents[0];
         const workspace = doc.roots()[0].children[0].children[1];
         return getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'column' &&
-            ['sidebar', 'bottom', 'right'].every(mode =>
-                doc.get_model_by_name(`details_layout_${mode}`).active === (mode === 'bottom'));
+            doc.get_model_by_name('details_layout').active === 1;
     }""")
     assert_horizontal_fit(page)
     page.get_by_role("button", name="Right sidebar", exact=True).click()
@@ -1234,8 +1233,7 @@ def test_bottom_details_preserve_controls(page, explorer_server, width):
         const doc = Bokeh.documents[0];
         const workspace = doc.roots()[0].children[0].children[1];
         return getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'row' &&
-            ['sidebar', 'bottom', 'right'].every(mode =>
-                doc.get_model_by_name(`details_layout_${mode}`).active === (mode === 'sidebar'));
+            doc.get_model_by_name('details_layout').active === 0;
     }""")
     if width < 900:
         expect(page.get_by_label("X coordinate")).to_be_hidden()
@@ -1346,17 +1344,15 @@ def set_details_layout(target, placement):
     target.wait_for_function(
         """placement => {
         const doc = Bokeh.documents[0];
-        const modes = {'Right sidebar': 'sidebar', 'Right (half width)': 'right', 'Bottom': 'bottom'};
-        const mode = modes[placement];
+        const selector = doc.get_model_by_name('details_layout');
         const body = doc.roots()[0].children[0];
         const workspace = body.children[1];
         const left = body.children[0].children[1];
         const view = Bokeh.index.find_one(doc.roots()[0]);
         const workspaceView = Bokeh.index.find_one(workspace);
         return doc.is_idle && view?.has_finished() && workspaceView?.el.isConnected &&
-            Object.values(modes).every(value =>
-            doc.get_model_by_name(`details_layout_${value}`).active === (value === mode)) &&
-            (getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'column') === (mode === 'bottom') &&
+            selector.labels[selector.active] === placement &&
+            (getComputedStyle(Bokeh.index.find_one(workspace).el).flexDirection === 'column') === (placement === 'Bottom') &&
             Bokeh.index.find_one(left)?.el.checkVisibility() === left.visible;
     }""",
         arg=placement,

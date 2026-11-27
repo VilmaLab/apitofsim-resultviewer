@@ -1,4 +1,4 @@
-"""Summarize one ordered batch of Parquet tree history."""
+"""Summarize one ordered batch of Parquet history."""
 
 import numpy as np
 from numba import njit
@@ -8,7 +8,7 @@ INIT, COLLISION, POSTCOLLISION, FRAGMENTATION, POSTFRAGMENTATION, ESCAPE = range
 
 
 @njit(cache=True)
-def _summarize_batch(columns, nodes, state, next_realization):
+def _summarize_batch(columns, nodes, state, next_realization, tree_mode):
     """Keep visible rows, prefix maxima, and one set of totals per history."""
     realizations, indices, kinds, particles, destinations, accepted, x, y, z, t = (
         columns
@@ -57,12 +57,13 @@ def _summarize_batch(columns, nodes, state, next_realization):
             max_radial = max_z = max_t = -np.inf
             valid = True
         last_index = index
-        valid &= (
-            particle == 0
-            if kind == INIT
-            else not first and particle == previous_particle
-        )
-        previous_particle = destinations[i] if kind == FRAGMENTATION else particle
+        if tree_mode:
+            valid &= (
+                particle == 0
+                if kind == INIT
+                else not first and particle == previous_particle
+            )
+            previous_particle = destinations[i] if kind == FRAGMENTATION else particle
         collision = kind == COLLISION
         collisions += collision
         rejected += collision and accepted[i] == 0
@@ -75,7 +76,11 @@ def _summarize_batch(columns, nodes, state, next_realization):
             retained[kept] = i
             prefix[0, kept], prefix[1, kept] = max_z, max_t
             kept += 1
-        elif valid and (known_particle is None or particle != known_particle):
+        elif (
+            tree_mode
+            and valid
+            and (known_particle is None or particle != known_particle)
+        ):
             # The tree query checks provenance on the retained rows. A
             # dropped collision has persisted provenance iff its node exists.
             node = np.searchsorted(nodes, particle)

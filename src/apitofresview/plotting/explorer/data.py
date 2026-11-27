@@ -15,7 +15,7 @@ from apitofsim.plotting.events import (
 from apitofresview.modes import simulation_mode
 from apitofresview.recordings import NO_RECORDED_EVENTS
 
-from ._overview import MOTION_COLUMNS, SUMMARY_COLUMNS, stream_tree_overview
+from ._overview import MOTION_COLUMNS, SUMMARY_COLUMNS, stream_overview
 from ._parquet import parquet_history_queries
 from .tree import ExecutionTree
 
@@ -124,23 +124,19 @@ def _event_query(
 def _event_frame(
     db, experiment, cluster, tree_mode, *, summary=False, members=None, ids=None
 ):
-    events = (
-        stream_tree_overview(db, experiment, cluster)
-        if tree_mode and summary and members is None and ids is None
-        else None
-    )
-    if events is None:
-        events = _event_query(
-            db,
-            experiment,
-            cluster,
-            tree_mode,
-            summary=summary,
-            members=members,
-            ids=ids,
-        ).pl()
-    # One sort, after reducing to the requested rows and columns. Tree queries
-    # already guarantee numeric event order; filtering does not change it.
+    events = _event_query(
+        db,
+        experiment,
+        cluster,
+        tree_mode,
+        summary=summary,
+        members=members,
+        ids=ids,
+    ).pl()
+    return _format_events(db, events, tree_mode, summary)
+
+
+def _format_events(db, events, tree_mode, summary):
     events = (
         events.rename({"event_id": "id", "event_type": "type"})
         .with_columns(
@@ -219,19 +215,25 @@ def load_data(db, experiment: int, cluster: int, *, summary=False):
     mode = simulation_mode(db, experiment)
     pathway_mode = mode == "PATHWAY_AT_A_TIME"
     tree_mode = mode == "CLUSTER_TREE"
-    events = _event_frame(db, experiment, cluster, tree_mode, summary=summary)
-    if events.is_empty():
-        raise NoRecordedEventsError(NO_RECORDED_EVENTS)
-    realizations = (
-        events.select(
-            pl.col("realization_id").alias("id"),
-            "experiment_result_id",
-            "realization_index",
+    streamed = stream_overview(db, experiment, cluster, tree_mode) if summary else None
+    if streamed is None:
+        events = _event_frame(db, experiment, cluster, tree_mode, summary=summary)
+        if events.is_empty():
+            raise NoRecordedEventsError(NO_RECORDED_EVENTS)
+        realizations = (
+            events.select(
+                pl.col("realization_id").alias("id"),
+                "experiment_result_id",
+                "realization_index",
+            )
+            .unique(maintain_order=True)
+            .sort("experiment_result_id", "realization_index")
+            .drop("realization_index")
         )
-        .unique(maintain_order=True)
-        .sort("experiment_result_id", "realization_index")
-        .drop("realization_index")
-    )
+    else:
+        events, summaries = streamed
+        events = _format_events(db, events, tree_mode, summary=True)
+        realizations = summaries.select("id", "experiment_result_id")
     if pathway_mode:
         realizations = realizations.join(
             db.results_query(run_id=experiment, parent=cluster)
@@ -311,7 +313,11 @@ def load_data(db, experiment: int, cluster: int, *, summary=False):
             for v in lengths_to_cumulative_lengths(get_geometry(db, experiment))
         )
     )
-    events = preprocess_events(events, regions, sorted_events=tree_mode and not summary)
+    events = preprocess_events(
+        events,
+        regions,
+        sorted_events=streamed is not None or (tree_mode and not summary),
+    )
     cluster_name, cluster_charge = (
         db.clusters_query()
         .filter(duckdb.ColumnExpression("id") == duckdb.ConstantExpression(cluster))
@@ -341,13 +347,22 @@ def load_data(db, experiment: int, cluster: int, *, summary=False):
             maintain_order="left",
         )
     if summary:
-        classified = classified.join(
-            events.group_by("realization_id").agg(pl.col(*SUMMARY_COLUMNS).first()),
-            left_on="id",
-            right_on="realization_id",
-            how="left",
-            maintain_order="left",
-        )
+        if streamed is None:
+            summaries = (
+                events.group_by("realization_id")
+                .agg(pl.col(*SUMMARY_COLUMNS).first())
+                .rename({"realization_id": "id"})
+            )
+            events = events.drop(*SUMMARY_COLUMNS, "last_index")
+        if classified.get_column("id").equals(summaries.get_column("id")):
+            classified = classified.hstack(summaries.select(*SUMMARY_COLUMNS))
+        else:
+            classified = classified.join(
+                summaries.select("id", *SUMMARY_COLUMNS),
+                on="id",
+                how="left",
+                maintain_order="left",
+            )
     return (
         classified.with_columns(
             pl.lit(cluster_name).alias("initial_species"),

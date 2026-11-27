@@ -84,9 +84,9 @@ def main():
 
     # The ordered scanner is a serial helper. This also keeps the parallel
     # array analysis out of its optional tuple return.
-    @compiler.export("_summarize_batch", summary(columns, indices, state, i64))
-    def summarize_batch(columns, nodes, state, next_realization):
-        return _summarize_batch(columns, nodes, state, next_realization)
+    @compiler.export("_summarize_batch", summary(columns, indices, state, i64, boolean))
+    def summarize_batch(columns, nodes, state, next_realization, tree_mode):
+        return _summarize_batch(columns, nodes, state, next_realization, tree_mode)
 
     compiler.compile()
     shutil.copy2(tbb_runtime, args.output_dir / tbb_runtime.name)

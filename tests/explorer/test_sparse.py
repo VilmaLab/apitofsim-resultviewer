@@ -102,7 +102,7 @@ def test_parquet_tree_overview_matches_sql(tmp_path, monkeypatch, ordered):
         expected = data.load_overview(db, 1, 1)
         monkeypatch.setattr(_overview, "MIN_STREAM_EVENTS", 1)
         monkeypatch.setattr(_overview, "BATCH_SIZE", 2)
-        assert (_overview.stream_tree_overview(db, 1, 1) is not None) == ordered
+        assert (_overview.stream_overview(db, 1, 1, True) is not None) == ordered
         for fast, sql in zip(data.load_overview(db, 1, 1), expected, strict=True):
             assert_frame_equal(fast, sql, check_exact=True)
 
@@ -122,6 +122,92 @@ def test_parquet_tree_overview_matches_sql(tmp_path, monkeypatch, ordered):
         monkeypatch.setattr(_parquet, "_row_group_index", lambda *_: None)
         result = data._event_frame(db, 1, 1, True, members=keys, ids=ids)
         assert_frame_equal(result, baseline, check_exact=True)
+
+
+@pytest.mark.parametrize(
+    "mode,archive,ordered",
+    [
+        ("SINGLE_CLUSTER", "parquet", True),
+        ("PATHWAY_AT_A_TIME", "parquet", True),
+        ("PATHWAY_AT_A_TIME", "parquet", False),
+        ("SINGLE_CLUSTER", "arrow", True),
+    ],
+)
+def test_non_tree_overview_matches_sql(tmp_path, monkeypatch, mode, archive, ordered):
+    path = tmp_path / "results.apitofsim"
+    pathway_mode = mode == "PATHWAY_AT_A_TIME"
+    with ExperimentDatabase(path) as db:
+        db.create_tables()
+        db.db.execute("""
+            insert into cluster (id,common_name,charge) values (1,'Parent',-1),(2,'Product',-1);
+            insert into pathway values (7,1,2,2),(8,1,1,2);
+            insert into experiment_config (id) values (1);
+        """)
+        db.db.execute(
+            "insert into experiment_run (id,experiment_config_id,simulation_mode) values (1,1,?),(2,1,?)",
+            [mode, mode],
+        )
+        db.db.execute("""
+            insert into single_pathway_experiment_result (id,experiment_run_id,pathway_id)
+                values (20,1,8);
+        """)
+        if pathway_mode:
+            db.db.execute("""insert into single_pathway_experiment_result
+                (id,experiment_run_id,pathway_id) values (10,1,7)""")
+        else:
+            db.db.execute("""insert into multi_pathway_experiment_result
+                (id,experiment_run_id,cluster_id) values (10,1,1)""")
+        db.begin_execution(1, 1, 7 if pathway_mode else None, [7], result_id=10)
+        db.begin_execution(1, 1, 8, [8], result_id=20)
+        db.begin_execution(2, 1, None, [], result_id=30)
+        db.begin_execution(1, 2, None, [], result_id=40)
+        db.begin_execution(1, 1, None, [], result_id=50)
+        rows = [
+            recorded_event(10, 0, 0, "init", 0, 0),
+            recorded_event(10, 0, 1, "collision", 4, 4, x=3, y=4, accepted=1),
+            recorded_event(10, 0, 2, "postcollision", 4, 4),
+            recorded_event(10, 0, 3, "collision", 3, -1, accepted=0),
+            recorded_event(10, 0, 4, "fragmentation", 3, 1, transition_index=0),
+            recorded_event(10, 1, 5, "collision", 3, 2, accepted=0),
+            recorded_event(20, 0, 0, "init", 0, 0),
+            recorded_event(20, 0, 1, "escape", 2, 3),
+            *(recorded_event(result, 0, 0, "escape", 3, 4) for result in (30, 40, 50)),
+        ]
+        if not ordered:
+            rows[1], rows[2] = rows[2], rows[1]
+        publish_events(
+            db,
+            rows,
+            statuses={10: "failed", 20: "cancelled"},
+            format=archive,
+            row_group_size=3,
+        )
+        db.db.execute("update event_execution set recorded=false where result_id=50")
+
+    with ExperimentDatabase(path, readonly=True) as db:
+        monkeypatch.setattr(data, "get_geometry", lambda *_: None)
+        monkeypatch.setattr(
+            data, "lengths_to_cumulative_lengths", lambda *_: (0, 1, 2, 3, 4, 5)
+        )
+        expected = data.load_overview(db, 1, 1)
+        assert expected[0]["id"].to_list() == ["10:0", "10:1", "20:0"]
+        monkeypatch.setattr(_overview, "MIN_STREAM_EVENTS", 1)
+        monkeypatch.setattr(_overview, "BATCH_SIZE", 2)
+        if pathway_mode and ordered:
+            read = _parquet.InMemoryEventQueries.events_query
+
+            def reversed_projection(self, **scope):
+                return read(self, **scope).order(
+                    "result_id desc, realization_index desc, event_index desc"
+                )
+
+            monkeypatch.setattr(
+                _parquet.InMemoryEventQueries, "events_query", reversed_projection
+            )
+        streamed = _overview.stream_overview(db, 1, 1, False)
+        assert (streamed is not None) == (archive == "parquet" and ordered)
+        for actual, sql in zip(data.load_overview(db, 1, 1), expected, strict=True):
+            assert_frame_equal(actual, sql, check_exact=True)
 
 
 def test_sparse_session_loads_complete_details_once(monkeypatch):

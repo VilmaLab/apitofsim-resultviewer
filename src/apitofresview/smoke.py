@@ -188,8 +188,8 @@ def _check_beeswarm(failures):
         print("OK   beeswarm", flush=True)
 
 
-def _check_tree_scanner(failures):
-    """Exercise the Parquet scanner's two return paths and native imports."""
+def _check_overview_scanner(failures):
+    """Exercise both Parquet scanner modes and native imports."""
     try:
         import numpy as np
 
@@ -217,16 +217,19 @@ def _check_tree_scanner(failures):
             coords,
         )
         state = (-1, -1, 0, 0, 0, 0, -np.inf, -np.inf, -np.inf, True)
-        summary = _summarize_batch(columns, zeros[:1], state, -1)
-        assert summary is not None
-        assert summary[1].tolist() == [0, 2]
-        assert summary[3][:, 0].tolist() == [0, 1, 1, 0, 2]
-        assert _summarize_batch(columns, zeros[:1], summary[0], -1) is None
+        for tree_mode in (False, True):
+            nodes = zeros[:1] if tree_mode else zeros[:0]
+            summary = _summarize_batch(columns, nodes, state, -1, tree_mode)
+            assert summary is not None
+            assert summary[1].tolist() == [0, 2]
+            assert summary[3][:, 0].tolist() == [0, 1, 1, 0, 2]
+            assert summary[5].tolist() == [True]
+            assert _summarize_batch(columns, nodes, summary[0], -1, tree_mode) is None
     except Exception as err:
-        failures.append(f"tree scanner: {err!r}")
-        print(f"FAIL tree scanner: {err!r}", flush=True)
+        failures.append(f"overview scanner: {err!r}")
+        print(f"FAIL overview scanner: {err!r}", flush=True)
     else:
-        print("OK   tree scanner", flush=True)
+        print("OK   overview scanner", flush=True)
 
 
 def run_smoke_test(sock, database_path=None, debug=False):
@@ -250,7 +253,7 @@ def run_smoke_test(sock, database_path=None, debug=False):
             _check_import(label, module, attr, failures)
         _check_mpl_backend(failures)
         _check_beeswarm(failures)
-        _check_tree_scanner(failures)
+        _check_overview_scanner(failures)
         _check_report_route(server.url, failures)
     finally:
         server.stop()

@@ -1,4 +1,4 @@
-"""Stream large Parquet tree histories before enriching the retained events."""
+"""Stream large Parquet histories before enriching the retained events."""
 
 from itertools import chain, pairwise
 
@@ -27,6 +27,7 @@ SUMMARY_INPUTS = (
 )
 SCAN_FIELDS = (*SUMMARY_INPUTS, "result_id", "transition_index")
 SUMMARY_COLUMNS = ("collisions", "rejected_collisions", "clamped_events", "max_radial")
+POPULATION_COLUMNS = ("population_z", "population_t")
 MOTION_COLUMNS = (
     "postime, velocity, omega, rot_energy, vibrational_energy, theta, u_norm"
 )
@@ -34,7 +35,7 @@ HISTORY_KEY = ("result_id", "realization_index")
 EVENT_KEY = (*HISTORY_KEY, "event_index")
 
 
-def _stream_result(archive, result, nodes, retained, histories):
+def _stream_result(archive, result, nodes, tree_mode, retained, histories):
     state = (-1, -1, 0, 0, 0, 0, -np.inf, -np.inf, -np.inf, True)
     query = archive.filter(f"result_id = {result}").select(", ".join(SCAN_FIELDS))
     with query.arrow(batch_size=BATCH_SIZE) as reader:
@@ -58,6 +59,7 @@ def _stream_result(archive, result, nodes, retained, histories):
                 nodes,
                 state,
                 next_realization,
+                tree_mode,
             )
             if summary is None:
                 return False
@@ -73,14 +75,13 @@ def _stream_result(archive, result, nodes, retained, histories):
                     pa.RecordBatch.from_arrays(
                         [
                             pa.array(np.full(radial.size, result, dtype=np.int64)),
-                            *(pa.array(column) for column in totals),
+                            *(pa.array(column) for column in totals[:-1]),
                             pa.array(radial),
                             pa.array(continuity),
                         ],
                         names=[
                             *HISTORY_KEY,
                             *SUMMARY_COLUMNS[:3],
-                            "last_index",
                             "max_radial",
                             "history_continuous",
                         ],
@@ -89,14 +90,18 @@ def _stream_result(archive, result, nodes, retained, histories):
     return True
 
 
-def stream_tree_overview(db, experiment, cluster):
-    """Return the sparse event frame, or use SQL for unsupported archives."""
+def stream_overview(db, experiment, cluster, tree_mode):
+    """Return ordered sparse events and one row of totals per history."""
     if not db.readonly:
         return None
 
+    tree_results = (
+        "join cluster_tree_experiment_result r on r.id = e.result_id"
+        if tree_mode
+        else ""
+    )
     results = db.db.execute(
-        """select e.result_id, e.event_count
-        from event_execution e join cluster_tree_experiment_result r on r.id = e.result_id
+        f"""select e.result_id, e.event_count from event_execution e {tree_results}
         where e.run_id = ? and e.cluster_id = ? and e.recorded
         order by e.result_id""",
         [experiment, cluster],
@@ -112,50 +117,52 @@ def stream_tree_overview(db, experiment, cluster):
     # ExperimentDatabase has verified the sidecar and holds the shared lock.
     archive = db.db.read_parquet(str(db.events_path), hive_partitioning=False)
     retained, histories = [], []
+    nodes = np.empty(0, dtype=np.int64)
     for result, _ in results:
-        nodes = np.array(
-            db.db.execute(
-                """select node_index from cluster_tree_node
+        if tree_mode:
+            nodes = (
+                db.db.execute(
+                    """select node_index from cluster_tree_node
                 where experiment_result_id = ? order by node_index""",
-                [result],
-            ).fetchnumpy()["node_index"],
-            dtype=np.int64,
-        )
-        if not _stream_result(archive, result, nodes, retained, histories):
+                    [result],
+                )
+                .fetchnumpy()["node_index"]
+                .astype(np.int64, copy=False)
+            )
+        if not _stream_result(archive, result, nodes, tree_mode, retained, histories):
             return None
     if not retained:
         return None
 
     rows = pa.Table.from_batches(retained)
-    events = (
-        InMemoryEventQueries(db.db, rows)
-        .tree_events_query(run_id=experiment, parent=cluster)
-        .select(f"* exclude ({MOTION_COLUMNS})")
-        .pl()
+    queries = InMemoryEventQueries(db.db, rows)
+    query = (
+        queries.tree_events_query(run_id=experiment, parent=cluster)
+        if tree_mode
+        else queries.events_query(run_id=experiment, parent=cluster)
     )
-    return (
-        events.join(
-            pl.from_arrow(rows.select([*EVENT_KEY, "population_z", "population_t"])),
-            on=EVENT_KEY,
-            maintain_order="left",
-        )
-        .join(
-            pl.from_arrow(pa.Table.from_batches(histories)),
-            on=HISTORY_KEY,
-            maintain_order="left",
-        )
-        .with_columns(
+    events = query.select(f"* exclude ({MOTION_COLUMNS})").pl()
+    # The projection can reorder rows during its joins. Match the scanner's
+    # order before attaching positional columns and fall back for changed keys.
+    keys = pl.from_arrow(rows.select(EVENT_KEY), rechunk=False)
+    if not events.select(*EVENT_KEY).equals(keys):
+        events = events.sort(*EVENT_KEY)
+        if not events.select(*EVENT_KEY).equals(keys):
+            return None
+    events = events.hstack(
+        pl.from_arrow(rows.select(POPULATION_COLUMNS), rechunk=False)
+    )
+    summaries = pl.from_arrow(pa.Table.from_batches(histories))
+    if tree_mode:
+        history_index = events.get_column("realization_id").rle_id()
+        events = events.with_columns(
             (
-                pl.col("history_continuous")
+                summaries.get_column("history_continuous").gather(history_index)
                 & (pl.col("provenance") == "persisted").all().over("realization_id")
             ).alias("history_valid")
         )
-        .select(
-            *events.columns,
-            *SUMMARY_COLUMNS,
-            "last_index",
-            "population_z",
-            "population_t",
-            "history_valid",
-        )
+    return events, summaries.select(
+        pl.concat_str(*HISTORY_KEY, separator=":").alias("id"),
+        pl.col("result_id").alias("experiment_result_id"),
+        *SUMMARY_COLUMNS,
     )

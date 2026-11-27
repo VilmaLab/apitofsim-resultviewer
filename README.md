@@ -2,6 +2,8 @@
 
 Read-only web viewer for APi-ToF simulation results.
 
+🤖 LLM generated.
+
 ## Installing
 
 Download the build for your platform from the
@@ -54,7 +56,8 @@ also work for runs without recordings.
 | `--no-browser`    | Don't open a browser                                  |
 | `--debug`         | Show tracebacks in the browser                        |
 
-## Embedding the Explorer
+<details>
+<summary>Embedding the Explorer</summary>
 
 Pass an `apitofsim.workflow.db.ExperimentDatabase` opened with `readonly=True`.
 When wrapping an attached DuckDB connection, pass the result directory's
@@ -122,7 +125,9 @@ Stable region classes are `.explorer-bokeh-frame`, `.explorer-controls`,
 `.explorer-center`, `.explorer-plots`, and `.explorer-details`; some are inside
 Bokeh shadow roots.
 
-### Cluster-tree exploration
+</details>
+
+## Cluster-tree exploration
 
 The Explorer uses apitofsim 0.27's persisted execution trees. Expand branches to
 select outcome leaves independently; parent checkboxes select their whole
@@ -164,6 +169,9 @@ times. For axial distance and schematic coordinates, a state change uses the
 furthest recorded axial position reached so far, so backtracking cannot
 reverse the order of changes. The population view uses complete selected
 histories and is independent of event checkboxes and cumulative subtree scope.
+
+<details>
+<summary>Development, building, and tests</summary>
 
 ## Developing
 
@@ -277,3 +285,5 @@ CLI against a temporary DuckDB database and drives it through a real browser.
 uv run playwright install chromium
 uv run pytest
 ```
+
+</details>

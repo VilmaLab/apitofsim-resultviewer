@@ -228,7 +228,7 @@ provides-extras = ["reflink", "plot", "notebooks"]
 
 [[package]]
 name = "apitofsim-resultviewer"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "apitofsim", version = "0.33.0", source = { url = "https://github.com/VilmaLab/apitofsim/releases/download/v0.33.0/apitofsim-0.33.0-cp312-abi3-macosx_12_0_arm64.whl" }, extra = ["plot"], marker = "sys_platform != 'linux' and sys_platform != 'win32'" },

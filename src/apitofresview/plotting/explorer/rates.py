@@ -20,9 +20,12 @@ from bokeh.models import (
 )
 from bokeh.plotting import figure
 
-from .controls import enabled, prepare_toolbar
+from workingtitle.bokeh.workspace import prepare_toolbar
+
+from workingtitle.bokeh.ranges import update_reset_range
+from workingtitle.bokeh.widgets import enabled
 from .layout import position_events
-from .plot import COLORS, PATHWAY_COLORS, update_range
+from .plot import COLORS, PATHWAY_COLORS
 
 
 def message(text):
@@ -299,7 +302,7 @@ class RateViews:
         maximum = maximum if maximum > minimum else minimum + 1e-20
         if self.energy_range is None:
             self.energy_range = Range1d(minimum, maximum)
-        update_range(self.energy_range, minimum, maximum)
+        update_reset_range(self.energy_range, minimum, maximum)
         y_range = rate_range(ys, logarithmic)
         if shared and logarithmic and len(minima) > 1:
             y_range.start = max(minima) / 1.2
@@ -511,7 +514,7 @@ class RateViews:
             rates[~valid] = np.nan
             self.collision_source.data = dict(x=mapped, rate=rates)
             bounds = rate_range(rates, logarithmic)
-            update_range(self.collision_plot.y_range, bounds.start, bounds.end)
+            update_reset_range(self.collision_plot.y_range, bounds.start, bounds.end)
             self.velocity_label.text = f"v = {np.linalg.norm(vector):.6g} m/s"
             self.collision_notice.text = (
                 ""

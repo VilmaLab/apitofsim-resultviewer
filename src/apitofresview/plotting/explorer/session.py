@@ -12,17 +12,16 @@ from bokeh.layouts import column
 from bokeh.models import CustomJS, Div, FixedTicker, Range1d
 
 from .aggregation import cumulative_areas, regional_fractions
-from .browser import ON_FRAME
+from workingtitle.bokeh.browser import ON_PLOT_FRAME
+from workingtitle.bokeh.ranges import update_reset_range
+from workingtitle.bokeh.sliders import on_range_commit
+from workingtitle.bokeh.widgets import CHECKBOX_CSS, enabled
+from workingtitle.bokeh.workspace import prepare_toolbar
 from .controls import (
-    CHECKBOX_CSS,
-    SIDEBAR_BREAKPOINT,
     apply_layout,
     create_controls,
-    enabled,
     label_facets,
     group,
-    prepare_toolbar,
-    realization_range_bridge,
 )
 from .data import (
     EVENT_TYPES,
@@ -50,7 +49,6 @@ from .plot import (
     _fraction_plot,
     _pathway_colors,
     _schematic_plot,
-    update_range,
 )
 from .population import population_areas, species_catalog
 from .rates import RateViews
@@ -249,8 +247,6 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         "hidden_collision": None,
         "auto_cdf": False,
         "syncing_sidebar": False,
-        "sidebar": {False: [True, False], True: [False, False]},
-        "details_layout": {False: "sidebar", True: "sidebar"},
         "widths": schematic_widths("chambers"),
         "setting_sizing": False,
     }
@@ -340,18 +336,15 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     sidebar_layout = None
     align_notes = CustomJS(
         args=dict(notes=[ui.counts, ui.quality]),
-        code=ON_FRAME
+        code=ON_PLOT_FRAME
         + """
         const parent = Bokeh.index.find_one(cb_obj)?.parent?.model;
         const panels = cb_obj.name === 'explorer_plots' ? cb_obj :
             parent?.name === 'explorer_plots' ? parent :
             parent?.children?.find(model => model.name === 'explorer_plots');
         if (!panels) return;
-        onFrame(panels, 'explorerNotesFrame', () => {
-            const plot = panels.children.find(p => p.inner_width > 0);
-            const view = plot && Bokeh.index.find_one(plot);
-            if (!view?.canvas_view) return;
-            const axis = view.canvas_view.events_el.getBoundingClientRect().left + view.frame.bbox.left;
+        onPlotFrame(panels, 'explorerNotesFrame', () => panels.children.find(p => p.inner_width > 0), (view, box) => {
+            const axis = view.canvas_view.events_el.getBoundingClientRect().left + box.left;
             const insets = notes.flatMap(note => {
                 const el = Bokeh.index.find_one(note)?.el;
                 if (!el?.checkVisibility()) return [];
@@ -369,7 +362,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
     ui.frame.children.append(drag_bridge)
 
     def event_plot_height():
-        screen_height = int(ui.viewport_width.text.split(",")[1])
+        screen_height = ui.panels.viewport_height
         regional = ui.mode.value == "schematic"
         return (
             max(
@@ -395,46 +388,30 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
 
     def apply_sidebars(full):
         nonlocal sidebar_layout
-        left_open, right_open = state["sidebar"][full]
-        mode = state["details_layout"][full]
+        panels = ui.panels.fit(full)
+        left_open, right_open = panels.left, panels.right
+        mode = panels.placement
         if mode == "sidebar":
             ui.show_rates.active = []
         bottom = right_open and mode == "bottom"
-        narrow = int(ui.viewport_width.text.split(",")[0]) < SIDEBAR_BREAKPOINT
-        if narrow and left_open and right_open and not bottom:
-            left_open = False
-            state["sidebar"][full][0] = False
         geometry = (full, left_open, right_open, mode)
         if geometry == sidebar_layout:
-            # Clicking the selected placement toggles its button off locally.
-            if not ui.detail_layouts[mode].active:
-                state["syncing_sidebar"] = True
-                try:
-                    ui.detail_layouts[mode].active = True
-                finally:
-                    state["syncing_sidebar"] = False
             resize_plots()
             return
         sidebar_layout = geometry
         state["syncing_sidebar"] = True
         try:
-            ui.left_toggle.active, ui.right_toggle.active = left_open, right_open
-            for placement, button in ui.detail_layouts.items():
-                button.active = placement == mode
-                button.visible = right_open
+            ui.left_sidebar.show(left_open)
+            ui.right_toggle.active = right_open
+            ui.placement_selector.placement = mode
         finally:
             state["syncing_sidebar"] = False
-        ui.left_controls.visible, ui.right_controls.visible = left_open, right_open
-        ui.left.width = 205 if left_open else 38
+        ui.right_controls.visible = right_open
         split = right_open and mode != "sidebar"
         ui.right.width = None if split else 300 if right_open else 38
         ui.right.sizing_mode = "stretch_width" if split else "fixed"
         apply_layout(ui, layout, full=full, bottom=bottom)
-        ui.left_toggle.width, ui.right_toggle.width = (
-            (100 if left_open else 38),
-            (110 if right_open else 38),
-        )
-        ui.left_toggle.label = "« Controls" if left_open else "»"
+        ui.right_toggle.width = 110 if right_open else 38
         ui.right_toggle.label = (
             ("Hide details ↓" if bottom else "Hide details »") if right_open else "☷"
         )
@@ -444,19 +421,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if state["syncing_sidebar"]:
             return
         full = ui.fullscreen_state.text == "full"
-        state["sidebar"][full][index] = active
-        if (
-            index == 0 and active and state["details_layout"][full] != "bottom"
-        ) or index == 1:
-            state["details_layout"][full] = "sidebar"
-        # On narrow screens, opening controls should keep them visible.
-        if (
-            index == 0
-            and active
-            and state["details_layout"][full] != "bottom"
-            and int(ui.viewport_width.text.split(",")[0]) < SIDEBAR_BREAKPOINT
-        ):
-            state["sidebar"][full][1] = False
+        ui.panels.toggle(full, "right" if index else "left", active)
         apply_sidebars(full)
 
     ui.left_toggle.on_change("active", lambda attr, old, new: sidebar_changed(0, new))
@@ -466,21 +431,16 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if state["syncing_sidebar"]:
             return
         full = ui.fullscreen_state.text == "full"
-        state["details_layout"][full] = mode
-        if mode == "right":
-            state["sidebar"][full][0] = False
+        ui.panels.mode(full).place(mode)
         apply_sidebars(full)
 
-    for mode, button in ui.detail_layouts.items():
-        button.on_change(
-            "active", lambda attr, old, new, mode=mode: layout_changed(mode)
-        )
+    ui.placement_selector.on_change(layout_changed)
 
     def full_changed(attr, old, new):
         apply_sidebars(new == "full")
 
     ui.fullscreen_state.on_change("text", full_changed)
-    ui.viewport_width.on_change(
+    ui.panels.viewport.on_change(
         "text",
         lambda attr, old, new: apply_sidebars(ui.fullscreen_state.text == "full"),
     )
@@ -516,8 +476,8 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
 
     def open_details():
         full = ui.fullscreen_state.text == "full"
-        if not state["sidebar"][full][1]:
-            state["sidebar"][full][1] = True
+        if not ui.panels.mode(full).right:
+            ui.panels.mode(full).right = True
             with doc.models.freeze():
                 apply_sidebars(full)
 
@@ -1104,7 +1064,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             ) or 0
             if shared_y is None:
                 shared_y = Range1d(0, 1)
-            update_range(shared_y, 0, maximum * 1000 * 1.05 if maximum else 1)
+            update_reset_range(shared_y, 0, maximum * 1000 * 1.05 if maximum else 1)
         elif pathway_mode and y_layout == "realization" and shared_y is None:
             shared_y = Range1d(lo - 0.5, hi + 0.5)
         max_position = positioned["position"].max()
@@ -1143,7 +1103,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if x_mode != mode:
             shared_x = Range1d(x_start, x_end)
             x_mode = mode
-        update_range(shared_x, x_start, x_end)
+        update_reset_range(shared_x, x_start, x_end)
 
         event_key = (grouped_key, mapping_key, frozenset(active_groups))
         panels = []
@@ -1493,7 +1453,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
         if population_plots:
             top = max(value for _, value in population_plots)
             for chart, _ in population_plots:
-                update_range(chart.y_range, 0, top)
+                update_reset_range(chart.y_range, 0, top)
             entries = [
                 f'<span><span style="color:{species_colors[species]}" aria-hidden="true">■</span> '
                 f"{escape(species_labels[species])}</span>"
@@ -1616,31 +1576,17 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
             if enabled(ui.show_pager):
                 render()
 
-    def selector_changed(attr, old, new):
-        apply_range(tuple(int(value) for value in new))
+    def select_realization_range(low, high):
+        if (
+            type(low) is int
+            and type(high) is int
+            and ui.selector.start <= low <= high <= ui.selector.end
+        ):
+            apply_range((low, high))
 
-    ui.selector.on_change("value", selector_changed)
-    if doc.session_context is not None:
-        range_bridge = realization_range_bridge(doc, ui.selector)
-        ui.frame.children.append(range_bridge)
-
-        def range_requested(attr, old, new):
-            try:
-                sequence, lo, hi = json.loads(new)
-            except TypeError, ValueError:
-                return
-            if (
-                type(sequence) is int
-                and type(lo) is int
-                and type(hi) is int
-                and ui.selector.start <= lo <= hi <= ui.selector.end
-            ):
-                try:
-                    apply_range((lo, hi))
-                finally:
-                    range_bridge.tags = [sequence]
-
-        range_bridge.on_change("text", range_requested)
+    on_range_commit(
+        doc, ui.selector, select_realization_range, name="realization_range_request"
+    )
 
     for widget in ui.event_options.values():
         widget.on_change("active", control_changed)
@@ -1683,7 +1629,7 @@ def build_document(db, doc, experiment: int, cluster: int, *, layout="viewport")
 
     def show_rates_changed(attr, old, new):
         full = ui.fullscreen_state.text == "full"
-        if new and state["details_layout"][full] == "sidebar":
+        if new and ui.panels.mode(full).placement == "sidebar":
             layout_changed("right")
         update_rates()
 

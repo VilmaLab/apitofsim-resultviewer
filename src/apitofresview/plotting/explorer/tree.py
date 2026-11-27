@@ -9,7 +9,7 @@ import polars as pl
 from bokeh.events import DocumentReady
 from bokeh.models import CustomJS, Div, InlineStyleSheet, Select
 
-from .browser import ON_FRAME
+from workingtitle.bokeh.browser import ON_FRAME
 
 
 @dataclass
@@ -256,7 +256,7 @@ class ExecutionTree:
 
 def install_tree_controls(doc, ui, tree, names, counts, colors):
     """Native folding preserves expansion while Bokeh owns leaf selection."""
-    from .controls import checkbox
+    from workingtitle.bokeh.widgets import checkbox
 
     indices = {name: i for i, name in enumerate(names)}
     labels = tree.leaf_labels()

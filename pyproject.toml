@@ -20,7 +20,7 @@ dependencies = [
     # No native window on Linux: pywebview needs PyGObject/WebKitGTK there,
     # which cannot be frozen reliably, so we open the system browser instead.
     "pywebview>=6.2.1; sys_platform != 'linux'",
-    "workingtitle",
+    "workingtitle[bokeh]",
     "polars>=2.0.0",
 ]
 

@@ -650,6 +650,8 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
         page.mouse.move(point["end"], point["y"])
         page.mouse.up()
         expect(page.get_by_label("Sizing")).to_have_value("Custom")
+        # The client preview keeps the old range and can move the entrance.
+        # Wait for the server to re-anchor it before measuring the next drag.
         page.wait_for_function(
             """({id, previous}) => {
                 const doc = Bokeh.documents[0];
@@ -659,6 +661,7 @@ def test_schematic_edges_drag_and_update_events(page, explorer_server):
                 const data = plot.renderers[0].data_source.data;
                 const widths = JSON.parse(committed);
                 return data.right.every((right, i) => Math.abs(right - data.left[i] - widths[i]) < 1e-8) &&
+                    Math.abs(data.left[1]) < 1e-8 &&
                     Math.abs(plot.x_range.start - data.left[0]) < 1e-8 &&
                     Math.abs(plot.x_range.end - data.right[6]) < 1e-8;
             }""",
